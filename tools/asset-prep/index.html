@@ -47,13 +47,17 @@
   #msgs div { padding:3px 0; font-size:13px; } .err { color:var(--bad); } .warn { color:#ffc857; } .ok { color:var(--ok); }
   .hint { color:var(--dim); font-size:12px; margin:4px 0 10px; }
   .empty { color:var(--dim); text-align:center; margin-top:15vh; }
+  #bdOpen { width:100%; margin-top:10px; } #bdOpen.on { background:var(--acc); border-color:var(--acc); }
+  #bdView { width:800px; max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px; }
+  #bdRows td input[type=number] { width:58px; }
 </style>
 </head>
 <body>
-<header><h1>Asset Prep</h1><span>drop PNG / JPG / GIF / WebP sheets and backgrounds · drop an .anim to load clips · everything stays in your browser</span></header>
+<header><h1>Asset Prep</h1><span>drop PNG / JPG / GIF / WebP / PAM images · drop an .anim or .layers (with its images) to edit it again · everything stays in your browser</span></header>
 <div id="app">
   <aside>
-    <label id="drop"><input type="file" id="pick" multiple accept="image/*,.anim,.txt" hidden><b>Drop files here</b><br>or click to browse</label>
+    <label id="drop"><input type="file" id="pick" multiple accept="image/*,.pam,.anim,.txt,.layers" hidden><b>Drop files here</b><br>or click to browse</label>
+    <button id="bdOpen">Backdrop (parallax layers)</button>
     <ul id="list"></ul>
   </aside>
   <main>
@@ -127,6 +131,32 @@
       <div id="msgs"></div>
       <p class="hint">In your game: <code>ge_sprite_load(&amp;spr, "hero.pam", "hero.anim")</code> for sheets, <code>ge_image_load_pam(&amp;img, "forest.pam")</code> for plain images.</p>
     </div>
+
+    <div id="backdrop" hidden>
+      <h2 style="margin-top:0">Backdrop — parallax layers, back to front</h2>
+      <p class="hint">Drop images while this page is open to add them as layers. <b>factor</b> is how fast a layer scrolls with the camera: 0 = fixed sky, 1 = moves with the level, above 1 = foreground passing in front. Tick <b>front</b> for layers drawn over the characters.</p>
+      <div class="row">
+        <label>add layer from image<select id="bdPick"></select></label>
+        <button id="bdAdd">Add layer</button>
+      </div>
+      <table><thead><tr><th>#</th><th>image</th><th>factor</th><th>factor_y</th><th>drift</th><th>y</th><th>alpha</th><th>front</th><th>additive</th><th>optional</th><th></th></tr></thead><tbody id="bdRows"></tbody></table>
+      <h2>Preview <span style="text-transform:none;letter-spacing:0">(400×240, drawn the way the engine draws it)</span></h2>
+      <canvas id="bdView" width="400" height="240"></canvas>
+      <div class="row" style="margin-top:8px">
+        <button id="bdPan">Pause pan</button>
+        <label>camera x<input type="range" id="bdCam" min="0" max="2400" value="0" style="width:260px"></label>
+        <label>show play plane<input type="checkbox" id="bdPlane" checked></label>
+      </div>
+      <h2>Export</h2>
+      <div class="row">
+        <label>file name<input type="text" id="bdName" value="backdrop"></label>
+        <button class="primary" id="bdZip">Download .zip (.layers + images)</button>
+        <button id="bdDlLayers">Download .layers only</button>
+        <button id="bdCopy">Copy .layers text</button>
+      </div>
+      <div id="bdMsgs"></div>
+      <p class="hint">Unzip next to your game, then: <code>ge_world_load_layers(&amp;world, "backdrop.layers", &amp;line)</code> — or try it in the demo: <code>./build/demo --layers backdrop.layers</code></p>
+    </div>
   </main>
 </div>
 
@@ -135,7 +165,7 @@
 const $ = s => document.querySelector(s);
 const MAX_FRAMES = 16, MAX_CLIPS = 32, NAME_MAX = 23;   // must match engine limits (ge_anim.h)
 const assets = [];
-let cur = null, selFrame = 0, playing = true, play = { t: 0, f: 0 }, drag = null;
+let view = "asset", cur = null, selFrame = 0, playing = true, play = { t: 0, f: 0 }, drag = null;
 
 const sanitize = s => s.replace(/[^A-Za-z0-9_]/g, "_").slice(0, NAME_MAX);
 const baseName = f => sanitize(f.replace(/\.[^.]+$/, "")) || "asset";
@@ -144,32 +174,54 @@ const cols = a => Math.max(1, Math.floor(a.img.width / a.cellW));
 const rows = a => Math.max(1, Math.floor(a.img.height / a.cellH));
 
 /* ---------- loading ---------- */
-function handleFiles(files) {
-  for (const f of files) {
-    if (/\.(anim|txt)$/i.test(f.name)) f.text().then(t => importAnim(t, f.name));
-    else if (f.type.startsWith("image/")) addImage(f);
+async function handleFiles(list) {
+  const texts = [];
+  for (const f of [...list]) {
+    try {
+      if (/\.(anim|txt)$/i.test(f.name)) texts.push(["anim", f]);
+      else if (/\.layers$/i.test(f.name)) texts.push(["layers", f]);
+      else if (/\.pam$/i.test(f.name)) addAsset(await readPam(f), f.name);
+      else if (f.type.startsWith("image/")) addAsset(await readImage(f), f.name);
+    } catch (err) { note([["err", `${f.name}: ${err.message}`]]); }
   }
+  for (const [kind, f] of texts) { const t = await f.text(); kind === "anim" ? importAnim(t, f.name) : importLayers(t, f.name); }
 }
-function addImage(file) {
-  const img = new Image(), url = URL.createObjectURL(file);
-  img.onload = () => {
-    const c = document.createElement("canvas");
-    c.width = img.naturalWidth; c.height = img.naturalHeight;
-    c.getContext("2d").drawImage(img, 0, 0);
-    URL.revokeObjectURL(url);
-    const cw = Math.min(32, c.width), ch = Math.min(32, c.height);
-    const a = { name: baseName(file.name), file: file.name, img: c, cellW: cw, cellH: ch, ox: cw >> 1, oy: ch - 1, clips: [], sel: -1, tab: "sheet" };
-    assets.push(a); select(a);
-  };
-  img.src = url;
+function readImage(file) {
+  return new Promise((ok, fail) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight; c.getContext("2d").drawImage(img, 0, 0); URL.revokeObjectURL(url); ok(c); };
+    img.onerror = () => fail(new Error("not a readable image"));
+    img.src = url;
+  });
+}
+async function readPam(file) {   // the engine's own format, so exported assets can be edited again
+  const b = new Uint8Array(await file.arrayBuffer());
+  const head = new TextDecoder().decode(b.subarray(0, Math.min(b.length, 256)));
+  const end = head.indexOf("ENDHDR\n");
+  if (!head.startsWith("P7") || end < 0) throw new Error("not a P7 .pam file");
+  const v = k => +(head.match(new RegExp(k + "\\s+(\\d+)")) || [])[1];
+  const w = v("WIDTH"), h = v("HEIGHT");
+  if (!(w > 0 && h > 0) || v("DEPTH") !== 4 || v("MAXVAL") !== 255) throw new Error("only RGBA .pam (DEPTH 4, MAXVAL 255) is supported");
+  const start = new TextEncoder().encode(head.slice(0, end + 7)).length;
+  if (b.length < start + w * h * 4) throw new Error("file is truncated");
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(b.subarray(start, start + w * h * 4)), w, h), 0, 0);
+  return c;
+}
+function addAsset(c, fname) {
+  const cw = Math.min(32, c.width), ch = Math.min(32, c.height);
+  const a = { name: baseName(fname), file: fname, img: c, cellW: cw, cellH: ch, ox: cw >> 1, oy: ch - 1, clips: [], sel: -1, tab: "sheet" };
+  assets.push(a);
+  if (view === "backdrop") { addLayer(a); renderList(); renderBackdrop(); } else select(a);
+  return a;
 }
 function importAnim(text, fname) {
-  const target = cur;
+  const target = assets.slice().reverse().find(a => a.name === baseName(fname)) || cur;
   if (!target) return say([["err", "Drop the sprite sheet image first, then its .anim file."]]);
   const r = parseAnim(text);
   if (r.error) return say([["err", `${fname}: line ${r.error}: could not parse`]]);
   Object.assign(target, r.data, { sel: r.data.clips.length ? 0 : -1, tab: "sheet" });
-  selFrame = 0; load(); say([["ok", `Loaded ${r.data.clips.length} clips from ${fname}`]]);
+  select(target); say([["ok", `Loaded ${r.data.clips.length} clips from ${fname}`]]);
 }
 
 /* ---------- .anim text <-> model (mirrors engine/src/ge_anim.c) ---------- */
@@ -239,10 +291,12 @@ function validate(a) {
 }
 
 /* ---------- UI plumbing ---------- */
-function select(a) { cur = a; selFrame = 0; play = { t: 0, f: 0 }; load(); }
+function select(a) { view = "asset"; cur = a; selFrame = 0; play = { t: 0, f: 0 }; load(); }
 function load() {
-  $("#empty").hidden = !!cur; $("#editor").hidden = !cur;
-  renderList(); if (!cur) return;
+  const bdv = view === "backdrop";
+  $("#empty").hidden = !!cur || bdv; $("#editor").hidden = !cur || bdv; $("#backdrop").hidden = !bdv;
+  $("#bdOpen").classList.toggle("on", bdv);
+  renderList(); if (!cur || bdv) return;
   $("#sheetPane").hidden = cur.tab !== "sheet"; $("#imagePane").hidden = cur.tab !== "image";
   $("#tabSheet").classList.toggle("on", cur.tab === "sheet"); $("#tabImage").classList.toggle("on", cur.tab === "image");
   $("#dlAnim").hidden = $("#copyAnim").hidden = cur.tab !== "sheet";
@@ -255,12 +309,13 @@ function load() {
 function renderList() {
   $("#list").innerHTML = "";
   assets.forEach(a => {
-    const li = document.createElement("li"); li.className = a === cur ? "sel" : "";
+    const li = document.createElement("li"); li.className = a === cur && view === "asset" ? "sel" : "";
     li.innerHTML = `<span></span><small>${a.img.width}×${a.img.height}</small>`; li.firstChild.textContent = a.file;
     li.onclick = () => select(a); $("#list").append(li);
   });
 }
 function refreshAll() { drawSheet(); renderClips(); renderFrames(); sizePreview(); say(validate(cur)); }
+function note(list) { (view === "backdrop" ? bdSay : say)(list); }
 function say(list) { $("#msgs").innerHTML = ""; (list.length ? list : [["ok", "Looks good."]]).forEach(([k, t]) => { const d = document.createElement("div"); d.className = k; d.textContent = t; $("#msgs").append(d); }); }
 
 /* ---------- sheet view ---------- */
@@ -367,7 +422,8 @@ function tick(now) {
       if (play.f + 1 < c.frames.length) play.f++; else if (c.loop) play.f = 0; else { play.t = 0; play.f = 0; }
     }
   }
-  if (c || (cur && cur.tab === "sheet")) drawPreview();
+  if (view === "backdrop") drawBackdrop(dt);
+  else if (c || (cur && cur.tab === "sheet")) drawPreview();
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -411,7 +467,164 @@ addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; document.bo
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", e => { e.preventDefault(); depth = 0; document.body.classList.remove("dragging"); handleFiles(e.dataTransfer.files); });
 $("#pick").onchange = e => { handleFiles(e.target.files); e.target.value = ""; };
-window.__ap = { assets, buildAnim, buildPam, parseAnim };   // handy for debugging in the console
+/* ---------- backdrop builder (.layers, read by ge_world_load_layers) ---------- */
+const MAX_LAYERS = 10;   // GE_MAX_LAYERS
+const bd = { layers: [], cam: 0, pan: true, dir: 1, tick: 0, acc: 0 };
+function newLayer(a) { return { asset: a, factor: 1, factorY: 0, drift: 0, y: 0, alpha: 255, front: false, additive: false, optional: false }; }
+function addLayer(a) {
+  const L = newLayer(a), n = bd.layers.length;
+  L.factor = +Math.min(1, n * 0.2).toFixed(2);           // a guess: each new layer a bit nearer
+  L.y = Math.max(0, 240 - a.img.height);                  // short images sit on the bottom edge
+  bd.layers.push(L);
+}
+function openBackdrop() { view = "backdrop"; load(); renderBackdrop(); }
+$("#bdOpen").onclick = openBackdrop;
+$("#bdAdd").onclick = () => { const a = assets[+$("#bdPick").value]; if (a) { addLayer(a); renderBackdrop(); } };
+function renderBackdrop() {
+  const pick = $("#bdPick"); pick.innerHTML = assets.length ? "" : "<option>(drop an image first)</option>";
+  assets.forEach((a, i) => { const o = document.createElement("option"); o.value = i; o.textContent = a.file; pick.append(o); });
+  const body = $("#bdRows"); body.innerHTML = "";
+  bd.layers.forEach((L, i) => {
+    const tr = document.createElement("tr");
+    const opts = assets.map((a, j) => `<option value="${j}" ${a === L.asset ? "selected" : ""}></option>`).join("");
+    const n = (k, v, step) => `<td><input type="number" data-k="${k}" value="${v}" step="${step}"></td>`;
+    const cb = k => `<td><input type="checkbox" data-k="${k}" ${L[k] ? "checked" : ""}></td>`;
+    tr.innerHTML = `<td>${i}</td><td><select data-k="asset">${opts}</select></td>` + n("factor", L.factor, 0.01) + n("factorY", L.factorY, 0.01) +
+      n("drift", L.drift, 0.01) + n("y", L.y, 1) + n("alpha", L.alpha, 1) + cb("front") + cb("additive") + cb("optional") +
+      `<td><button data-a="up">↑</button><button data-a="down">↓</button><button data-a="del">✕</button></td>`;
+    [...tr.querySelectorAll("select option")].forEach((o, j) => o.textContent = assets[j].file);
+    tr.addEventListener("input", e => {
+      const k = e.target.dataset.k; if (!k) return;
+      if (k === "asset") L.asset = assets[+e.target.value];
+      else if (e.target.type === "checkbox") L[k] = e.target.checked;
+      else L[k] = k === "y" || k === "alpha" ? (+e.target.value | 0) : (+e.target.value || 0);
+      bdSay(validateBd());
+    });
+    tr.addEventListener("click", e => {
+      const a = e.target.dataset.a; if (!a) return;
+      if (a === "del") bd.layers.splice(i, 1);
+      else { const j = a === "up" ? i - 1 : i + 1; if (j >= 0 && j < bd.layers.length) [bd.layers[i], bd.layers[j]] = [bd.layers[j], bd.layers[i]]; }
+      renderBackdrop();
+    });
+    body.append(tr);
+  });
+  bdSay(validateBd());
+}
+function bdSay(list) { const box = $("#bdMsgs"); box.innerHTML = ""; (list.length ? list : [["ok", "Looks good."]]).forEach(([k, t]) => { const d = document.createElement("div"); d.className = k; d.textContent = t; box.append(d); }); }
+function validateBd() {
+  const m = [], seen = new Map();
+  if (!bd.layers.length) m.push(["err", "No layers yet — drop images here or use Add layer."]);
+  if (bd.layers.length > MAX_LAYERS) m.push(["err", `${bd.layers.length} layers; the engine holds at most ${MAX_LAYERS}.`]);
+  bd.layers.forEach((L, i) => {
+    const other = seen.get(L.asset.name);
+    if (other && other !== L.asset) m.push(["err", `Two different images are both called "${L.asset.name}" — rename one before dropping it.`]);
+    seen.set(L.asset.name, L.asset);
+    if (L.alpha < 1 || L.alpha > 255) m.push(["err", `Layer ${i}: alpha must be 1–255.`]);
+    if (L.y >= 240 || L.y + L.asset.img.height <= 0) m.push(["warn", `Layer ${i} (${L.asset.file}) is entirely off-screen at y=${L.y}.`]);
+    if (L.asset.img.width < 400 && L.factor !== 0) m.push(["warn", `Layer ${i} (${L.asset.file}) is ${L.asset.img.width}px wide; it repeats to fill the screen, so make sure its edges tile.`]);
+  });
+  const front = bd.layers.findIndex(L => L.front);
+  if (front >= 0 && bd.layers.slice(front).some(L => !L.front)) m.push(["warn", "A back layer is listed after a front layer. That works (front layers are always drawn last), but the list is easier to read back to front."]);
+  return m;
+}
+const fnum = v => String(+(+v).toFixed(4));
+function buildLayers() {
+  const out = ["# generated by Asset Prep: parallax layers, back to front. Image paths are relative to this file."];
+  for (const L of bd.layers) {
+    let t = `layer ${L.asset.name}.pam factor=${fnum(L.factor)}`;
+    if (L.factorY) t += ` factor_y=${fnum(L.factorY)}`;
+    if (L.drift) t += ` drift=${fnum(L.drift)}`;
+    t += ` y=${L.y}`;
+    if (L.alpha !== 255) t += ` alpha=${L.alpha}`;
+    for (const f of ["front", "additive", "optional"]) if (L[f]) t += " " + f;
+    out.push(t);
+  }
+  return out.join("\n") + "\n";
+}
+function importLayers(text, fname) {
+  const layers = [], missing = [];
+  let n = 0;
+  for (const raw of text.split("\n")) {
+    n++;
+    const t = raw.split("#")[0].trim().split(/\s+/).filter(Boolean);
+    if (!t.length) continue;
+    if (t[0] !== "layer" || t.length < 2) { view = "backdrop"; load(); return bdSay([["err", `${fname}: line ${n}: expected "layer <image> ..."`]]); }
+    const name = baseName(t[1].split(/[\\/]/).pop());
+    const a = assets.slice().reverse().find(x => x.name === name);
+    if (!a) { missing.push(t[1]); continue; }
+    const L = newLayer(a);
+    for (const o of t.slice(2)) {
+      const [k, v] = o.split("=");
+      if (k === "factor") L.factor = +v; else if (k === "factor_y") L.factorY = +v; else if (k === "drift") L.drift = +v;
+      else if (k === "y") L.y = +v | 0; else if (k === "alpha") L.alpha = +v | 0; else if (k in L && v === undefined) L[k] = true;
+    }
+    layers.push(L);
+  }
+  view = "backdrop"; load();
+  if (missing.length) { renderBackdrop(); return bdSay([["err", `${fname}: drop these images together with it: ${missing.join(", ")}`]]); }
+  bd.layers = layers; $("#bdName").value = baseName(fname); renderBackdrop();
+  bdSay([["ok", `Loaded ${layers.length} layers from ${fname}`]].concat(validateBd()));
+}
+function drawBackdrop(dt) {
+  const maxCam = +$("#bdCam").max;
+  bd.acc += dt * 0.06;
+  while (bd.acc >= 1) {
+    bd.acc -= 1; bd.tick++;
+    if (bd.pan) { bd.cam += 1.5 * bd.dir; if (bd.cam >= maxCam || bd.cam <= 0) { bd.dir = -bd.dir; bd.cam = Math.max(0, Math.min(maxCam, bd.cam)); } }
+  }
+  if (bd.pan) $("#bdCam").value = bd.cam;
+  const g = $("#bdView").getContext("2d"), camx = Math.floor(bd.cam);
+  g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.fillStyle = "#080610"; g.fillRect(0, 0, 400, 240);   // ge_world_draw's clear colour
+  const layer = L => {
+    const img = L.asset.img, w = img.width, sx = Math.trunc(camx * L.factor + L.drift * bd.tick), dy = L.y;   // camera y is 0 in this preview
+    const off = ((sx % w) + w) % w;
+    g.globalAlpha = L.alpha / 255; g.globalCompositeOperation = L.additive ? "lighter" : "source-over";
+    for (let x = -off; x < 400; x += w) g.drawImage(img, x, dy);
+  };
+  bd.layers.filter(L => !L.front).forEach(layer);
+  g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+  if ($("#bdPlane").checked) {   // where tiles and characters go: ground at row 12 like the demo, one stand-in character
+    g.fillStyle = "rgba(124,92,255,.35)"; g.fillRect(0, 192, 400, 48);
+    g.fillStyle = "rgba(255,255,255,.85)"; g.fillRect(194, 168, 12, 24);
+  }
+  bd.layers.filter(L => L.front).forEach(layer);
+  g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+}
+$("#bdPan").onclick = () => { bd.pan = !bd.pan; $("#bdPan").textContent = bd.pan ? "Pause pan" : "Pan"; };
+$("#bdCam").addEventListener("input", e => { bd.pan = false; $("#bdPan").textContent = "Pan"; bd.cam = +e.target.value; });
+const crcTable = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(d) { let c = 0xFFFFFFFF; for (let i = 0; i < d.length; i++) c = crcTable[(c ^ d[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zip(files) {   // "stored" (uncompressed) zip: tiny writer, opens everywhere
+  const enc = new TextEncoder(), parts = [], central = [];
+  let off = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(12, 0x21, true);
+    h.setUint32(14, crc, true); h.setUint32(18, size, true); h.setUint32(22, size, true); h.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(h.buffer), name, f.data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(14, 0x21, true);
+    c.setUint32(16, crc, true); c.setUint32(20, size, true); c.setUint32(24, size, true); c.setUint16(28, name.length, true); c.setUint32(42, off, true);
+    central.push(new Uint8Array(c.buffer), name);
+    off += 30 + name.length + size;
+  }
+  const csize = central.reduce((s, p) => s + p.length, 0), e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, csize, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...central, new Uint8Array(e.buffer)], { type: "application/zip" });
+}
+const bdName = () => sanitize($("#bdName").value) || "backdrop";
+const bdOk = () => { const m = validateBd(); bdSay(m); return !m.some(x => x[0] === "err"); };
+$("#bdZip").onclick = () => {
+  if (!bdOk()) return;
+  const files = [{ name: bdName() + ".layers", data: new TextEncoder().encode(buildLayers()) }], done = new Set();
+  for (const L of bd.layers) if (!done.has(L.asset)) { done.add(L.asset); files.push({ name: L.asset.name + ".pam", data: buildPam(L.asset.img) }); }
+  save(bdName() + ".zip", zip(files), "application/zip");
+};
+$("#bdDlLayers").onclick = () => { if (bdOk()) save(bdName() + ".layers", buildLayers(), "text/plain"); };
+$("#bdCopy").onclick = async () => { if (!bdOk()) return; try { await navigator.clipboard.writeText(buildLayers()); bdSay([["ok", "Copied."]]); } catch { bdSay([["err", "Clipboard blocked by the browser — use Download."]]); } };
+
+window.__ap = { assets, bd, buildAnim, buildPam, parseAnim, buildLayers, zip };   // handy for debugging in the console
 </script>
 </body>
 </html>

@@ -24,6 +24,7 @@ typedef struct {
     int respawn_timer;
     float safe_x;
     bool autoplay, low_detail;
+    const char *layers_path; /* --layers FILE: backdrop from disk instead of the procedural one */
     uint32_t ap_tick;
 } Demo;
 
@@ -162,7 +163,17 @@ static int demo_init(void *user) {
     g->world.vignette = 26;
     g->world.low_detail = g->low_detail;
     art_make_tileset(&g->world.tileset);
-    art_add_layers(&g->world);
+    if (g->layers_path) {
+        int line = 0, rc = ge_world_load_layers(&g->world, g->layers_path, &line);
+        if (rc != GE_LAYERS_OK) {
+            fprintf(stderr, "%s: %s (line %d)\n", g->layers_path,
+                    rc == GE_LAYERS_EOPEN ? "cannot open" : rc == GE_LAYERS_EIMAGE ? "cannot load image" :
+                    rc == GE_LAYERS_EFULL ? "too many layers" : "syntax error", line);
+            return 1;
+        }
+    } else {
+        art_add_layers(&g->world);
+    }
     level_build(&g->world);
 
     spawn_player(g, 3 * GE_TILE + 8, 12 * GE_TILE);
@@ -262,6 +273,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--autoplay")) g.autoplay = true;
         else if (!strcmp(argv[i], "--low-detail")) g.low_detail = true;
+        else if (!strcmp(argv[i], "--layers") && i + 1 < argc) g.layers_path = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) dump_every = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dump-dir") && i + 1 < argc) dump_dir = argv[++i];

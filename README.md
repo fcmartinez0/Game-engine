@@ -12,7 +12,7 @@ A C99 engine for side-scrolling games with **sprite animation**, **fast frame-ba
 cmake -S . -B build && cmake --build build -j
 ./build/demo                 # windowed demo (needs SDL2)
 ./build/demo --autoplay      # let the scripted player play the level
-./build/engine_tests         # 59 checks, no window needed
+./build/engine_tests         # 78 checks, no window needed
 ./build/demo_headless --autoplay --frames 1800 --dump-every 150 --dump-dir shots   # PNG screenshots, no display
 ```
 
@@ -85,13 +85,25 @@ Physics is classic 2D tiles (solid blocks, one-way platforms, coyote time, jump 
 
 * **Drop a sprite sheet** (PNG/JPG/GIF/WebP) → set the cell size, click cells to build clips, set damage/knockback/combo links, drag a hitbox on the live preview, then **Download .pam + .anim**. Drop an existing `.anim` on it to edit it again.
 * **Drop a background or tileset** → **Download .pam**.
+* **Backdrop (parallax layers)** → drop your layer images, set each one's scroll factor, drift, height, transparency and front/back, watch a live 400×240 preview that pans like the game camera, then **Download .zip** (a `.layers` file + every image). Drop the unzipped files back on the page to keep editing.
 
 ```c
-GeSprite hero;  ge_sprite_load(&hero, "hero.pam", "hero.anim");   // sheet + clips
-GeImage  sky;   ge_image_load_pam(&sky, "sky.pam");               // plain image
+GeSprite hero;  ge_sprite_load(&hero, "hero.pam", "hero.anim");     // sheet + clips
+GeImage  tiles; ge_image_load_pam(&tiles, "tiles.pam");             // plain image
+int line;       ge_world_load_layers(&world, "forest.layers", &line); // whole parallax backdrop
 ```
 
-It checks the engine's limits for you (16 frames/clip, 32 clips, dangling `next=`, hitboxes on non-attacks). A real export from the tool is a test fixture (`tests/fixtures/hero.*`), so the tool and the loader can't silently drift apart.
+Try a backdrop straight away with `./build/demo --layers forest.layers`. A `.layers` file is plain text, one layer per line, back to front, image paths relative to the file:
+
+```
+layer sky.pam factor=0                       # 0 = fixed to the screen
+layer hills.pam factor=0.3 drift=0.05 y=120  # drift = scrolls on its own (clouds, mist)
+layer grass.pam factor=1.4 y=210 alpha=200 front   # >1 and front = passes in front of the action
+```
+
+Keys: `factor` (default 1), `factor_y` (0), `drift` (0), `y` (0), `alpha` (1–255); flags `front`, `additive`, `optional` (skipped in `low_detail`). Fully opaque images are detected and get the fast copy path. On any error nothing is loaded and you get the line number.
+
+It checks the engine's limits for you (16 frames/clip, 32 clips, 10 layers, dangling `next=`, hitboxes on non-attacks). Real exports from the tool are test fixtures (`tests/fixtures/`), so the tool and the loaders can't silently drift apart.
 
 ## Nintendo 3DS
 
@@ -111,7 +123,7 @@ Performance on the console is also **unmeasured**. The engine is a CPU software 
 engine/include/ge/   public headers      engine/src/   implementation
 platform/            sdl2.c · n3ds.c · null.c (headless, scripted input, PNG dumps)
 demo/                the sample game: art.c (procedural sprites + backdrop), level.c, main.c (AI, HUD)
-tools/asset-prep/    drag-and-drop sheet/clip/hitbox editor (standalone HTML)
+tools/asset-prep/    drag-and-drop sheet/clip/hitbox editor + parallax backdrop builder (standalone HTML)
 tests/               parser, animation timing, tile physics, one-way platforms, combat rules,
                      lanes, combos, determinism, fixed-timestep loop
 3ds/Makefile         devkitPro build

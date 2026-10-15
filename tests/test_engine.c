@@ -100,6 +100,49 @@ static void test_asset_prep_roundtrip(void) {
     CHECK(ge_sprite_load(&s, GE_TEST_DATA_DIR "/hero.pam", "does/not/exist.anim") == -2);
 }
 
+/* .layers files (written by tools/asset-prep's backdrop builder) through ge_world_load_layers. */
+static void test_layers_file(void) {
+    puts("layers file");
+    GeWorld w;
+    ge_world_init(&w, 16, 4, 1);
+    int line = -1;
+    CHECK(ge_world_load_layers(&w, GE_TEST_DATA_DIR "/backdrop/tiny.layers", &line) == GE_LAYERS_OK && line == 0);
+    CHECK(w.nlayers == 2);
+    const GeParallaxLayer *a = &w.layers[0], *b = &w.layers[1];
+    CHECK(a->img.w == 8 && a->img.h == 4 && a->opaque && !a->foreground && a->alpha == 255);
+    CHECK_NEAR(a->factor_x, 0.5f);
+    CHECK(b->img.w == 4 && !b->opaque && b->foreground && b->additive && b->optional && b->alpha == 128 && b->y == 3);
+    CHECK_NEAR(b->factor_x, 1.5f);
+    CHECK_NEAR(b->auto_x, 0.25f);
+
+    /* parallax maths: camera at x=10, factor 0.5 -> the layer has scrolled 5px, so screen x=0 shows
+     * column 5 of the 8px image, and it wraps (screen x=3 shows column 0). */
+    GeImage fb = ge_image_create(16, 4);
+    w.cam.x = 10;
+    w.layers[1].optional = true; w.low_detail = true;        /* hide the front layer for this check */
+    ge_world_draw(&w, &fb);
+    CHECK(fb.px[0] == GE_RGB(150, 0, 0) && fb.px[3] == GE_RGB(0, 0, 0) && fb.px[4] == GE_RGB(30, 0, 0));
+    ge_image_free(&fb);
+    ge_world_free(&w);
+
+    /* errors leave the world exactly as it was */
+    ge_world_init(&w, 16, 4, 1);
+    CHECK(ge_world_load_layers(&w, "no/such/file.layers", &line) == GE_LAYERS_EOPEN);
+    CHECK(ge_world_parse_layers(&w, "layer cols.pam factor=0.5\nlayer cols.pam speed=2\n", GE_TEST_DATA_DIR "/backdrop", &line) == GE_LAYERS_ESYNTAX);
+    CHECK(line == 2 && w.nlayers == 0);
+    CHECK(ge_world_parse_layers(&w, "layer cols.pam factor=abc\n", GE_TEST_DATA_DIR "/backdrop", &line) == GE_LAYERS_ESYNTAX);
+    CHECK(ge_world_parse_layers(&w, "layer cols.pam alpha=0\n", GE_TEST_DATA_DIR "/backdrop", &line) == GE_LAYERS_ESYNTAX);
+    CHECK(ge_world_parse_layers(&w, "# comment\n\nlayer missing.pam\n", GE_TEST_DATA_DIR "/backdrop", &line) == GE_LAYERS_EIMAGE);
+    CHECK(line == 3 && w.nlayers == 0);
+    char many[1024] = "";
+    for (int i = 0; i < GE_MAX_LAYERS + 1; i++) strcat(many, "layer cols.pam\n");
+    CHECK(ge_world_parse_layers(&w, many, GE_TEST_DATA_DIR "/backdrop", &line) == GE_LAYERS_EFULL);
+    CHECK(line == GE_MAX_LAYERS + 1 && w.nlayers == 0);
+    CHECK(ge_world_parse_layers(&w, "layer cols.pam\n", GE_TEST_DATA_DIR "/backdrop", &line) == GE_LAYERS_OK);
+    CHECK(w.nlayers == 1 && w.layers[0].factor_x == 1.0f && w.layers[0].y == 0);   /* defaults */
+    ge_world_free(&w);
+}
+
 static void test_gfx(void) {
     puts("gfx");
     GeImage a = ge_image_create(4, 2), b = ge_image_create(4, 2);
@@ -347,6 +390,7 @@ static void test_loop(void) {
 int main(void) {
     test_parser_and_anim();
     test_asset_prep_roundtrip();
+    test_layers_file();
     test_gfx();
     test_tilemap();
     test_physics();

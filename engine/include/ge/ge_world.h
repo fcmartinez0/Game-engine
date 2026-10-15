@@ -144,6 +144,23 @@ typedef struct GeWorld {
 } GeWorld;
 
 void ge_world_init(GeWorld *w, int view_w, int view_h, uint32_t seed);
+
+/* ---- parallax layers from a file (.layers), e.g. exported by tools/asset-prep ----
+ *
+ *   # back to front; image paths are relative to this file
+ *   layer sky.pam factor=0
+ *   layer hills.pam factor=0.22 y=100
+ *   layer clouds.pam factor=0.12 drift=0.05 y=30 additive optional
+ *   layer grass.pam factor=1.45 y=206 front
+ *
+ * keys:  factor= (horizontal scroll, default 1)  factor_y= (default 0)
+ *        drift= (px/tick, default 0)  y= (default 0)  alpha= (1-255, default 255)
+ * flags: front (drawn over the entities)  additive  optional (skipped in low_detail)
+ * Fully opaque images are detected and get the fast row-copy path automatically.
+ * On any error nothing is added and *err_line (if given) names the offending line. */
+enum { GE_LAYERS_OK = 0, GE_LAYERS_EOPEN = -1, GE_LAYERS_ESYNTAX = -2, GE_LAYERS_EIMAGE = -3, GE_LAYERS_EFULL = -4 };
+int ge_world_load_layers(GeWorld *w, const char *path, int *err_line);
+int ge_world_parse_layers(GeWorld *w, const char *text, const char *base_dir, int *err_line);
 void ge_world_free(GeWorld *w);
 int  ge_world_add_layer(GeWorld *w, GeParallaxLayer layer);
 int  ge_world_spawn(GeWorld *w, const GeActorDef *def, const GeSprite *spr, int team, float x, float y, int hp);

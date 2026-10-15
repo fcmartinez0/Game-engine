@@ -1,4 +1,5 @@
 #include "ge/ge_anim.h"
+#include "ge_text.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,23 +51,10 @@ int ge_sprite_parse(GeSprite *s, const char *text) {
     s->nclips = 0;
     if (s->cell_w == 0) { s->cell_w = 32; s->cell_h = 32; }
 
-    for (const char *p = text; *p;) {
-        size_t n = 0;
-        while (*p && *p != '\n') { if (n < sizeof line - 1) line[n++] = *p; p++; }
-        if (*p == '\n') p++;
-        line[n] = 0;
+    for (const char *p = text; ge_next_line(&p, line, sizeof line);) {
         lineno++;
-        char *hash = strchr(line, '#');
-        if (hash) *hash = 0;
-
         char *tok[12];
-        int nt = 0;
-        for (char *q = line; *q && nt < 12;) {
-            while (*q == ' ' || *q == '\t' || *q == '\r') *q++ = 0;
-            if (!*q) break;
-            tok[nt++] = q;
-            while (*q && *q != ' ' && *q != '\t' && *q != '\r') q++;
-        }
+        int nt = ge_tokenize(line, tok, 12);
         if (nt == 0) continue;
 
         if (!strcmp(tok[0], "cell") && nt == 3) {
@@ -118,15 +106,8 @@ int ge_sprite_parse(GeSprite *s, const char *text) {
 int ge_sprite_load(GeSprite *s, const char *pam_path, const char *anim_path) {
     memset(s, 0, sizeof *s);
     if (ge_image_load_pam(&s->sheet, pam_path) != 0) return -1;
-    FILE *f = fopen(anim_path, "rb");
-    if (!f) { ge_image_free(&s->sheet); return -2; }
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *text = n >= 0 ? (char *)malloc((size_t)n + 1) : NULL;
-    if (!text || fread(text, 1, (size_t)n, f) != (size_t)n) { free(text); fclose(f); ge_image_free(&s->sheet); return -2; }
-    text[n] = 0;
-    fclose(f);
+    char *text = ge_read_file(anim_path);
+    if (!text) { ge_image_free(&s->sheet); return -2; }
     int rc = ge_sprite_parse(s, text);
     free(text);
     if (rc != 0) { fprintf(stderr, "%s: syntax error on line %d\n", anim_path, -rc); ge_image_free(&s->sheet); return -3; }
