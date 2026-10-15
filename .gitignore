@@ -1,0 +1,5 @@
+build/
+*.3dsx
+*.elf
+screenshot.png
+ge_test_out.png

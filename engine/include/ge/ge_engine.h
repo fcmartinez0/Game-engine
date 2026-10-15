@@ -1,0 +1,24 @@
+#ifndef GE_ENGINE_H
+#define GE_ENGINE_H
+
+#include "ge_input.h"
+#include "ge_platform.h"
+
+#define GE_SCREEN_W 400
+#define GE_SCREEN_H 240
+#define GE_TICK_HZ 60
+
+typedef struct {
+    void *user;
+    int  (*init)(void *user);                            /* 0 on success */
+    void (*update)(void *user, const GeInput *in);       /* fixed 60 Hz */
+    void (*draw)(void *user, GeImage *fb);
+    void (*shutdown)(void *user);
+} GeGame;
+
+/* Fixed-timestep loop: game logic always advances in 1/60 s steps (so physics
+ * and frame data behave identically on a 60 fps desktop and the 3DS), and
+ * rendering happens once per loop. Returns 0 on a clean exit. */
+int ge_run(const GeGame *game, const GePlatformConfig *cfg);
+
+#endif
