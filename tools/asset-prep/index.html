@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset Prep</title>
+<!-- Standalone helper for the ge engine. Not part of the engine: open this file in a browser,
+     drop PNGs on it, download .pam (image) and .anim (clips). No server, no dependencies. -->
+<style>
+  :root { --bg:#16141f; --panel:#1f1c2c; --line:#38334d; --fg:#e8e4f4; --dim:#9a94b5; --acc:#7c5cff; --ok:#5fd38d; --bad:#ff6b7a; --hit:#ff4d5e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:baseline; }
+  header h1 { font-size:16px; margin:0; }
+  header span { color:var(--dim); font-size:12px; }
+  #app { display:grid; grid-template-columns:220px 1fr; min-height:calc(100vh - 45px); }
+  aside { border-right:1px solid var(--line); padding:12px; background:var(--panel); }
+  main { padding:16px; min-width:0; }
+  #drop { border:2px dashed var(--line); border-radius:8px; padding:18px 10px; text-align:center; color:var(--dim); cursor:pointer; }
+  #drop b { color:var(--fg); }
+  body.dragging #drop, body.dragging { outline:3px dashed var(--acc); outline-offset:-6px; }
+  #list { list-style:none; padding:0; margin:12px 0 0; }
+  #list li { padding:7px 9px; border-radius:6px; cursor:pointer; display:flex; justify-content:space-between; gap:6px; }
+  #list li:hover { background:#2a2640; } #list li.sel { background:var(--acc); }
+  #list li small { opacity:.7; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:18px 0 8px; }
+  label { color:var(--dim); font-size:12px; display:inline-flex; flex-direction:column; gap:2px; margin-right:10px; }
+  input, select { background:#120f1b; color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:4px 6px; font:inherit; }
+  input[type=number] { width:64px; } input[type=text] { width:130px; }
+  input[type=checkbox] { width:auto; margin:5px 0; }
+  button { background:#2d2848; color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:5px 10px; font:inherit; cursor:pointer; }
+  button:hover { background:#3a3460; } button.primary { background:var(--acc); border-color:var(--acc); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .row { display:flex; flex-wrap:wrap; align-items:flex-end; gap:6px 0; margin-bottom:8px; }
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px; align-items:start; }
+  @media (max-width:900px) { .cols { grid-template-columns:1fr; } #app { grid-template-columns:1fr; } aside { border-right:0; border-bottom:1px solid var(--line); } }
+  .scroll { overflow:auto; max-height:340px; border:1px solid var(--line); border-radius:6px; background:#0d0b14; }
+  canvas { image-rendering:pixelated; display:block;
+    background-image:linear-gradient(45deg,#2a2640 25%,transparent 25%,transparent 75%,#2a2640 75%),linear-gradient(45deg,#2a2640 25%,transparent 25%,transparent 75%,#2a2640 75%);
+    background-size:16px 16px; background-position:0 0,8px 8px; background-color:#1b1829; }
+  #sheet { cursor:crosshair; } #preview { cursor:crosshair; border:1px solid var(--line); border-radius:6px; }
+  .tabs button { border-radius:5px 5px 0 0; } .tabs button.on { background:var(--acc); border-color:var(--acc); }
+  .clips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .clips button.on { background:var(--acc); border-color:var(--acc); }
+  table { border-collapse:collapse; width:100%; } th { text-align:left; color:var(--dim); font-weight:normal; font-size:12px; padding:2px 4px; }
+  td { padding:2px 4px; white-space:nowrap; } td input[type=number] { width:52px; } tr.sel td { background:#2a2640; }
+  #msgs div { padding:3px 0; font-size:13px; } .err { color:var(--bad); } .warn { color:#ffc857; } .ok { color:var(--ok); }
+  .hint { color:var(--dim); font-size:12px; margin:4px 0 10px; }
+  .empty { color:var(--dim); text-align:center; margin-top:15vh; }
+</style>
+</head>
+<body>
+<header><h1>Asset Prep</h1><span>drop PNG / JPG / GIF / WebP sheets and backgrounds · drop an .anim to load clips · everything stays in your browser</span></header>
+<div id="app">
+  <aside>
+    <label id="drop"><input type="file" id="pick" multiple accept="image/*,.anim,.txt" hidden><b>Drop files here</b><br>or click to browse</label>
+    <ul id="list"></ul>
+  </aside>
+  <main>
+    <div id="empty" class="empty"><p>Drop an image to start.</p><p class="hint">Sprite sheet → set the cell size, click cells to build clips, download <b>.pam</b> + <b>.anim</b>.<br>Background / tileset → download the <b>.pam</b>.</p></div>
+    <div id="editor" hidden>
+      <div class="tabs"><button id="tabSheet">Sprite sheet</button><button id="tabImage">Plain image (background, tiles)</button></div>
+
+      <div id="sheetPane">
+        <h2>Sheet</h2>
+        <div class="row">
+          <label>cell W<input type="number" id="cellW" min="1"></label>
+          <label>cell H<input type="number" id="cellH" min="1"></label>
+          <label>origin X<input type="number" id="ox"></label>
+          <label>origin Y<input type="number" id="oy"></label>
+          <label>zoom<select id="zoom"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>6</option></select></label>
+          <span id="gridInfo" class="hint" style="margin-left:6px"></span>
+        </div>
+        <div class="cols">
+          <div>
+            <div class="scroll"><canvas id="sheet"></canvas></div>
+            <p class="hint">Click a cell to append it as a frame to the selected clip. Cells are numbered left-to-right, top-to-bottom — the same order the engine uses.</p>
+
+            <h2>Clips</h2>
+            <div class="clips" id="clipBtns"></div>
+            <div id="clipEditor" hidden>
+              <div class="row">
+                <label>name<input type="text" id="cName"></label>
+                <label>loop<input type="checkbox" id="cLoop"></label>
+                <button id="cDel">Delete clip</button>
+              </div>
+              <div class="row">
+                <label>damage (0 = not an attack)<input type="number" id="cDmg" min="0"></label>
+                <label>knockback x<input type="number" id="cKbx" step="0.1"></label>
+                <label>knockback y<input type="number" id="cKby" step="0.1"></label>
+                <label>hit-stop<input type="number" id="cStop" min="0"></label>
+                <label>stun<input type="number" id="cStun" min="0"></label>
+                <label>cancel from frame<input type="number" id="cCancel" min="0" placeholder="none"></label>
+                <label>next clip<select id="cNext"></select></label>
+                <label>lunge<input type="number" id="cLunge" step="0.1"></label>
+              </div>
+              <table><thead><tr><th>#</th><th>cell</th><th>ticks</th><th colspan="4">hitbox x · y · w · h (rel. to origin, facing right)</th><th></th></tr></thead><tbody id="frames"></tbody></table>
+              <p class="hint" id="totalTicks"></p>
+            </div>
+          </div>
+          <div>
+            <h2 style="margin-top:0">Preview</h2>
+            <canvas id="preview"></canvas>
+            <div class="row" style="margin-top:8px">
+              <button id="play">Pause</button>
+              <label>click / drag sets<select id="pmode"><option value="origin">origin</option><option value="hit">hitbox of selected frame</option></select></label>
+            </div>
+            <button id="clearHit">Clear selected frame's hitbox</button>
+            <p class="hint">Red box = hitbox, cross = origin (where the character's feet sit in the world). Pick a frame in the table to edit its hitbox.</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="imagePane" hidden>
+        <h2>Image</h2>
+        <div class="scroll" style="max-height:60vh"><canvas id="plain"></canvas></div>
+        <p class="hint" id="imgInfo"></p>
+      </div>
+
+      <h2>Export</h2>
+      <div class="row">
+        <label>file name<input type="text" id="base"></label>
+        <button class="primary" id="dlPam">Download .pam</button>
+        <button class="primary" id="dlAnim">Download .anim</button>
+        <button id="copyAnim">Copy .anim text</button>
+      </div>
+      <div id="msgs"></div>
+      <p class="hint">In your game: <code>ge_sprite_load(&amp;spr, "hero.pam", "hero.anim")</code> for sheets, <code>ge_image_load_pam(&amp;img, "forest.pam")</code> for plain images.</p>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const MAX_FRAMES = 16, MAX_CLIPS = 32, NAME_MAX = 23;   // must match engine limits (ge_anim.h)
+const assets = [];
+let cur = null, selFrame = 0, playing = true, play = { t: 0, f: 0 }, drag = null;
+
+const sanitize = s => s.replace(/[^A-Za-z0-9_]/g, "_").slice(0, NAME_MAX);
+const baseName = f => sanitize(f.replace(/\.[^.]+$/, "")) || "asset";
+const clip = () => cur && cur.clips[cur.sel];
+const cols = a => Math.max(1, Math.floor(a.img.width / a.cellW));
+const rows = a => Math.max(1, Math.floor(a.img.height / a.cellH));
+
+/* ---------- loading ---------- */
+function handleFiles(files) {
+  for (const f of files) {
+    if (/\.(anim|txt)$/i.test(f.name)) f.text().then(t => importAnim(t, f.name));
+    else if (f.type.startsWith("image/")) addImage(f);
+  }
+}
+function addImage(file) {
+  const img = new Image(), url = URL.createObjectURL(file);
+  img.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    const cw = Math.min(32, c.width), ch = Math.min(32, c.height);
+    const a = { name: baseName(file.name), file: file.name, img: c, cellW: cw, cellH: ch, ox: cw >> 1, oy: ch - 1, clips: [], sel: -1, tab: "sheet" };
+    assets.push(a); select(a);
+  };
+  img.src = url;
+}
+function importAnim(text, fname) {
+  const target = cur;
+  if (!target) return say([["err", "Drop the sprite sheet image first, then its .anim file."]]);
+  const r = parseAnim(text);
+  if (r.error) return say([["err", `${fname}: line ${r.error}: could not parse`]]);
+  Object.assign(target, r.data, { sel: r.data.clips.length ? 0 : -1, tab: "sheet" });
+  selFrame = 0; load(); say([["ok", `Loaded ${r.data.clips.length} clips from ${fname}`]]);
+}
+
+/* ---------- .anim text <-> model (mirrors engine/src/ge_anim.c) ---------- */
+function parseAnim(text) {
+  const d = { cellW: 32, cellH: 32, ox: 0, oy: 0, clips: [] };
+  let c = null, n = 0;
+  for (const raw of text.split("\n")) {
+    n++;
+    const t = raw.split("#")[0].trim().split(/\s+/).filter(Boolean);
+    if (!t.length) continue;
+    if (t[0] === "cell" && t.length === 3) { d.cellW = +t[1]; d.cellH = +t[2]; }
+    else if (t[0] === "origin" && t.length === 3) { d.ox = +t[1]; d.oy = +t[2]; }
+    else if (t[0] === "clip" && t.length >= 3) {
+      c = newClip(t[1]); c.loop = t[2] === "loop"; d.clips.push(c);
+      for (const o of t.slice(3)) {
+        const [k, v] = o.split("=");
+        if (k === "dmg") c.dmg = +v; else if (k === "kb") { const p = v.split(","); c.kbx = +p[0]; c.kby = +p[1]; }
+        else if (k === "stop") c.stop = +v; else if (k === "stun") c.stun = +v;
+        else if (k === "cancel") c.cancel = +v; else if (k === "next") c.next = v; else if (k === "lunge") c.lunge = +v;
+        else return { error: n };
+      }
+    } else if (t[0] === "frame" && t.length >= 3 && c) {
+      const f = { cell: +t[1], ticks: +t[2], hit: null };
+      for (const o of t.slice(3)) if (o.startsWith("hit=")) { const p = o.slice(4).split(",").map(Number); f.hit = { x: p[0], y: p[1], w: p[2], h: p[3] }; }
+      c.frames.push(f);
+    } else return { error: n };
+  }
+  return { data: d };
+}
+function newClip(name) { return { name: sanitize(name), loop: false, dmg: 0, kbx: 0, kby: 0, stop: 0, stun: 0, cancel: null, next: "", lunge: 0, frames: [] }; }
+const num = v => String(+(+v).toFixed(3));
+function buildAnim(a) {
+  const L = ["# generated by Asset Prep", `cell ${a.cellW} ${a.cellH}`, `origin ${a.ox} ${a.oy}`];
+  for (const c of a.clips) {
+    let h = `clip ${c.name} ${c.loop ? "loop" : "once"}`;
+    if (c.dmg > 0) {
+      h += ` dmg=${c.dmg} kb=${num(c.kbx)},${num(c.kby)} stop=${c.stop} stun=${c.stun}`;
+      if (c.cancel !== null && c.cancel >= 0) h += ` cancel=${c.cancel}`;
+      if (c.next) h += ` next=${c.next}`;
+      if (c.lunge) h += ` lunge=${num(c.lunge)}`;
+    }
+    L.push(h);
+    for (const f of c.frames) L.push(`  frame ${f.cell} ${f.ticks}` + (f.hit ? ` hit=${f.hit.x},${f.hit.y},${f.hit.w},${f.hit.h}` : ""));
+  }
+  return L.join("\n") + "\n";
+}
+function validate(a) {
+  const m = [], names = new Set();
+  if (a.img.width % a.cellW || a.img.height % a.cellH) m.push(["warn", `Sheet ${a.img.width}×${a.img.height} is not a whole number of ${a.cellW}×${a.cellH} cells; the leftover edge is ignored.`]);
+  if (a.ox < 0 || a.ox >= a.cellW || a.oy < 0 || a.oy >= a.cellH) m.push(["err", "Origin must be inside a cell."]);
+  if (!a.clips.length) m.push(["err", "No clips yet — click a cell in the sheet."]);
+  if (a.clips.length > MAX_CLIPS) m.push(["err", `Too many clips (engine max ${MAX_CLIPS}).`]);
+  for (const c of a.clips) {
+    if (!c.name) m.push(["err", "A clip has no name."]);
+    if (names.has(c.name)) m.push(["err", `Duplicate clip name "${c.name}".`]); names.add(c.name);
+    if (!c.frames.length) m.push(["err", `Clip "${c.name}" has no frames.`]);
+    if (c.frames.length > MAX_FRAMES) m.push(["err", `Clip "${c.name}" has ${c.frames.length} frames (engine max ${MAX_FRAMES}).`]);
+    c.frames.forEach((f, i) => {
+      if (!(f.ticks >= 1)) m.push(["err", `${c.name} frame ${i}: ticks must be ≥ 1.`]);
+      if (f.cell < 0 || f.cell >= cols(a) * rows(a)) m.push(["err", `${c.name} frame ${i}: cell ${f.cell} is outside the sheet.`]);
+      if (f.hit && c.dmg <= 0) m.push(["warn", `${c.name} frame ${i}: has a hitbox but damage is 0, so the engine ignores it.`]);
+    });
+    if (c.dmg > 0 && !c.frames.some(f => f.hit)) m.push(["warn", `Attack "${c.name}" has no hitbox on any frame — it can never hit.`]);
+  }
+  for (const c of a.clips) if (c.next && !names.has(c.next)) m.push(["err", `"${c.name}" chains to "${c.next}", which doesn't exist.`]);
+  return m;
+}
+
+/* ---------- UI plumbing ---------- */
+function select(a) { cur = a; selFrame = 0; play = { t: 0, f: 0 }; load(); }
+function load() {
+  $("#empty").hidden = !!cur; $("#editor").hidden = !cur;
+  renderList(); if (!cur) return;
+  $("#sheetPane").hidden = cur.tab !== "sheet"; $("#imagePane").hidden = cur.tab !== "image";
+  $("#tabSheet").classList.toggle("on", cur.tab === "sheet"); $("#tabImage").classList.toggle("on", cur.tab === "image");
+  $("#dlAnim").hidden = $("#copyAnim").hidden = cur.tab !== "sheet";
+  $("#base").value = cur.name;
+  for (const [id, k] of [["cellW", "cellW"], ["cellH", "cellH"], ["ox", "ox"], ["oy", "oy"]]) $("#" + id).value = cur[k];
+  const p = $("#plain"); p.width = cur.img.width; p.height = cur.img.height; p.getContext("2d").drawImage(cur.img, 0, 0);
+  $("#imgInfo").textContent = `${cur.img.width}×${cur.img.height} px → ${(cur.img.width * cur.img.height * 4 / 1024).toFixed(0)} KB in memory on the console (RGBA).`;
+  refreshAll();
+}
+function renderList() {
+  $("#list").innerHTML = "";
+  assets.forEach(a => {
+    const li = document.createElement("li"); li.className = a === cur ? "sel" : "";
+    li.innerHTML = `<span></span><small>${a.img.width}×${a.img.height}</small>`; li.firstChild.textContent = a.file;
+    li.onclick = () => select(a); $("#list").append(li);
+  });
+}
+function refreshAll() { drawSheet(); renderClips(); renderFrames(); sizePreview(); say(validate(cur)); }
+function say(list) { $("#msgs").innerHTML = ""; (list.length ? list : [["ok", "Looks good."]]).forEach(([k, t]) => { const d = document.createElement("div"); d.className = k; d.textContent = t; $("#msgs").append(d); }); }
+
+/* ---------- sheet view ---------- */
+function drawSheet() {
+  const a = cur, z = +$("#zoom").value, cv = $("#sheet"), g = cv.getContext("2d");
+  cv.width = a.img.width * z; cv.height = a.img.height * z;
+  g.imageSmoothingEnabled = false; g.drawImage(a.img, 0, 0, cv.width, cv.height);
+  const C = cols(a), R = rows(a), used = new Set(clip() ? clip().frames.map(f => f.cell) : []);
+  g.lineWidth = 1; g.font = "10px monospace";
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+    const x = c * a.cellW * z, y = r * a.cellH * z, i = r * C + c;
+    if (used.has(i)) { g.fillStyle = "rgba(124,92,255,.35)"; g.fillRect(x, y, a.cellW * z, a.cellH * z); }
+    g.strokeStyle = "rgba(255,255,255,.25)"; g.strokeRect(x + .5, y + .5, a.cellW * z - 1, a.cellH * z - 1);
+    if (a.cellW * z >= 22) { g.fillStyle = "#fff"; g.fillText(i, x + 3, y + 11); }
+  }
+  $("#gridInfo").textContent = `${C} × ${R} cells`;
+}
+$("#sheet").addEventListener("click", e => {
+  const a = cur, z = +$("#zoom").value, r = e.target.getBoundingClientRect();
+  const c = Math.floor((e.clientX - r.left) / z / a.cellW), row = Math.floor((e.clientY - r.top) / z / a.cellH);
+  if (c >= cols(a) || row >= rows(a)) return;
+  if (!clip()) { a.clips.push(newClip("clip" + a.clips.length)); a.sel = a.clips.length - 1; }
+  const cl = clip();
+  if (cl.frames.length >= MAX_FRAMES) return say([["err", `A clip holds at most ${MAX_FRAMES} frames.`]]);
+  cl.frames.push({ cell: row * cols(a) + c, ticks: 6, hit: null }); selFrame = cl.frames.length - 1;
+  refreshAll();
+});
+
+/* ---------- clip editor ---------- */
+function renderClips() {
+  const box = $("#clipBtns"); box.innerHTML = "";
+  cur.clips.forEach((c, i) => { const b = document.createElement("button"); b.textContent = c.name || "(unnamed)"; b.className = i === cur.sel ? "on" : ""; b.onclick = () => { cur.sel = i; selFrame = 0; play = { t: 0, f: 0 }; refreshAll(); }; box.append(b); });
+  const add = document.createElement("button"); add.textContent = "+ clip"; add.onclick = () => { cur.clips.push(newClip("clip" + cur.clips.length)); cur.sel = cur.clips.length - 1; selFrame = 0; refreshAll(); }; box.append(add);
+  const c = clip(); $("#clipEditor").hidden = !c; if (!c) return;
+  $("#cName").value = c.name; $("#cLoop").checked = c.loop; $("#cDmg").value = c.dmg; $("#cKbx").value = c.kbx; $("#cKby").value = c.kby;
+  $("#cStop").value = c.stop; $("#cStun").value = c.stun; $("#cCancel").value = c.cancel === null ? "" : c.cancel; $("#cLunge").value = c.lunge;
+  const nx = $("#cNext"); nx.innerHTML = '<option value="">(none)</option>';
+  cur.clips.forEach(o => { if (o !== c) { const op = document.createElement("option"); op.value = op.textContent = o.name; nx.append(op); } });
+  nx.value = c.next;
+}
+function bindClip(id, key, conv) { $("#" + id).addEventListener("input", e => { const c = clip(); if (!c) return; c[key] = conv(e.target); if (key === "name") renderClipsKeepFocus(); say(validate(cur)); }); }
+function renderClipsKeepFocus() { [...$("#clipBtns").children][cur.sel].textContent = clip().name || "(unnamed)"; }
+bindClip("cName", "name", e => sanitize(e.value)); bindClip("cLoop", "loop", e => e.checked);
+bindClip("cDmg", "dmg", e => Math.max(0, +e.value | 0)); bindClip("cKbx", "kbx", e => +e.value || 0); bindClip("cKby", "kby", e => +e.value || 0);
+bindClip("cStop", "stop", e => Math.max(0, +e.value | 0)); bindClip("cStun", "stun", e => Math.max(0, +e.value | 0));
+bindClip("cCancel", "cancel", e => e.value === "" ? null : Math.max(0, +e.value | 0)); bindClip("cNext", "next", e => e.value); bindClip("cLunge", "lunge", e => +e.value || 0);
+$("#cName").addEventListener("change", () => { $("#cName").value = clip().name; });
+$("#cDel").onclick = () => { const gone = clip().name; cur.clips.splice(cur.sel, 1); cur.clips.forEach(c => { if (c.next === gone) c.next = ""; }); cur.sel = Math.min(cur.sel, cur.clips.length - 1); selFrame = 0; refreshAll(); };
+
+function renderFrames() {
+  const body = $("#frames"); body.innerHTML = ""; const c = clip(); if (!c) return;
+  c.frames.forEach((f, i) => {
+    const h = f.hit || {}, tr = document.createElement("tr"); tr.className = i === selFrame ? "sel" : "";
+    tr.innerHTML = `<td>${i}</td><td><input type="number" data-k="cell" value="${f.cell}" min="0"></td><td><input type="number" data-k="ticks" value="${f.ticks}" min="1"></td>` +
+      ["x", "y", "w", "h"].map(k => `<td><input type="number" data-k="h${k}" value="${h[k] ?? ""}"></td>`).join("") +
+      `<td><button data-a="up">↑</button><button data-a="down">↓</button><button data-a="del">✕</button></td>`;
+    tr.onclick = () => { if (selFrame !== i) { selFrame = i; playing = false; $("#play").textContent = "Play"; renderFrames(); } };
+    tr.addEventListener("input", e => {
+      const k = e.target.dataset.k; if (!k) return;
+      if (k === "cell" || k === "ticks") f[k] = e.target.value === "" ? 0 : +e.target.value | 0;
+      else { const v = [...tr.querySelectorAll("[data-k^=h]")].map(x => x.value); f.hit = v.every(x => x !== "") ? { x: +v[0] | 0, y: +v[1] | 0, w: +v[2] | 0, h: +v[3] | 0 } : null; }
+      drawSheet(); totalTicks(); say(validate(cur));
+    });
+    tr.addEventListener("click", e => {
+      const a = e.target.dataset.a; if (!a) return; e.stopPropagation();
+      if (a === "del") { c.frames.splice(i, 1); selFrame = Math.max(0, Math.min(selFrame, c.frames.length - 1)); }
+      else { const j = a === "up" ? i - 1 : i + 1; if (j >= 0 && j < c.frames.length) { [c.frames[i], c.frames[j]] = [c.frames[j], c.frames[i]]; selFrame = j; } }
+      refreshAll();
+    });
+    body.append(tr);
+  });
+  totalTicks();
+}
+function totalTicks() { const c = clip(); $("#totalTicks").textContent = c ? `${c.frames.reduce((s, f) => s + (f.ticks || 0), 0)} ticks = ${(c.frames.reduce((s, f) => s + (f.ticks || 0), 0) / 60).toFixed(2)} s at 60 Hz` : ""; }
+
+/* ---------- preview ---------- */
+const PZ = 6;
+function sizePreview() { const p = $("#preview"); p.width = cur.cellW * PZ; p.height = cur.cellH * PZ; }
+function previewFrame() {
+  const c = clip(); if (!c || !c.frames.length) return null;
+  return playing ? c.frames[Math.min(play.f, c.frames.length - 1)] : c.frames[Math.min(selFrame, c.frames.length - 1)];
+}
+function drawPreview() {
+  const a = cur, p = $("#preview"), g = p.getContext("2d"); g.clearRect(0, 0, p.width, p.height);
+  const f = previewFrame();
+  if (f) {
+    const C = cols(a); g.imageSmoothingEnabled = false;
+    g.drawImage(a.img, (f.cell % C) * a.cellW, Math.floor(f.cell / C) * a.cellH, a.cellW, a.cellH, 0, 0, a.cellW * PZ, a.cellH * PZ);
+    if (f.hit) { g.fillStyle = "rgba(255,77,94,.25)"; g.strokeStyle = "#ff4d5e"; g.lineWidth = 2; g.fillRect((a.ox + f.hit.x) * PZ, (a.oy + f.hit.y) * PZ, f.hit.w * PZ, f.hit.h * PZ); g.strokeRect((a.ox + f.hit.x) * PZ, (a.oy + f.hit.y) * PZ, f.hit.w * PZ, f.hit.h * PZ); }
+  }
+  g.strokeStyle = "#5fd38d"; g.lineWidth = 1; g.beginPath();
+  g.moveTo(a.ox * PZ - 8, a.oy * PZ + .5); g.lineTo(a.ox * PZ + 8, a.oy * PZ + .5); g.moveTo(a.ox * PZ + .5, a.oy * PZ - 8); g.lineTo(a.ox * PZ + .5, a.oy * PZ + 8); g.stroke();
+}
+let last = 0;
+function tick(now) {
+  const dt = Math.min(100, now - last); last = now;
+  const c = cur && cur.tab === "sheet" ? clip() : null;
+  if (c && c.frames.length && playing) {
+    play.t += dt * 0.06; // 60 ticks / second
+    for (let g = 0; g < 100; g++) {
+      const f = c.frames[Math.min(play.f, c.frames.length - 1)], need = Math.max(1, f.ticks || 1);
+      if (play.t < need) break;
+      play.t -= need;
+      if (play.f + 1 < c.frames.length) play.f++; else if (c.loop) play.f = 0; else { play.t = 0; play.f = 0; }
+    }
+  }
+  if (c || (cur && cur.tab === "sheet")) drawPreview();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+$("#play").onclick = () => { playing = !playing; play = { t: 0, f: selFrame }; $("#play").textContent = playing ? "Pause" : "Play"; };
+$("#clearHit").onclick = () => { const c = clip(); if (c && c.frames[selFrame]) { c.frames[selFrame].hit = null; renderFrames(); say(validate(cur)); } };
+const pt = e => { const r = $("#preview").getBoundingClientRect(); return [(e.clientX - r.left) / r.width * cur.cellW, (e.clientY - r.top) / r.height * cur.cellH]; };
+$("#preview").addEventListener("mousedown", e => {
+  const [x, y] = pt(e);
+  if ($("#pmode").value === "origin") { cur.ox = Math.max(0, Math.min(cur.cellW - 1, Math.round(x))); cur.oy = Math.max(0, Math.min(cur.cellH - 1, Math.round(y))); $("#ox").value = cur.ox; $("#oy").value = cur.oy; say(validate(cur)); return; }
+  const c = clip(); if (!c || !c.frames[selFrame]) return;
+  playing = false; $("#play").textContent = "Play"; drag = { x0: Math.round(x), y0: Math.round(y) };
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) return; const [x, y] = pt(e), X = Math.round(x), Y = Math.round(y);
+  clip().frames[selFrame].hit = { x: Math.min(drag.x0, X) - cur.ox, y: Math.min(drag.y0, Y) - cur.oy, w: Math.abs(X - drag.x0), h: Math.abs(Y - drag.y0) };
+});
+window.addEventListener("mouseup", () => { if (!drag) return; drag = null; const f = clip().frames[selFrame]; if (f.hit && (f.hit.w < 1 || f.hit.h < 1)) f.hit = null; renderFrames(); say(validate(cur)); });
+
+/* ---------- sheet settings, tabs ---------- */
+for (const [id, k, min] of [["cellW", "cellW", 1], ["cellH", "cellH", 1], ["ox", "ox", 0], ["oy", "oy", 0]])
+  $("#" + id).addEventListener("input", e => { const v = Math.max(min, +e.target.value | 0); if (!cur || !v && min) return; cur[k] = v; drawSheet(); sizePreview(); say(validate(cur)); });
+$("#zoom").onchange = drawSheet;
+$("#tabSheet").onclick = () => { cur.tab = "sheet"; load(); }; $("#tabImage").onclick = () => { cur.tab = "image"; load(); };
+$("#base").addEventListener("input", e => { cur.name = sanitize(e.target.value) || "asset"; });
+
+/* ---------- export ---------- */
+function save(name, data, type) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data], { type })); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+function buildPam(img) {
+  const w = img.width, h = img.height, px = img.getContext("2d").getImageData(0, 0, w, h).data;
+  const head = new TextEncoder().encode(`P7\nWIDTH ${w}\nHEIGHT ${h}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n`);
+  const out = new Uint8Array(head.length + px.length); out.set(head); out.set(px, head.length); return out;
+}
+$("#dlPam").onclick = () => save(cur.name + ".pam", buildPam(cur.img), "application/octet-stream");
+$("#dlAnim").onclick = () => { const m = validate(cur); say(m); if (m.some(x => x[0] === "err")) return; save(cur.name + ".anim", buildAnim(cur), "text/plain"); };
+$("#copyAnim").onclick = async () => { const m = validate(cur); say(m); if (m.some(x => x[0] === "err")) return; try { await navigator.clipboard.writeText(buildAnim(cur)); say([["ok", "Copied."]]); } catch { say([["err", "Clipboard blocked by the browser — use Download .anim."]]); } };
+
+/* ---------- drag and drop anywhere on the page ---------- */
+let depth = 0;
+addEventListener("dragenter", e => { e.preventDefault(); depth++; document.body.classList.add("dragging"); });
+addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; document.body.classList.remove("dragging"); } });
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", e => { e.preventDefault(); depth = 0; document.body.classList.remove("dragging"); handleFiles(e.dataTransfer.files); });
+$("#pick").onchange = e => { handleFiles(e.target.files); e.target.value = ""; };
+window.__ap = { assets, buildAnim, buildPam, parseAnim };   // handy for debugging in the console
+</script>
+</body>
+</html>

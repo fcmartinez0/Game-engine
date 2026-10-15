@@ -12,7 +12,7 @@ A C99 engine for side-scrolling games with **sprite animation**, **fast frame-ba
 cmake -S . -B build && cmake --build build -j
 ./build/demo                 # windowed demo (needs SDL2)
 ./build/demo --autoplay      # let the scripted player play the level
-./build/engine_tests         # 49 checks, no window needed
+./build/engine_tests         # 59 checks, no window needed
 ./build/demo_headless --autoplay --frames 1800 --dump-every 150 --dump-dir shots   # PNG screenshots, no display
 ```
 
@@ -79,6 +79,20 @@ Physics is classic 2D tiles (solid blocks, one-way platforms, coyote time, jump 
 * **Parallax layers** — any number of background/foreground images scrolling at different speeds (`factor_x`; `>1` passes *in front of* the action). Layers can drift on their own (clouds, mist) or be additive (light shafts). *(Analogy: looking out of a train window — distant mountains crawl, nearby trees whip past.)*
 * **Depth lanes** — every entity stands in the back (-1), middle (0) or front (+1) lane. Lanes get a perspective offset and a cooler shade, and **attacks only connect within the same lane**, so you can hop lanes to dodge, and enemies hop lanes to chase you. *(Analogy: swimming-pool lanes — you can see the swimmer next to you but you can't tag them without switching lanes.)*
 
+## Asset prep tool (drag and drop)
+
+`tools/asset-prep/index.html` is a standalone page — **not part of the engine**. Open it in any browser (no server, nothing uploaded) and:
+
+* **Drop a sprite sheet** (PNG/JPG/GIF/WebP) → set the cell size, click cells to build clips, set damage/knockback/combo links, drag a hitbox on the live preview, then **Download .pam + .anim**. Drop an existing `.anim` on it to edit it again.
+* **Drop a background or tileset** → **Download .pam**.
+
+```c
+GeSprite hero;  ge_sprite_load(&hero, "hero.pam", "hero.anim");   // sheet + clips
+GeImage  sky;   ge_image_load_pam(&sky, "sky.pam");               // plain image
+```
+
+It checks the engine's limits for you (16 frames/clip, 32 clips, dangling `next=`, hitboxes on non-attacks). A real export from the tool is a test fixture (`tests/fixtures/hero.*`), so the tool and the loader can't silently drift apart.
+
 ## Nintendo 3DS
 
 ```sh
@@ -97,6 +111,7 @@ Performance on the console is also **unmeasured**. The engine is a CPU software 
 engine/include/ge/   public headers      engine/src/   implementation
 platform/            sdl2.c · n3ds.c · null.c (headless, scripted input, PNG dumps)
 demo/                the sample game: art.c (procedural sprites + backdrop), level.c, main.c (AI, HUD)
+tools/asset-prep/    drag-and-drop sheet/clip/hitbox editor (standalone HTML)
 tests/               parser, animation timing, tile physics, one-way platforms, combat rules,
                      lanes, combos, determinism, fixed-timestep loop
 3ds/Makefile         devkitPro build

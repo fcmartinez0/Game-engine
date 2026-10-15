@@ -82,6 +82,24 @@ static void test_parser_and_anim(void) {
     ge_sprite_free(&s);
 }
 
+/* Files exported by tools/asset-prep must load through the engine's own loader. */
+static void test_asset_prep_roundtrip(void) {
+    puts("asset-prep export -> ge_sprite_load");
+    GeSprite s;
+    CHECK(ge_sprite_load(&s, GE_TEST_DATA_DIR "/hero.pam", GE_TEST_DATA_DIR "/hero.anim") == 0);
+    CHECK(s.sheet.w == 128 && s.sheet.h == 32 && s.cell_w == 32 && s.origin_x == 16 && s.origin_y == 31 && s.cols == 4);
+    CHECK(s.nclips == 3);
+    int a1 = ge_sprite_find_clip(&s, "attack1");
+    CHECK(a1 >= 0 && s.clips[a1].is_attack && s.clips[a1].damage == 8 && s.clips[a1].hitstop == 4 && s.clips[a1].stun == 16);
+    CHECK(s.clips[a1].cancel_from == 1 && s.clips[a1].next == ge_sprite_find_clip(&s, "attack2"));
+    CHECK_NEAR(s.clips[a1].lunge, 1.6f);
+    CHECK(s.clips[a1].frames[1].has_hit && s.clips[a1].frames[1].hit.w == 12 && s.clips[a1].frames[1].hit.y == -25);
+    CHECK(s.sheet.px[8 + 6 * 128] == GE_RGB(220, 60, 60));   /* red block in cell 0 survived the PAM round trip */
+    ge_sprite_free(&s);
+    CHECK(ge_sprite_load(&s, "does/not/exist.pam", "x.anim") == -1);
+    CHECK(ge_sprite_load(&s, GE_TEST_DATA_DIR "/hero.pam", "does/not/exist.anim") == -2);
+}
+
 static void test_gfx(void) {
     puts("gfx");
     GeImage a = ge_image_create(4, 2), b = ge_image_create(4, 2);
@@ -328,6 +346,7 @@ static void test_loop(void) {
 
 int main(void) {
     test_parser_and_anim();
+    test_asset_prep_roundtrip();
     test_gfx();
     test_tilemap();
     test_physics();

@@ -62,6 +62,9 @@ typedef struct {
  */
 int ge_sprite_parse(GeSprite *s, const char *text);
 int ge_sprite_find_clip(const GeSprite *s, const char *name); /* -1 if absent */
+/* Load a sheet (.pam) and its clip text (.anim) from disk, e.g. files exported by
+ * tools/asset-prep. Returns 0, -1 (image), -2 (.anim unreadable) or -3 (.anim syntax error). */
+int ge_sprite_load(GeSprite *s, const char *pam_path, const char *anim_path);
 void ge_sprite_free(GeSprite *s);
 
 typedef struct {

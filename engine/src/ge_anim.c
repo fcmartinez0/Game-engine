@@ -115,6 +115,24 @@ int ge_sprite_parse(GeSprite *s, const char *text) {
     return 0;
 }
 
+int ge_sprite_load(GeSprite *s, const char *pam_path, const char *anim_path) {
+    memset(s, 0, sizeof *s);
+    if (ge_image_load_pam(&s->sheet, pam_path) != 0) return -1;
+    FILE *f = fopen(anim_path, "rb");
+    if (!f) { ge_image_free(&s->sheet); return -2; }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *text = n >= 0 ? (char *)malloc((size_t)n + 1) : NULL;
+    if (!text || fread(text, 1, (size_t)n, f) != (size_t)n) { free(text); fclose(f); ge_image_free(&s->sheet); return -2; }
+    text[n] = 0;
+    fclose(f);
+    int rc = ge_sprite_parse(s, text);
+    free(text);
+    if (rc != 0) { fprintf(stderr, "%s: syntax error on line %d\n", anim_path, -rc); ge_image_free(&s->sheet); return -3; }
+    return 0;
+}
+
 void ge_anim_play(GeAnimator *a, int clip, bool restart) {
     if (a->clip == clip && !restart) return;
     a->clip = clip; a->frame = 0; a->timer = 0; a->done = false;
