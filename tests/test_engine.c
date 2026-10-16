@@ -260,6 +260,11 @@ static void test_moveset(void) {
     CHECK_NEAR(w.ents[a].pos.y, 80.0f);
     for (int i = 0; i < 20; i++) { w.intents[a].move_y = 1; run(&w, 1); }
     CHECK(w.ents[a].pos.y > 90.0f);
+    /* ...and back up again, even with no jump tuning at all (a bug once pinned bats to the floor of spike pits) */
+    flyer.jump_cut_vel = 0.0f;
+    float low = w.ents[a].pos.y;
+    for (int i = 0; i < 30; i++) { w.intents[a].move_y = -1; run(&w, 1); }
+    CHECK(w.ents[a].pos.y < low - 10.0f);
     ge_world_free(&w);
 
     /* recoil pushes the attacker back on a hit */

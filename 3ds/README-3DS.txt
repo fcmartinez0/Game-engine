@@ -37,14 +37,17 @@ CONTROLS - duels (when a duelist spots you)
   down, down-back, back + X or A            rush
 
 DEV MENU - always on the BOTTOM (touch) screen
-  Tap a row to use it; tap the < > ends of DETAIL, DUEL LEVEL and WARP to
+  Tap a row to use it; tap the < > ends of DETAIL, DIFFICULTY and WARP to
   change them (tap the middle of WARP to go). It works while you play.
   SELECT also pauses the game and lets the D-pad + A drive the menu.
   SPEED READOUT    frames per second and milliseconds per frame, at the bottom
   DETAIL           AUTO / LOW / FULL background effects
   PLAY LOG         on by default
   GOD MODE         you can't be hurt (in duels too; the Paragon's finisher still lands)
-  DUEL LEVEL       EASY / NORMAL / HARD for the ordinary duelists
+  DIFFICULTY       EASY (the default) / NORMAL / HARD, saved between sessions.
+                   Easy: 8 masks, spikes cost nothing, duelists are
+                   beginners who hit softly, the boss has less health.
+                   (The Paragon is the same on every setting.)
   WARP             jump to a section (shaft, duelists, benches, boss, the Paragon's hall)
   MARK THIS MOMENT puts a marker in the log - use it when something looks
                    wrong, stutters, or feels unfair, so it can be found later
@@ -55,6 +58,8 @@ THE PLAY LOG - please send this back
   File:  SD:/3ds/gloamwood/log.txt   (always the latest session; the one
          before it is log_previous.txt). The bottom screen says whether the
          log is being written. Switching it off needs two taps.
+         It is saved every few seconds, so it survives quitting with HOME
+         or the power button (START + SELECT still adds a summary).
   It records play time, a performance line every 10 seconds (fps, slow
   frames, CPU time), duels won/lost, deaths, benches, the boss, your
   markers, and a summary when you quit with START + SELECT.

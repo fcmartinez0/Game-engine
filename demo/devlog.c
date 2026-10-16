@@ -65,7 +65,14 @@ void devlog(const char *fmt, ...) {
     fputc('\n', g_file);
 }
 
-void devlog_flush(void) { if (g_file) fflush(g_file); }
+/* Close and reopen rather than fflush: on the 3DS's FAT card the file's length is only written when the file is
+ * closed, so a session that ends without START+SELECT (HOME, power button, a crash) used to leave an empty or
+ * missing log even though the text had been written. Reopening costs little; it happens a few times a minute. */
+void devlog_flush(void) {
+    if (!g_file) return;
+    fclose(g_file);
+    g_file = fopen(g_path, "a");
+}
 
 void devlog_close(void) {
     if (!g_file) return;

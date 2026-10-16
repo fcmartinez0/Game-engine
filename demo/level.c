@@ -20,7 +20,7 @@ const Spawn level_spawns[] = {
     { EN_BAT, 29, 7, 0, 0, 0, NULL },
     { EN_GRUNT, 40, GROUND_ROW, 0, 0, 0, NULL },
     { EN_SPITTER, 46, 10, 0, 0, 0, NULL },
-    { EN_DUELIST, 63, 4, DUEL_BRAWLER, 1, 1, "GROBB" },
+    { EN_DUELIST, 63, 4, DUEL_BRAWLER, 0, 1, "GROBB" },
     { EN_CRAWLER, 76, GROUND_ROW, 0, 0, 0, NULL },
     { EN_BAT, 82, 8, 0, 0, 0, NULL },
     { EN_DUELIST, 87, GROUND_ROW, DUEL_FENCER, 1, 1, "SILKE" },

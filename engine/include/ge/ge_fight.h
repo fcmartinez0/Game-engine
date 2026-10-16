@@ -159,6 +159,7 @@ typedef struct {
     /* teaching aids, per side (bit 0 = side 0): name what got through ("LOW: CROUCH TO BLOCK"), show which
      * attacks hit low or high, and prompt the throw break. The demo turns them on for the player. */
     unsigned hints;
+    float damage_scale[2];   /* damage dealt BY each side is multiplied by this (1 by default): difficulty settings */
     /* per side, for play logs: attacks blocked, hits taken while trying to block at the wrong height, other hits, throws */
     int stat_blocked[2], stat_wrong_height[2], stat_hit[2], stat_thrown[2];
 } GeFight;
@@ -170,7 +171,7 @@ void ge_fight_free(GeFight *f);
 void ge_fight_update(GeFight *f, const GeFightInput in[2]);
 void ge_fight_draw(GeFight *f, GeImage *fb);
 
-/* A CPU opponent: fills `out` for `side`. level 0 (gentle) .. 3 (sharp). */
+/* A CPU opponent: fills `out` for `side`. level -1 (beginner: slow, passive, no supers) .. 3 (sharp). */
 void ge_fight_cpu(GeFight *f, int side, int level, GeFightInput *out);
 
 /* exposed for tests / tools */

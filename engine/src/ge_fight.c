@@ -452,7 +452,7 @@ static void fighter_step(GeFight *f, int s) {
             break;
         }
         if (--F->timer <= 0) {
-            lose_hp(f, s, T->def->throw_damage);
+            lose_hp(f, s, ge_clampi((int)((float)T->def->throw_damage * f->damage_scale[1 - s] + 0.5f), 1, 999));
             if (f->model) ge_model_on_throw(f->model, s, false, f->model_side);
             F->state = GE_FS_HITSTUN;
             F->timer = 30;
@@ -534,7 +534,7 @@ static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, flo
         D->state = GE_FS_BLOCKSTUN;
         D->timer = st->bstun;
         D->crouch_block = low;
-        lose_hp(f, 1 - s, st->chip);
+        lose_hp(f, 1 - s, st->chip > 0 ? ge_clampi((int)((float)st->chip * f->damage_scale[s] + 0.5f), 1, 999) : 0);
         if (f->model) ge_model_on_hit(f->model, f, s, st->guard, true, f->model_side);
         de->vel.x = (float)dir * st->kb_x * 0.8f;
         de->hitstop = st->hitstop / 2 + 1;
@@ -550,7 +550,7 @@ static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, flo
 
     float scale = 1.0f - 0.1f * (float)D->combo;   /* damage scaling keeps long combos in check */
     if (scale < 0.3f) scale = 0.3f;
-    int dmg = (int)((float)st->damage * scale + 0.5f);
+    int dmg = (int)((float)st->damage * scale * f->damage_scale[s] + 0.5f);
     if (dmg < 1) dmg = 1;
     lose_hp(f, 1 - s, dmg);
     if (f->model) ge_model_on_hit(f->model, f, s, st->guard, false, f->model_side);
@@ -732,6 +732,7 @@ void ge_fight_init(GeFight *f, const GeFighterDef *d0, const GeSprite *s0, const
         ent(f, s)->external = true;
     }
     f->finisher_side = d1->undying ? 1 : d0->undying ? 0 : -1;
+    f->damage_scale[0] = f->damage_scale[1] = 1.0f;
     f->names[0] = "P1";
     f->names[1] = "P2";
     f->rounds_to_win = 2;
@@ -1036,8 +1037,8 @@ void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
     GeFighter *F = &f->f[s], *O = &f->f[1 - s];
     GeEntity *e = ent(f, s), *oe = ent(f, 1 - s);
     GeRng *r = &f->world.rng;
-    level = ge_clampi(level, 0, 3);
-    float p = 0.3f + 0.2f * (float)level;      /* 0.3 .. 0.9 */
+    level = ge_clampi(level, -1, 3);
+    float p = level < 0 ? 0.12f : 0.3f + 0.2f * (float)level;      /* -1 beginner: 0.12, then 0.3 .. 0.9 */
     float dx = oe->pos.x - e->pos.x, dist = fabsf(dx);
     int toward = dx >= 0 ? 1 : -1;
     if (F->ai_cd > 0) F->ai_cd--;
@@ -1089,7 +1090,13 @@ void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
     float roll = ge_rng_float(r);
     int mv = -1;
     F->ai_hold_x = 0; F->ai_hold_y = 0;
-    if (F->meter >= GE_FIGHT_METER && dist < 90.0f && roll < p * 0.4f) mv = pick(f, s, GE_AI_SUPER, false, 0);
+    if (level < 0 && roll < 0.45f) {          /* a beginner hangs back and gives you openings */
+        F->ai_hold_x = roll < 0.2f ? -toward : 0;
+        F->ai_cd = 20 + (int)(ge_rng_float(r) * 30.0f);
+        out->x = F->ai_hold_x;
+        return;
+    }
+    if (F->meter >= GE_FIGHT_METER && dist < 90.0f && roll < p * 0.4f && level >= 0) mv = pick(f, s, GE_AI_SUPER, false, 0);
     else if (dist > 170.0f) {
         if (roll < 0.25f + p * 0.3f) mv = pick(f, s, GE_AI_ZONE, false, 0);
         else if (roll < 0.75f) F->ai_hold_x = toward;

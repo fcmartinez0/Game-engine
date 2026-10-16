@@ -19,7 +19,6 @@
 #include <3ds.h>
 #endif
 
-#define HERO_MASKS 5
 #define MAX_SPAWNS 32
 
 typedef enum { M_OVERWORLD, M_ALERT, M_TRANS_IN, M_BATTLE, M_TRANS_OUT, M_VICTORY, M_REPORT } Mode;
@@ -53,7 +52,8 @@ typedef struct {
     GeFighterDef paragon_def;
     int paragon_spawn;
     unsigned gifts;                       /* GIFT_* for every duelist and the boss beaten so far */
-    int duel_offset;                      /* dev menu: -1 easy, 0 normal, +1 hard (ordinary duelists only) */
+    int difficulty;                       /* -1 easy, 0 normal, +1 hard: masks, spikes, duelists, the boss (not the Paragon) */
+    bool difficulty_set;                  /* given on the command line: don't load the saved one */
     char facts[6][72];
     int nfacts, learn_shown;
     bool fresh_profile, paragon_report, beat_all, hall_named;
@@ -99,6 +99,35 @@ static bool g_log;
                       devlog(__VA_ARGS__); devlog_flush(); } while (0)   /* flushed at once: a crash or a power-off keeps it */
 
 static GeEntity *hero(void) { return &g.world.ents[g.player]; }
+
+/* ---- difficulty ------------------------------------------------------------
+ * One setting for the whole game (the dev menu's DIFFICULTY), saved between sessions. Easy is meant to be
+ * genuinely easy for someone new to fighting games; the Paragon ignores it (it is unbeatable by design). */
+static int hero_masks(void) { return g.difficulty < 0 ? 8 : g.difficulty > 0 ? 4 : 6; }
+static int boss_hp(void) { return g.difficulty < 0 ? 100 : g.difficulty > 0 ? 200 : 150; }
+/* duelists' base levels: Grobb 0, Silke 1, Mosshide 2, Champion 3. Easy: all beginners but the Champion;
+ * normal: one step gentler (Grobb is a beginner); hard: one step sharper. */
+static int duel_cpu_level(int base) { return g.difficulty < 0 ? (base >= 3 ? 0 : -1) : ge_clampi(base + (g.difficulty > 0 ? 1 : -1), -1, 3); }
+static float duel_cpu_damage(void) { return g.difficulty < 0 ? 0.5f : g.difficulty > 0 ? 1.1f : 0.75f; }
+static float duel_player_damage(void) { return g.difficulty < 0 ? 1.4f : g.difficulty > 0 ? 1.0f : 1.15f; }
+#ifdef __3DS__
+#define SETTINGS_PATH "sdmc:/3ds/gloamwood/settings.txt"
+#else
+#define SETTINGS_PATH "gloamwood_settings.txt"
+#endif
+static void save_settings(void) {
+    FILE *f = fopen(SETTINGS_PATH, "w");
+    if (!f) return;
+    fprintf(f, "difficulty %d\n", g.difficulty);
+    fclose(f);
+}
+static void load_settings(void) {
+    FILE *f = fopen(SETTINGS_PATH, "r");
+    if (!f) return;
+    int d;
+    if (fscanf(f, "difficulty %d", &d) == 1) g.difficulty = ge_clampi(d, -1, 1);
+    fclose(f);
+}
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
 
 /* ---- spawning ---------------------------------------------------------- */
@@ -110,7 +139,7 @@ static float ground_at(float x, float y) {
 }
 
 static void spawn_hero(float x) {
-    g.player = ge_world_spawn(&g.world, &g.ch.hero, &g.spr.hero, 0, x, ground_at(x, 0), HERO_MASKS);
+    g.player = ge_world_spawn(&g.world, &g.ch.hero, &g.spr.hero, 0, x, ground_at(x, 0), hero_masks());
     g.world.follow = g.player;
     g.safe_x = x;
     g.safe_y = hero()->pos.y;
@@ -123,9 +152,21 @@ static const GeSprite *duel_sprite(int variant) {
     return variant == DUEL_PARAGON ? &g.spr.paragon : variant == DUEL_FENCER ? &g.spr.fencer : &g.spr.brawler;
 }
 
-static void spawn_level(void) {
+static bool ordinary_enemy(int kind) { return kind == EN_CRAWLER || kind == EN_BAT || kind == EN_SPITTER || kind == EN_GRUNT; }
+
+/* Everything in the level. With `ordinary_only`, just the ordinary enemies are put back where they started,
+ * alive and at full health, the way Hollow Knight refills a room when you rest: duelists you beat and the
+ * boss stay beaten. */
+static void spawn_level_part(bool ordinary_only) {
     for (int i = 0; i < level_nspawns && i < MAX_SPAWNS; i++) {
         const Spawn *s = &level_spawns[i];
+        if (ordinary_only) {
+            if (!ordinary_enemy(s->kind)) continue;
+            int old = g.ent_of[i];   /* (only if that slot still holds this enemy: slots get reused) */
+            if (old >= 0 && old != g.player && g.world.ents[old].kind == s->kind) g.world.ents[old].active = false;
+            g.ent_of[i] = -1;
+            g.beaten[i] = false;
+        }
         float x = s->col * GE_TILE + 8.0f, y = s->row * GE_TILE;
         const GeActorDef *d = NULL;
         const GeSprite *sp = NULL;
@@ -136,7 +177,7 @@ static void spawn_level(void) {
         case EN_SPITTER: d = &g.ch.spitter; sp = &g.spr.spitter; hp = 12; break;
         case EN_GRUNT:   d = &g.ch.grunt; sp = &g.spr.brawler; hp = 22; break;
         case EN_DUELIST: d = &g_duel_defs[s->variant]; sp = duel_sprite(s->variant); hp = 999; if (s->variant == DUEL_PARAGON) g.paragon_spawn = i; break;
-        case EN_BOSS:    d = &g.ch.warden; sp = &g.spr.warden; hp = 180; g.boss_spawn = i; break;
+        case EN_BOSS:    d = &g.ch.warden; sp = &g.spr.warden; hp = boss_hp(); g.boss_spawn = i; break;
         }
         g.ent_of[i] = g.beaten[i] ? -1 : ge_world_spawn(&g.world, d, sp, 1, x, y, hp);
         if (g.ent_of[i] < 0) continue;
@@ -148,6 +189,9 @@ static void spawn_level(void) {
         e->ai_state = -1;
     }
 }
+
+static void spawn_level(void) { spawn_level_part(false); }
+static void respawn_enemies(void) { spawn_level_part(true); LOG("enemies respawned"); }
 
 static void reset_boss(void) {
     g.boss_engaged = false;
@@ -165,9 +209,12 @@ static void reset_boss(void) {
     }
 }
 
+static void respawn_enemies(void);
+
 static void respawn_at_bench(void) {
     if (hero()->active) hero()->active = false;
     reset_boss();
+    respawn_enemies();
     spawn_hero(g.bench_col * GE_TILE + 8.0f);
     hero()->invuln = 60;
 }
@@ -187,7 +234,8 @@ static void start_duel_alert(int spawn, bool first_strike) {
     g.first_strike = first_strike;
     g.msg_timer = 0;                       /* the alert line takes the message slot */
     memset(&g.world.intents[g.player], 0, sizeof(GeIntent));
-    LOG("duel alert: %s%s", level_spawns[spawn].name, first_strike ? " (first strike)" : "");
+    LOG("duel alert: %s%s (difficulty %s)", level_spawns[spawn].name, first_strike ? " (first strike)" : "",
+        g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
 }
 
 static void on_event(void *user, GeEventType ev, int a, int b) {
@@ -216,7 +264,7 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         }
         g.kills++;
         int s = spawn_of(b);
-        if (s >= 0) g.beaten[s] = true;
+        if (s >= 0) { g.beaten[s] = true; if (ordinary_enemy(level_spawns[s].kind)) g.ent_of[s] = -1; }
     } else if (ev == GE_EV_HIT && b >= 0 && w->ents[b].kind == EN_DUELIST && a == g.player) {
         w->ents[b].hp = w->ents[b].max_hp;          /* you can't slash a duelist down: you get a head start */
         int s = spawn_of(b);
@@ -229,7 +277,7 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
     } else if (ev == GE_EV_HAZARD && a == g.player) {
         GeEntity *p = hero();
         if (p->state == GE_ST_DEAD || g.warp_fade > 0) return;
-        p->hp -= 1;
+        if (g.difficulty >= 0) p->hp -= 1;     /* on easy, spikes just send you back to safe ground */
         p->flash = 6;
         p->invuln = 30;                 /* one spike hit per contact, not one per tick */
         ge_world_shake(w, 4.0f);
@@ -427,6 +475,7 @@ static void hero_intent(const GeInput *in) {
             p->hp = p->max_hp;
             g.bench_col = level_benches[i];
             say("RESTED. THIS BENCH IS YOUR RESPAWN POINT", 120);
+            respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
         }
     }
@@ -600,6 +649,7 @@ static void begin_battle(void) {
     if (final) g.fight.world.backdrop_pattern = encounter_pattern(s->name);   /* only the Paragon fights inside its pattern */
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
+    if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); }
     g.fight.hints = 1;                                 /* teaching aids for the player's side */
     if (final) {
         int learn = paragon_learn_level(&g.model, g.gifts);
@@ -700,6 +750,7 @@ static int demo_init(void *user) {
     if (chars_init(&g.ch, &g.spr) != 0) return 1;
     ge_model_init(&g.model);
     if (!g.fresh_profile) paragon_profile_load(&g.model);
+    if (!g.fresh_profile && !g.difficulty_set) load_settings();
     for (int v = 0; v < 3; v++) {
         const GeSprite *sp = duel_sprite(v);
         g_duel_defs[v] = g.ch.duelist;
@@ -760,8 +811,8 @@ static void apply_detail(void) {
 static void set_logging(bool on) {
     g.log_wanted = on;
     if (on && !devlog_is_open() && devlog_open()) {
-        devlog("session start: Gloamwood, built %s %s, console %s, detail %s", __DATE__, __TIME__, g.console,
-               g.low_detail ? "low" : "full");
+        devlog("session start: Gloamwood, built %s %s, console %s, detail %s, difficulty %s", __DATE__, __TIME__, g.console,
+               g.low_detail ? "low" : "full", g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
         devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw ms");
         devlog_flush();
     } else if (!on && devlog_is_open()) {
@@ -794,6 +845,18 @@ static bool confirmed(int item) {
     return false;
 }
 
+/* A difficulty change applies at once: masks (gained ones come full), and the boss if it isn't mid-fight. */
+static void apply_difficulty(void) {
+    GeEntity *p = hero();
+    int before = p->max_hp;
+    p->max_hp = hero_masks();
+    if (p->max_hp > before) p->hp += p->max_hp - before;
+    if (p->hp > p->max_hp) p->hp = p->max_hp;
+    int bi = g.ent_of[g.boss_spawn];
+    if (bi >= 0 && !g.boss_engaged) g.world.ents[bi].hp = g.world.ents[bi].max_hp = boss_hp();
+    LOG("dev: difficulty now %s", g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
+}
+
 /* One place that changes a menu item, for the D-pad (menu open, SELECT) and for taps on the bottom screen alike.
  * dir: -1 / +1 to step a value, act: the A button or a tap on the middle of the row. */
 static void menu_apply(int item, int dir, bool act) {
@@ -808,8 +871,8 @@ static void menu_apply(int item, int dir, bool act) {
         break;
     case MI_GOD:    if (act || dir) { g.god = !g.god; LOG("dev: god mode %s", g.god ? "on" : "off"); } break;
     case MI_DUEL:
-        if (act && !dir) dir = g.duel_offset >= 1 ? -2 : 1;                  /* a tap cycles EASY > NORMAL > HARD */
-        if (dir) { g.duel_offset = ge_clampi(g.duel_offset + dir, -1, 1); LOG("dev: duelist strength offset now %d", g.duel_offset); }
+        if (act && !dir) dir = g.difficulty >= 1 ? -2 : 1;                   /* a tap cycles EASY > NORMAL > HARD */
+        if (dir) { g.difficulty = ge_clampi(g.difficulty + dir, -1, 1); apply_difficulty(); save_settings(); }
         break;
     case MI_RESET:
         if (act && confirmed(MI_RESET)) { ge_model_init(&g.model); paragon_profile_save(&g.model); LOG("dev: the Paragon's memory was wiped"); say("PARAGON MEMORY WIPED", 90); g.menu_open = false; }
@@ -875,11 +938,11 @@ static bool draw_bottom(void *user, GeImage *fb) {
 
     const char *detail = g.detail_mode == 0 ? (g.auto_low ? "AUTO (LOW)" : "AUTO (FULL)") : g.detail_mode == 1 ? "LOW" : "FULL";
     const char *val[MI_COUNT] = { g.show_perf ? "ON" : "OFF", detail, devlog_is_open() ? "ON" : (g.log_wanted ? "NO SD?" : "OFF"),
-                                  g.god ? "ON" : "OFF", g.duel_offset < 0 ? "EASY" : g.duel_offset > 0 ? "HARD" : "NORMAL",
+                                  g.god ? "ON" : "OFF", g.difficulty < 0 ? "EASY" : g.difficulty > 0 ? "HARD" : "NORMAL",
                                   WARPS[g.warp_sel].name, "TAP", g.confirm_item == MI_RESET ? "TAP AGAIN TO WIPE" : "TAP",
                                   g.menu_open ? "RESUME" : "PAUSE" };
     if (g.confirm_item == MI_LOG) val[MI_LOG] = "TAP AGAIN: OFF";
-    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DUEL LEVEL", "WARP (TAP TO GO)", "MARK THIS MOMENT",
+    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DIFFICULTY", "WARP (TAP TO GO)", "MARK THIS MOMENT",
                                     "WIPE PARAGON MEMORY", "GAME" };
     for (int i = 0; i < MI_COUNT; i++) {
         int y = BM_ROW_Y + i * BM_ROW_H;
@@ -984,7 +1047,7 @@ static void demo_update_inner(const GeInput *in) {
         if (g.autoplay) ge_fight_cpu(&g.fight, 0, 3, &fin[0]);
         else fin[0] = fight_input(in);
         if (paragon_duel()) ge_paragon_think(&g.brain, &g.fight, 1, &fin[1]);
-        else ge_fight_cpu(&g.fight, 1, ge_clampi(level_spawns[g.duel].cpu_level + g.duel_offset, 0, 3), &fin[1]);
+        else ge_fight_cpu(&g.fight, 1, duel_cpu_level(level_spawns[g.duel].cpu_level), &fin[1]);
         if (g.god && g.fight.phase == GE_FP_FIGHT) {     /* dev: you can't be beaten down (the Paragon's finisher still lands) */
             GeEntity *h = &g.fight.world.ents[g.fight.f[0].ent];
             h->hp = g.fight.f[0].def->max_hp;
@@ -1023,7 +1086,7 @@ static void draw_mask(GeImage *fb, int x, int y, bool full) {
 static void draw_hud(GeImage *fb) {
     GeWorld *w = &g.world;
     GeEntity *p = hero();
-    for (int i = 0; i < HERO_MASKS; i++) draw_mask(fb, 30 + i * 13, 8, p->active && i < p->hp);
+    for (int i = 0; i < p->max_hp; i++) draw_mask(fb, 30 + i * 13, 8, p->active && i < p->hp);
     /* silk spool: three segments, each pays for a heal or a skill */
     ge_fill_circle(fb, 16, 14, 10, GE_RGB(20, 14, 30), 0);
     int seg = p->meter / 33;
@@ -1256,6 +1319,7 @@ static void parse_taps(const char *s) {
 
 int main(int argc, char **argv) {
     int frames = 1800, dump_every = 0;
+    g.difficulty = -1;   /* new players start on easy; the setting is saved once changed */
     g_log = getenv("GLOAM_LOG") != NULL;
     const char *dump_dir = ".";
     for (int i = 1; i < argc; i++) {
@@ -1268,6 +1332,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--touch") && i + 1 < argc) parse_touches(argv[++i]);
 #endif
         else if (!strcmp(argv[i], "--beat-all")) g.beat_all = true;                               /* dev: Paragon starts with every technique */
+        else if (!strcmp(argv[i], "--difficulty") && i + 1 < argc) { g.difficulty = ge_clampi(atoi(argv[++i]), -1, 1); g.difficulty_set = true; }
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc) paragon_set_profile_path(argv[++i]);
         else if (!strcmp(argv[i], "--paragon")) g.warp_col = 188;                                 /* straight to its hall */

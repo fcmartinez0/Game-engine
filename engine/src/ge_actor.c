@@ -189,7 +189,7 @@ static void actor_free(GeWorld *w, int idx, const GeIntent *in) {
             }
         }
     }
-    if (!in->jump_held && e->vel.y < -d->jump_cut_vel) e->vel.y = -d->jump_cut_vel; /* variable jump height */
+    if (!fly && !in->jump_held && e->vel.y < -d->jump_cut_vel) e->vel.y = -d->jump_cut_vel; /* variable jump height (not for flyers: they would never rise) */
 
     /* actions */
     int atk = in->attack_pressed ? pick_attack(e, in) : -1;
