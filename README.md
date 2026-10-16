@@ -1,136 +1,144 @@
-# ge — a small 2.5D action-platformer engine (desktop + Nintendo 3DS)
+# ge: a platformer + fighting-game engine (desktop and Nintendo 3DS)
 
-A C99 engine for side-scrolling games with **sprite animation**, **fast frame-based combat** and **layered, atmospheric backgrounds**, built so the same game code runs on a desktop window and on a 3DS.
+A C99 engine for **Silksong-style action platformers** in which some enemies challenge you to a **Street Fighter-style duel**. When a duelist spots you, the screen flashes and shutters like a Pokémon trainer battle, and the game becomes a 1v1 fighting game with its own controls. Win, and you're back in the forest where you left off.
 
-![combat](docs/combat.png)
+![Gloamwood](docs/gloamwood.png)
 
-*The included demo, "Gloamwood" (every pixel is generated in code — no art files). The 3-hit combo, hit-flash, sparks, parallax forest, mist and fireflies are all engine features.*
+*The included demo, "Gloamwood". Clockwise from top left: exploring (spike pit, silk-ring double jump), a duelist spotting you on the plateau, the boss, a duel in progress. Every pixel is drawn in code; there are no art files.*
 
 ## Quick start
 
 ```sh
 cmake -S . -B build && cmake --build build -j
-./build/demo                 # windowed demo (needs SDL2)
-./build/demo --autoplay      # let the scripted player play the level
-./build/engine_tests         # 78 checks, no window needed
-./build/demo_headless --autoplay --frames 1800 --dump-every 150 --dump-dir shots   # PNG screenshots, no display
+./build/demo                       # windowed (needs SDL2)
+./build/demo --autoplay            # a scripted bot plays it, duels included
+./build/demo --warp 150            # start at a column (150 = just before the boss)
+ctest --test-dir build             # 155 checks, no window needed
+./build/demo_headless --autoplay --frames 3000 --dump-every 300 --dump-dir shots   # PNGs, no display
 ```
 
-| Action | Keyboard | 3DS |
+## Controls
+
+Buttons are named by position on a 3DS (A right, B bottom, X top, Y left). On a desktop gamepad the same positions apply.
+
+| Overworld | 3DS / pad | Keyboard |
 |---|---|---|
-| Move | ←/→ or A/D | D-pad / Circle Pad |
-| Jump (hold = higher) | Z / Space | B |
-| Attack (tap again to chain a 3-hit combo) | X / J | Y |
-| Dash (invulnerable) | C / K | A |
-| Step to back / front lane | Q / E | L / R |
-| Drop through a one-way platform | ↓ + Jump | ↓ + B |
-| F12 saves `screenshot.png` · Esc quits | | Select quits |
+| Move · aim up / down | D-pad / stick | arrows or WASD |
+| Jump (again in the air = double jump; jump off walls) | B | Z or Space |
+| Needle slash · **up** + slash · **down** + slash in the air = pogo bounce | Y | X or J |
+| Dash (also in the air, invulnerable) | A | C or L |
+| Throw needle (3 charges, they refill) | X | V or I |
+| Silk spin (costs 1 silk segment) | R | E or O |
+| Heal 2 masks (hold, costs 1 silk segment) | L | Q or U |
+| Rest at a bench: full health + respawn point | Up | Up |
 
-## How it's put together
+| Duel (fighting game) | 3DS / pad | Keyboard |
+|---|---|---|
+| Walk · jump (up) · crouch (down) · **hold back to block** | D-pad | arrows |
+| Light · Medium · Heavy | Y · X · A | X · V · C |
+| Super (full meter) | B | Z |
+| Throw: Light + Medium together, up close | Y + X | X + V |
+| Specials: ↓↘→ + attack (projectile), →↓↘ + attack (rising anti-air), ↓↙← + M/H (rush), →→ dash, ←← backdash | | |
+
+## What's in the game
+
+**Overworld.** Masks for health, a silk spool filled by landing hits, and needle tools. Slash in three directions, pogo off enemies, spikes and enemy shots, wall-slide and wall-jump up a shaft, double-jump, air-dash. Crawlers, swooping bats, spitting plants and club-wielding grunts all hurt on contact and can be cut down. Spikes cost a mask and drop you back on safe ground. Benches heal you and set your respawn point.
+
+**Duelists** (purple wisps around them) stand guard and turn to look around. If one sees you, a "!" pops up, the screen flashes three times and shutters, and a duel starts. Slashing one first gets you a first-strike bonus: it starts the duel at 85% health. Win, and your masks and silk refill. Lose, and you wake up at the last bench. There are four duelists, and the last one is best-of-three.
+
+**Duels** are a full fighting game. Each fighter has standing, crouching and jumping light/medium/heavy attacks, an overhead, a low sweep that knocks down, a projectile, a rising anti-air with invulnerability, a rush, a throw (which can be teched) and a super. Blocking follows the classic rules: lows must be blocked crouching, overheads standing. There's chip damage, light → medium → heavy → special cancels, damage scaling, juggles with a limit, knockdowns, rounds and a 99-second clock. The goblin hits hard and slow; the moth fencer is quick with long reach. Both come from one move list with different tuning.
+
+**The boss**, Thornwarden, shuts the gate behind you. It has armour (no flinching), a sweeping swing, a charge across the arena, a leap that sends shockwaves along the floor, and spear volleys you can slash out of the air. It gets faster below half health.
+
+## How the engine is put together
 
 ```
- your game (demo/)  ── fills GeIntent, spawns entities, draws HUD
+ your game (demo/)  ─ fills intents, runs AI, draws the HUD, decides when to start a duel
         │
- engine/  ge_world   tilemap · parallax layers · lanes · camera · particles
-          ge_actor   platformer controller + combat resolution
-          ge_anim    sprite sheets · clips · frame data (hitboxes)
-          ge_gfx     software renderer → one 400×240 framebuffer
+ engine/  ge_world   tilemap (solid / one-way / spikes) · parallax · camera · particles · shots
+          ge_actor   platformer controller + action combat (the overworld rules)
+          ge_fight   fighting-game rules, built on a GeWorld used as the arena
+          ge_anim    sprite sheets · clips · frame data (hitboxes, guard, pogo, ...)
+          ge_gfx     software renderer → one 400×240 framebuffer · ge_font text
           ge_engine  fixed 60 Hz loop
         │
- platform/  sdl2.c │ n3ds.c │ null.c    ← the only 6 functions a port implements
+ platform/  sdl2.c │ n3ds.c │ null.c    ← the six functions a port implements
 ```
 
-The renderer works at **400×240 — the 3DS top-screen resolution**. A desktop build scales that up; the 3DS build copies it to the screen unchanged. Porting to another system means writing one file that implements `ge_platform.h`.
+* **One controller for everyone.** The hero and every enemy fill the same `GeIntent` (move, jump, attack, dash, tool, skill, channel), so the hero's double jump or an enemy's charge comes from tuning numbers in a `GeActorDef`, not separate code. *Analogy: everyone drives the same car; only the driver changes.*
+* **Two rulebooks, one world.** A duel is a second `GeWorld` that borrows the overworld's backdrop images. The fighting-game module takes over its combat (blocking, juggles, rounds) and draws it at 2× zoom. *Analogy: the same stage with a different referee and a closer camera.*
+* **Fixed 60 Hz steps and a seeded RNG** make everything deterministic: the same inputs produce the same game, frame for frame. That keeps the tests honest and makes replays possible.
 
-> **Analogy:** the engine core is a *record player's mechanism* and each `platform/*.c` is a *different power plug adapter*. The turntable never changes; you only swap the plug for the wall you're in.
+## Authoring
 
-### Sprite animation
-
-Animations are authored as text (see `demo/art.c` for a full example):
+**Animations and frame data** are text (`.anim`): which cell, for how many ticks, with hitboxes per frame. Startup, active and recovery frames are just frames with or without a hitbox. *Analogy: a film strip with sticky notes on the frames where the blade is dangerous.*
 
 ```
-cell 32 32                 # cell size in the sheet
-origin 16 31               # the pixel that sits on the character's feet
-clip run loop
-  frame 2 5                # frame <cell> <ticks>   (60 ticks = 1 second)
-  frame 3 5
-clip slash once dmg=8 kb=2.2,-1.5 stop=4 stun=16 cancel=2 next=slash2 lunge=1.6
-  frame 8 3                # startup   - harmless
-  frame 9 3 hit=2,-31,29,24# active    - hitbox x,y,w,h relative to the feet, facing right
-  frame 10 6               # recovery  - harmless again
+cell 32 32
+origin 16 31
+clip slash1 once dmg=5 kb=2.5,-1 stop=3 stun=14 cancel=1 next=slash2 recoil=1.2
+  frame 8 2
+  frame 9 3 hit=0,-30,30,24
+  frame 10 6
 ```
 
-> **Analogy:** a clip is a *film strip with sticky notes*. Each frame of film says which picture to show and for how long; the sticky note on a frame says "the sword is dangerous *here*".
+| Key | Meaning |
+|---|---|
+| `dmg kb=x,y stop stun` | damage, knockback, hit-stop freeze, hit-stun |
+| `cancel=F next=clip` | combo: from frame F, attack again to chain into `next` |
+| `lunge rise` | push forward / launch upward when the clip starts |
+| `pogo recoil` | bounce up on a hit (down-slash) / get pushed back on a hit |
+| `shoot=F inv=N` | fire the actor's projectile on frame F / invulnerable for N ticks |
+| `guard=mid\|low\|high\|none bstun chip kd=1` | fighting game: how it must be blocked, blockstun, chip damage, knockdown |
 
-The hitbox lives on the frame, so attack timing is *frame data*, exactly how fighting games are tuned: change a number, the move gets faster or riskier. `ge_image_load_pam()` loads your own sheets (Netpbm P7 RGB_ALPHA — exportable from GIMP/ImageMagick with no decoder dependency).
-
-### Combat
-
-* **Hit-stop** (`stop=`): both fighters freeze for a few ticks on impact — the "crunch" feel. *(Analogy: a held breath at the moment of contact.)*
-* **Combos**: press attack again from the clip's `cancel=` frame to jump to `next=`; the 3-hit chain is just three clips linked by name.
-* **One hit per swing**: each swing remembers who it hit, so a hitbox that stays active for several frames can't multi-hit.
-* **Knockback, hit-stun, invulnerability frames, screen shake, sparks, hit-flash** are built in; the game sees `GE_EV_HIT / GE_EV_KILL / GE_EV_FELL` through `world.on_event`.
-* The player and enemies share one code path: both just fill a `GeIntent` (move, jump, attack…). The enemy AI in `demo/main.c` is ~40 lines.
-
-### 2.5D
-
-Physics is classic 2D tiles (solid blocks, one-way platforms, coyote time, jump buffering, variable jump height). Depth comes from two things:
-
-* **Parallax layers** — any number of background/foreground images scrolling at different speeds (`factor_x`; `>1` passes *in front of* the action). Layers can drift on their own (clouds, mist) or be additive (light shafts). *(Analogy: looking out of a train window — distant mountains crawl, nearby trees whip past.)*
-* **Depth lanes** — every entity stands in the back (-1), middle (0) or front (+1) lane. Lanes get a perspective offset and a cooler shade, and **attacks only connect within the same lane**, so you can hop lanes to dodge, and enemies hop lanes to chase you. *(Analogy: swimming-pool lanes — you can see the swimmer next to you but you can't tag them without switching lanes.)*
-
-## Asset prep tool (drag and drop)
-
-`tools/asset-prep/index.html` is a standalone page — **not part of the engine**. Open it in any browser (no server, nothing uploaded) and:
-
-* **Drop a sprite sheet** (PNG/JPG/GIF/WebP) → set the cell size, click cells to build clips, set damage/knockback/combo links, drag a hitbox on the live preview, then **Download .pam + .anim**. Drop an existing `.anim` on it to edit it again.
-* **Drop a background or tileset** → **Download .pam**.
-* **Backdrop (parallax layers)** → drop your layer images, set each one's scroll factor, drift, height, transparency and front/back, watch a live 400×240 preview that pans like the game camera, then **Download .zip** (a `.layers` file + every image). Drop the unzipped files back on the page to keep editing.
+**Move lists** for duels use fighting-game numpad notation, relative to the way the fighter faces. *Analogy: read the arrows as a phone keypad, with 5 in the middle: 6 is forward, 2 is down, 236 is down → down-forward → forward.*
 
 ```c
-GeSprite hero;  ge_sprite_load(&hero, "hero.pam", "hero.anim");     // sheet + clips
-GeImage  tiles; ge_image_load_pam(&tiles, "tiles.pam");             // plain image
-int line;       ge_world_load_layers(&world, "forest.layers", &line); // whole parallax backdrop
+MV("623H", "f_rise", 3, 0, NULL, GE_AI_ANTIAIR)   /* input, clip, cancel level, meter, projectile, CPU role */
+MV("236L", "f_shoot", 3, 0, &needle, GE_AI_ZONE)
+MV("LM",   "f_throw", 0, 0, NULL, GE_AI_THROW)    /* two buttons = throw */
+MV("2M",   "f_2m", 1, 0, NULL, GE_AI_LOW)
 ```
 
-Try a backdrop straight away with `./build/demo --layers forest.layers`. A `.layers` file is plain text, one layer per line, back to front, image paths relative to the file:
+The CPU opponent (`ge_fight_cpu`, levels 0–3) uses the role tags to pick its moves: it blocks (and reads lows and overheads at higher levels), anti-airs jump-ins, zones with projectiles, and cancels into specials when a hit lands.
+
+**Backdrops** are `.layers` files: one parallax layer per line, back to front.
 
 ```
-layer sky.pam factor=0                       # 0 = fixed to the screen
-layer hills.pam factor=0.3 drift=0.05 y=120  # drift = scrolls on its own (clouds, mist)
-layer grass.pam factor=1.4 y=210 alpha=200 front   # >1 and front = passes in front of the action
+layer sky.pam factor=0
+layer hills.pam factor=0.3 drift=0.05 y=120
+layer grass.pam factor=1.4 y=220 alpha=200 front
 ```
 
-Keys: `factor` (default 1), `factor_y` (0), `drift` (0), `y` (0), `alpha` (1–255); flags `front`, `additive`, `optional` (skipped in `low_detail`). Fully opaque images are detected and get the fast copy path. On any error nothing is loaded and you get the line number.
+### Asset prep tool (drag and drop)
 
-It checks the engine's limits for you (16 frames/clip, 32 clips, 10 layers, dangling `next=`, hitboxes on non-attacks). Real exports from the tool are test fixtures (`tests/fixtures/`), so the tool and the loaders can't silently drift apart.
+`tools/asset-prep/index.html` is a standalone page, not part of the engine; open it in any browser.
+
+* **Sprite sheets:** drop a sheet, click cells to build clips, drag hitboxes on the live preview, and fill in the attack fields (including pogo, guard, blockstun and the rest). Download `.pam` + `.anim`.
+* **Backdrops:** drop layer images, tune their scroll and see a preview that pans like the game camera, then download a `.zip`.
+
+Drop exported files back on the page to keep editing.
+
+```c
+ge_sprite_load(&hero, "hero.pam", "hero.anim");
+ge_world_load_layers(&world, "forest.layers", &line);   // or: ./build/demo --layers forest.layers
+```
 
 ## Nintendo 3DS
 
 ```sh
-# install devkitPro with the 3ds-dev group, then:
 export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
-cd 3ds && make          # → gloamwood.3dsx  (Homebrew Launcher, Citra/Lime3DS)
+cd 3ds && make          # → gloamwood.3dsx
 ```
 
-**Status — please read:** the 3DS backend (`platform/n3ds.c`) and `3ds/Makefile` are written but **have not been built against real devkitPro or run on hardware/emulator** — devkitPro could not be installed in the environment this was developed in. The backend source type-checks against a stub of the libctru calls it uses, nothing more. Expect small fixes on first build. Everything else (all engine code, the demo, the tests) is verified on desktop.
+**Status:** the 3DS backend (`platform/n3ds.c`) and `3ds/Makefile` **have not been built against devkitPro or run on hardware or an emulator**. devkitPro couldn't be installed where this was developed. The backend and the demo type-check against a stub of the libctru calls they use, nothing more, so expect small fixes on the first real build. Performance on the console is also unmeasured. The renderer is software. The demo turns off its decorative layers on the original 3DS (`low_detail`), and a GPU path (citro2d) is the next step if that isn't enough. Start + Select quits.
 
-Performance on the console is also **unmeasured**. The engine is a CPU software renderer; on desktop the demo spends essentially all its time in blending (~200k blended pixels/frame at full detail, ~120k with `world.low_detail`). That should be comfortable on a New 3DS but may be tight on the original 268 MHz model, which is why the demo switches `low_detail` on automatically there (drops mist, light shafts, cloud and vignette layers). If it isn't fast enough, the next step is a GPU path (citro2d) behind the same `GeImage`/layer API.
+## Testing
 
-## Layout
-
-```
-engine/include/ge/   public headers      engine/src/   implementation
-platform/            sdl2.c · n3ds.c · null.c (headless, scripted input, PNG dumps)
-demo/                the sample game: art.c (procedural sprites + backdrop), level.c, main.c (AI, HUD)
-tools/asset-prep/    drag-and-drop sheet/clip/hitbox editor + parallax backdrop builder (standalone HTML)
-tests/               parser, animation timing, tile physics, one-way platforms, combat rules,
-                     lanes, combos, determinism, fixed-timestep loop
-3ds/Makefile         devkitPro build
-```
-
-The simulation is deterministic (fixed 60 Hz step, seeded RNG), which makes bugs reproducible and replays possible — the headless demo prints a frame checksum you can diff between builds.
+* `engine_tests` (116 checks): the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, and the `.layers` and asset-tool round trips.
+* `fight_tests` (39 checks): motion inputs (including too-slow ones, and left-facing fighters), command normals, dashes, high/low/mid blocking, chip damage, throws in and out of range, cancels only on contact, the L→M→H combo, the juggle limit, supers, invulnerable anti-airs, K.O., time over, best-of-three, and a deterministic CPU-vs-CPU match.
+* **Full run:** `--autoplay` plays the whole demo. In a 45,000-tick run (12.5 minutes of game time) the bot climbed the shaft, won all four duels (one after a retry; the champion 2-0) and reached the boss. Its best attempt got the boss down to 78 of 180 health; the boss won every time. With `--god` (a dev flag) it beats the boss and the victory screen plays. Set `GLOAM_LOG=1` to print duels, deaths and boss events.
 
 ## Not there yet
 
-Audio · text/fonts (the HUD is bars and pips) · the 3DS bottom screen and stereoscopic 3D · a level/animation editor (levels are code or ASCII via `ge_tilemap_from_ascii`) · slopes · gamepad remapping · the GPU renderer mentioned above.
+Audio · the 3DS bottom screen and stereoscopic 3D · a level editor (levels are code, or ASCII via `ge_tilemap_from_ascii`) · slopes · save files · remappable controls · multi-hit supers (each move connects once) · the GPU renderer above.

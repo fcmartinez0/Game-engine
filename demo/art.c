@@ -1,11 +1,12 @@
+/* Procedural sprite sheets: a posable stick-figure "puppet" drawn into each
+ * cell, plus a few creatures and projectiles. Crude on purpose -- it's a
+ * stand-in until real art is dropped in through tools/asset-prep. */
+
 #include "demo.h"
 
-#include <stdlib.h>
 #include <string.h>
 
-#define PI2 6.2831853f
-
-/* ---- little helpers ---------------------------------------------------- */
+#define PI 3.14159265f
 
 static uint32_t mix(uint32_t a, uint32_t b, float t) {
     uint32_t out = 0;
@@ -16,87 +17,121 @@ static uint32_t mix(uint32_t a, uint32_t b, float t) {
     return out;
 }
 
-/* Everything that tiles horizontally is drawn three times (x-W, x, x+W) so
- * shapes crossing the edge wrap and parallax layers scroll without seams. */
-static void wrap_circle(GeImage *im, int x, int y, int r, uint32_t c) {
-    for (int k = -1; k <= 1; k++) ge_fill_circle(im, x + k * im->w, y, r, c, 0);
-}
-static void wrap_rect(GeImage *im, int x, int y, int w, int h, uint32_t c) {
-    for (int k = -1; k <= 1; k++) ge_fill_rect(im, x + k * im->w, y, w, h, c, 0);
-}
-
-/* ---- characters -------------------------------------------------------- */
-
-typedef struct {
-    uint32_t skin, hair, scarf, tunic, pants, boots, weapon, weapon_hi;
-    int head_r, weapon_len, weapon_w;
-    int ears;
-} Look;
-
-typedef struct {
-    float bob, lean;
-    int legs;           /* 0 walk, 1 tucked (jump), 2 spread (fall), 3 stand */
-    float phase;
-    float arm_f, arm_b; /* radians, 0 = right, +pi/2 = down */
-    float sword;
-    int arc;            /* draw a slash trail */
-    float arc0, arc1;
-    float scarf;
-} Pose;
-
 static void pt(float x, float y, float ang, float len, int *ox, int *oy) {
     *ox = (int)lroundf(x + cosf(ang) * len);
     *oy = (int)lroundf(y + sinf(ang) * len);
 }
 
-static void draw_figure(GeImage *im, int cx, int base, const Look *L, const Pose *P) {
-    const uint32_t outline = GE_RGB(20, 14, 30);
-    int hipx = cx + (int)lroundf(P->lean * 0.4f), hipy = base - 12 + (int)P->bob;
-    int shx = cx + (int)lroundf(P->lean), shy = base - 21 + (int)P->bob;
-    int hx = cx + (int)lroundf(P->lean * 1.25f), hy = base - 25 + (int)P->bob;
+/* ---- the puppet -------------------------------------------------------- */
 
-    float s = sinf(P->phase * PI2), c = cosf(P->phase * PI2);
-    int f1x, f1y, f2x, f2y;
-    switch (P->legs) {
-    case 0: f1x = cx + (int)(s * 6); f1y = base - (int)(fmaxf(0, c) * 3);
-            f2x = cx - (int)(s * 6); f2y = base - (int)(fmaxf(0, -c) * 3); break;
-    case 1: f1x = cx + 4; f1y = base - 6; f2x = cx - 2; f2y = base - 4; break;
-    case 2: f1x = cx + 5; f1y = base - 2; f2x = cx - 4; f2y = base - 1; break;
-    default: f1x = cx + 3; f1y = base; f2x = cx - 3; f2y = base; break;
+enum { HEAD_HUMAN, HEAD_MASK, HEAD_GOBLIN, HEAD_MOTH, HEAD_HELM };
+
+typedef struct {
+    uint32_t skin, hair, cloak, tunic, pants, boots, weapon, weapon_hi;
+    int head, head_r, weapon_len, weapon_w;
+} Look;
+
+enum { L_WALK, L_TUCK, L_SPREAD, L_STAND, L_CROUCH, L_KICK, L_SWEEP, L_KNEEL };
+
+typedef struct {
+    float bob, lean;
+    int legs;
+    float phase;
+    float arm_f, arm_b; /* radians: 0 = forward, +pi/2 = down, -pi/2 = up */
+    float sword;
+    int arc;            /* slash trail */
+    float arc0, arc1;
+    float cloak;        /* cloak flutter */
+} Pose;
+
+static void leg(GeImage *im, int hx, int hy, int kx, int ky, int fx, int fy, const Look *L, bool knee) {
+    if (knee) { ge_draw_line(im, hx, hy, kx, ky, 3, L->pants); ge_draw_line(im, kx, ky, fx, fy, 3, L->pants); }
+    else ge_draw_line(im, hx, hy, fx, fy, 3, L->pants);
+    ge_fill_rect(im, fx - 1, fy - 1, 4, 2, L->boots, 0);
+}
+
+static void draw_head(GeImage *im, int hx, int hy, const Look *L) {
+    const uint32_t ink = GE_RGB(20, 14, 30);
+    int r = L->head_r;
+    switch (L->head) {
+    case HEAD_MASK: /* pale mask with two horns */
+        ge_draw_line(im, hx - 2, hy - r, hx - 4, hy - r - 5, 2, L->skin);
+        ge_draw_line(im, hx + 2, hy - r, hx + 3, hy - r - 5, 2, L->skin);
+        ge_fill_circle(im, hx, hy, r + 1, ink, 0);
+        ge_fill_circle(im, hx, hy, r, L->skin, 0);
+        ge_fill_rect(im, hx, hy - 1, 2, 3, ink, 0);
+        ge_fill_rect(im, hx + 3, hy - 1, 1, 3, ink, 0);
+        break;
+    case HEAD_GOBLIN:
+        ge_draw_line(im, hx - r, hy - 1, hx - r - 4, hy - 4, 1, L->skin);
+        ge_draw_line(im, hx + r, hy - 1, hx + r + 3, hy - 4, 1, L->skin);
+        ge_fill_circle(im, hx, hy, r + 1, ink, 0);
+        ge_fill_circle(im, hx, hy, r, L->skin, 0);
+        ge_fill_rect(im, hx + 2, hy - 1, 2, 2, GE_RGB(255, 220, 80), 0);
+        break;
+    case HEAD_MOTH:
+        ge_draw_line(im, hx - 1, hy - r, hx - 5, hy - r - 6, 1, L->hair);
+        ge_draw_line(im, hx + 1, hy - r, hx + 4, hy - r - 6, 1, L->hair);
+        ge_fill_circle(im, hx, hy, r + 1, ink, 0);
+        ge_fill_circle(im, hx, hy, r, L->skin, 0);
+        ge_fill_rect(im, hx + 1, hy - 1, 3, 2, GE_RGB(40, 30, 60), 0);
+        break;
+    case HEAD_HELM:
+        ge_fill_circle(im, hx, hy, r + 1, ink, 0);
+        ge_fill_circle(im, hx, hy, r, L->skin, 0);
+        ge_fill_rect(im, hx - 1, hy - 1, r + 2, 2, GE_RGB(255, 120, 60), 0); /* glowing visor */
+        ge_draw_line(im, hx - 1, hy - r, hx - 6, hy - r - 3, 2, L->hair);       /* plume */
+        break;
+    default:
+        ge_fill_circle(im, hx, hy, r + 1, ink, 0);
+        ge_fill_circle(im, hx, hy, r, L->skin, 0);
+        ge_fill_circle(im, hx - 1, hy - 2, r - 1, L->hair, 0);
+        ge_fill_rect(im, hx + 2, hy, 1, 2, ink, 0);
+        break;
     }
+}
 
-    /* back leg + back arm */
-    ge_draw_line(im, hipx, hipy, f2x, f2y, 3, L->pants);
-    ge_fill_rect(im, f2x - 1, f2y - 1, 4, 2, L->boots, 0);
+static void draw_figure(GeImage *im, int cx, int base, const Look *L, const Pose *P) {
+    static const int hip_h[] = { 12, 12, 12, 12, 7, 10, 6, 7 };
+    int hipx = cx + (int)lroundf(P->lean * 0.4f), hipy = base - hip_h[P->legs] + (int)P->bob;
+    int shx = cx + (int)lroundf(P->lean), shy = hipy - 9;
+    int hx = cx + (int)lroundf(P->lean * 1.25f), hy = shy - 4;
+
+    /* cloak behind everything */
+    ge_draw_line(im, shx - 1, shy, hipx - 6, hipy + 3 + (int)P->cloak, 4, L->cloak);
+    ge_draw_line(im, shx - 2, shy + 1, hipx - 9, hipy + 1 + (int)(P->cloak * 1.5f), 2, mix(L->cloak, GE_RGB(20, 14, 30), 0.3f));
+
+    float s = sinf(P->phase * 2 * PI), c = cosf(P->phase * 2 * PI);
+    switch (P->legs) {   /* back leg */
+    case L_WALK:   leg(im, hipx, hipy, 0, 0, cx - (int)(s * 6), base - (int)(fmaxf(0, -c) * 3), L, false); break;
+    case L_TUCK:   leg(im, hipx, hipy, 0, 0, cx - 2, base - 4, L, false); break;
+    case L_SPREAD: leg(im, hipx, hipy, 0, 0, cx - 4, base - 1, L, false); break;
+    case L_CROUCH: leg(im, hipx, hipy, cx - 3, base - 4, cx - 5, base, L, true); break;
+    case L_KICK:   leg(im, hipx, hipy, 0, 0, cx - 3, base, L, false); break;
+    case L_SWEEP:  leg(im, hipx, hipy, cx - 3, base - 4, cx - 7, base, L, true); break;
+    case L_KNEEL:  leg(im, hipx, hipy, cx - 3, base, cx - 9, base, L, true); break;
+    default:       leg(im, hipx, hipy, 0, 0, cx - 3, base, L, false); break;
+    }
     int bax, bay;
     pt((float)shx, (float)shy, P->arm_b, 7, &bax, &bay);
-    ge_draw_line(im, shx, shy, bax, bay, 2, mix(L->tunic, outline, 0.4f));
+    ge_draw_line(im, shx, shy, bax, bay, 2, mix(L->tunic, GE_RGB(20, 14, 30), 0.4f));
 
-    /* scarf streaming behind the neck */
-    int nx = hx - L->head_r + 1, ny = hy + L->head_r;
-    ge_draw_line(im, nx, ny, nx - 6, ny + 1 + (int)P->scarf, 2, L->scarf);
-    ge_draw_line(im, nx - 6, ny + 1 + (int)P->scarf, nx - 11, ny + 3 + (int)(P->scarf * 1.6f), 2, mix(L->scarf, outline, 0.3f));
-
-    /* torso */
     ge_draw_line(im, hipx, hipy, shx, shy, 5, L->tunic);
-    ge_fill_rect(im, hipx - 2, hipy - 1, 5, 2, outline, 0); /* belt */
+    ge_fill_rect(im, hipx - 2, hipy - 1, 5, 2, GE_RGB(20, 14, 30), 0);
 
-    /* front leg */
-    ge_draw_line(im, hipx, hipy, f1x, f1y, 3, L->pants);
-    ge_fill_rect(im, f1x - 1, f1y - 1, 4, 2, L->boots, 0);
-
-    /* head */
-    ge_fill_circle(im, hx, hy, L->head_r + 1, outline, 0);
-    ge_fill_circle(im, hx, hy, L->head_r, L->skin, 0);
-    ge_fill_circle(im, hx - 1, hy - 2, L->head_r - 1, L->hair, 0);
-    ge_fill_rect(im, hx - L->head_r, hy - 1, L->head_r - 1, 3, L->hair, 0);
-    ge_fill_rect(im, hx + 2, hy, 1, 2, outline, 0); /* eye */
-    if (L->ears) {
-        ge_draw_line(im, hx - L->head_r, hy - 1, hx - L->head_r - 4, hy - 4, 1, L->skin);
-        ge_draw_line(im, hx + L->head_r, hy - 1, hx + L->head_r + 3, hy - 4, 1, L->skin);
+    switch (P->legs) {   /* front leg */
+    case L_WALK:   leg(im, hipx, hipy, 0, 0, cx + (int)(s * 6), base - (int)(fmaxf(0, c) * 3), L, false); break;
+    case L_TUCK:   leg(im, hipx, hipy, 0, 0, cx + 4, base - 6, L, false); break;
+    case L_SPREAD: leg(im, hipx, hipy, 0, 0, cx + 5, base - 2, L, false); break;
+    case L_CROUCH: leg(im, hipx, hipy, cx + 6, base - 5, cx + 5, base, L, true); break;
+    case L_KICK:   leg(im, hipx, hipy, 0, 0, cx + 13, base - 6, L, false); break;
+    case L_SWEEP:  leg(im, hipx, hipy, 0, 0, cx + 14, base - 1, L, false); break;
+    case L_KNEEL:  leg(im, hipx, hipy, cx + 5, base - 6, cx + 6, base, L, true); break;
+    default:       leg(im, hipx, hipy, 0, 0, cx + 3, base, L, false); break;
     }
 
-    /* front arm + weapon */
+    draw_head(im, hx, hy, L);
+
     int fax, fay;
     pt((float)shx, (float)shy, P->arm_f, 8, &fax, &fay);
     ge_draw_line(im, shx, shy, fax, fay, 2, L->tunic);
@@ -106,361 +141,306 @@ static void draw_figure(GeImage *im, int cx, int base, const Look *L, const Pose
         pt((float)fax, (float)fay, P->sword, (float)L->weapon_len, &tx, &ty);
         ge_draw_line(im, fax, fay, tx, ty, L->weapon_w, L->weapon);
         if (L->weapon_w >= 2) ge_draw_line(im, fax, fay, tx, ty, 1, L->weapon_hi);
-        int gx, gy, g2x, g2y;
-        pt((float)fax, (float)fay, P->sword + 1.5708f, 3, &gx, &gy);
-        pt((float)fax, (float)fay, P->sword - 1.5708f, 3, &g2x, &g2y);
-        ge_draw_line(im, gx, gy, g2x, g2y, 1, GE_RGB(240, 200, 90));
     }
-
-    /* slash trail: a fading arc swept around the shoulder */
     if (P->arc) {
         float r = (float)L->weapon_len + 7.0f;
-        int steps = 10;
         int px = 0, py = 0;
-        for (int i = 0; i <= steps; i++) {
-            float t = (float)i / steps;
-            float a = P->arc0 + (P->arc1 - P->arc0) * t;
+        for (int i = 0; i <= 10; i++) {
+            float t = (float)i / 10.0f, a = P->arc0 + (P->arc1 - P->arc0) * t;
             int ax, ay;
             pt((float)shx, (float)shy, a, r, &ax, &ay);
-            if (i > 0) {
-                int alpha = 60 + (int)(190 * t);
-                ge_draw_line(im, px, py, ax, ay, 3, GE_ARGB(alpha, 255, 250, 235));
-            }
+            if (i > 0) ge_draw_line(im, px, py, ax, ay, 3, GE_ARGB(60 + (int)(190 * t), 255, 250, 235));
             px = ax; py = ay;
         }
     }
 }
 
 static void draw_fallen(GeImage *im, int cx, int base, const Look *L) {
-    const uint32_t outline = GE_RGB(20, 14, 30);
+    ge_draw_line(im, cx - 9, base - 2, cx - 4, base - 5, 4, L->cloak);
     ge_draw_line(im, cx - 6, base - 3, cx + 5, base - 4, 5, L->tunic);
     ge_draw_line(im, cx - 6, base - 3, cx - 14, base - 2, 3, L->pants);
-    ge_fill_circle(im, cx + 9, base - 4, L->head_r + 1, outline, 0);
-    ge_fill_circle(im, cx + 9, base - 4, L->head_r, L->skin, 0);
-    ge_fill_circle(im, cx + 8, base - 6, L->head_r - 1, L->hair, 0);
-    if (L->weapon_len > 0)
-        ge_draw_line(im, cx - 2, base - 1, cx + 12, base, L->weapon_w, L->weapon);
+    draw_head(im, cx + 9, base - 5, L);
+    if (L->weapon_len > 0) ge_draw_line(im, cx - 2, base - 1, cx + 12, base, L->weapon_w, L->weapon);
 }
 
-#define NCELL_COLS 8
-
-static void cell_origin(const GeImage *im, int cell, int *ox, int *oy) {
-    (void)im;
-    *ox = (cell % NCELL_COLS) * 32;
-    *oy = (cell / NCELL_COLS) * 32;
-}
-
-static void put(GeImage *im, int cell, const Look *L, Pose p) {
-    int ox, oy;
-    cell_origin(im, cell, &ox, &oy);
-    /* draw into a scratch cell so clipping to the cell is automatic */
-    GeImage tmp = ge_image_create(32, 32);
-    draw_figure(&tmp, 16, 31, L, &p);
-    GeIRect all = { 0, 0, 32, 32 };
-    ge_blit(im, &tmp, all, ox, oy, 0, GE_WHITE);
+/* Each cell is drawn into a scratch image so clipping to the cell is automatic. */
+static void put_cell(GeImage *sheet, int cw, int ch, int cell, const Look *L, const Pose *p, bool fallen) {
+    GeImage tmp = ge_image_create(cw, ch);
+    if (fallen) draw_fallen(&tmp, cw / 2, ch - 1, L);
+    else draw_figure(&tmp, cw / 2, ch - 1, L, p);
+    int cols = sheet->w / cw;
+    GeIRect all = { 0, 0, cw, ch };
+    ge_blit(sheet, &tmp, all, (cell % cols) * cw, (cell / cols) * ch, 0, GE_WHITE);
     ge_image_free(&tmp);
 }
 
-static void put_fallen(GeImage *im, int cell, const Look *L) {
+static GeImage humanoid_sheet(const Look *L) {
+    GeImage im = ge_image_create(256, 224);
+    Pose P[H_COUNT];
+    memset(P, 0, sizeof P);
+#define POSE(i, ...) P[i] = (Pose){ __VA_ARGS__ }
+    POSE(H_IDLE0, .legs = L_STAND, .arm_f = 0.6f, .arm_b = 2.2f, .sword = -0.9f);
+    POSE(H_IDLE1, .bob = 1, .legs = L_STAND, .arm_f = 0.65f, .arm_b = 2.3f, .sword = -0.85f, .cloak = 1);
+    for (int i = 0; i < 4; i++)
+        POSE(H_RUN0 + i, .bob = (float)(i & 1), .lean = 3, .legs = L_WALK, .phase = (float)i * 0.25f,
+             .arm_f = 1.0f + 0.4f * sinf((float)i * 1.57f), .arm_b = 2.6f, .sword = 2.8f, .cloak = 3);
+    POSE(H_JUMP, .lean = 1, .legs = L_TUCK, .arm_f = -1.2f, .arm_b = 0.3f, .sword = -1.4f, .cloak = 3);
+    POSE(H_FALL, .lean = 1, .legs = L_SPREAD, .arm_f = -0.6f, .arm_b = 0.9f, .sword = -0.5f, .cloak = -2);
+    /* side slashes */
+    POSE(H_S1A, .lean = -2, .legs = L_STAND, .arm_f = -2.3f, .arm_b = 2.4f, .sword = -2.7f);
+    POSE(H_S1B, .lean = 3, .legs = L_STAND, .arm_f = 0.0f, .arm_b = 2.0f, .sword = 0.0f, .arc = 1, .arc0 = -2.1f, .arc1 = 0.5f, .cloak = 2);
+    POSE(H_S1C, .lean = 2, .legs = L_STAND, .arm_f = 0.4f, .arm_b = 2.0f, .sword = 0.7f);
+    POSE(H_S2A, .lean = -1, .legs = L_STAND, .arm_f = 1.5f, .arm_b = 2.4f, .sword = 2.0f);
+    POSE(H_S2B, .lean = 3, .legs = L_STAND, .arm_f = -0.3f, .arm_b = 2.0f, .sword = -0.6f, .arc = 1, .arc0 = 1.6f, .arc1 = -1.5f, .cloak = 2);
+    POSE(H_S2C, .lean = 2, .legs = L_STAND, .arm_f = -0.8f, .arm_b = 2.0f, .sword = -1.1f);
+    /* up / down slashes */
+    POSE(H_UPA, .legs = L_STAND, .arm_f = 0.8f, .arm_b = 2.2f, .sword = 1.4f);
+    POSE(H_UPB, .legs = L_STAND, .arm_f = -1.5f, .arm_b = 2.0f, .sword = -1.6f, .arc = 1, .arc0 = 0.3f, .arc1 = -2.9f);
+    POSE(H_UPC, .legs = L_STAND, .arm_f = -1.9f, .arm_b = 2.0f, .sword = -2.2f);
+    POSE(H_DNA, .legs = L_TUCK, .arm_f = -1.0f, .arm_b = 0.4f, .sword = -1.2f, .cloak = -2);
+    POSE(H_DNB, .legs = L_TUCK, .arm_f = 1.6f, .arm_b = 0.4f, .sword = 1.57f, .arc = 1, .arc0 = -0.2f, .arc1 = 2.8f, .cloak = -3);
+    POSE(H_DNC, .legs = L_SPREAD, .arm_f = 1.2f, .arm_b = 0.4f, .sword = 1.3f, .cloak = -2);
+    POSE(H_WALL, .lean = -2, .legs = L_TUCK, .arm_f = -1.8f, .arm_b = -2.4f, .sword = 2.6f, .cloak = -3);
+    POSE(H_DASH, .bob = 1, .lean = 6, .legs = L_WALK, .phase = 0.15f, .arm_f = -0.2f, .arm_b = 2.5f, .sword = 2.9f, .cloak = 4);
+    POSE(H_HURT, .lean = -4, .legs = L_STAND, .arm_f = -1.6f, .arm_b = -2.0f, .sword = 2.0f, .cloak = -1);
+    /* tool throw */
+    POSE(H_THA, .lean = -2, .legs = L_STAND, .arm_f = -2.6f, .arm_b = 0.8f, .sword = 2.6f);
+    POSE(H_THB, .lean = 3, .legs = L_STAND, .arm_f = 0.1f, .arm_b = 2.3f, .sword = 2.6f, .cloak = 2);
+    POSE(H_THC, .lean = 2, .legs = L_STAND, .arm_f = 0.6f, .arm_b = 2.3f, .sword = 2.6f);
+    /* spin (silk skill / super) */
+    for (int i = 0; i < 4; i++) {
+        float a = (float)i * 1.5708f;
+        POSE(H_SP0 + i, .legs = L_TUCK, .arm_f = a + 1.2f, .arm_b = a + 2.8f, .sword = a + 1.3f, .arc = 1, .arc0 = a - 0.4f, .arc1 = a + 1.4f,
+             .cloak = (float)(i * 2 - 3));
+    }
+    POSE(H_HEAL0, .legs = L_KNEEL, .lean = 1, .arm_f = 1.2f, .arm_b = 1.8f, .sword = 1.9f);
+    POSE(H_HEAL1, .bob = 1, .legs = L_KNEEL, .lean = 1, .arm_f = 1.25f, .arm_b = 1.9f, .sword = 1.9f, .cloak = 1);
+    /* fighting game */
+    POSE(H_CROUCH, .lean = 2, .legs = L_CROUCH, .arm_f = 0.5f, .arm_b = 2.2f, .sword = -0.5f);
+    POSE(H_BLOCK, .lean = -1, .legs = L_STAND, .arm_f = -1.1f, .arm_b = 2.2f, .sword = -1.4f);
+    POSE(H_BLOCKLO, .lean = 0, .legs = L_CROUCH, .arm_f = -0.9f, .arm_b = 2.2f, .sword = -1.4f);
+    POSE(H_JABA, .lean = -1, .legs = L_STAND, .arm_f = 2.6f, .arm_b = 2.2f, .sword = 0.2f);
+    POSE(H_JABB, .lean = 4, .legs = L_STAND, .arm_f = 0.0f, .arm_b = 2.4f, .sword = -0.05f, .cloak = 2);
+    POSE(H_HVA, .bob = 1, .lean = -3, .legs = L_STAND, .arm_f = -1.9f, .arm_b = 2.4f, .sword = -2.0f);
+    POSE(H_HVB, .lean = 4, .legs = L_STAND, .arm_f = 0.3f, .arm_b = 2.0f, .sword = 0.5f, .arc = 1, .arc0 = -2.2f, .arc1 = 0.7f, .cloak = 3);
+    POSE(H_HVC, .bob = 1, .lean = 5, .legs = L_STAND, .arm_f = 0.6f, .arm_b = 2.0f, .sword = 0.9f, .arc = 1, .arc0 = 0.3f, .arc1 = 1.4f, .cloak = 3);
+    POSE(H_HVD, .bob = 1, .lean = 3, .legs = L_STAND, .arm_f = 0.9f, .arm_b = 2.0f, .sword = 1.2f);
+    POSE(H_KICK, .lean = -3, .legs = L_KICK, .arm_f = -0.8f, .arm_b = 2.6f, .sword = -0.8f, .cloak = -1);
+    POSE(H_CSA, .lean = 0, .legs = L_CROUCH, .arm_f = 2.2f, .arm_b = 2.2f, .sword = 2.6f);
+    POSE(H_CSB, .lean = 3, .legs = L_CROUCH, .arm_f = 0.5f, .arm_b = 2.2f, .sword = 0.3f, .arc = 1, .arc0 = 2.0f, .arc1 = 0.4f, .cloak = 2);
+    POSE(H_SWA, .lean = -2, .legs = L_CROUCH, .arm_f = 2.4f, .arm_b = 1.0f, .sword = 2.8f);
+    POSE(H_SWB, .lean = 1, .legs = L_SWEEP, .arm_f = 1.0f, .arm_b = 2.6f, .sword = 1.2f, .cloak = 3);
+    POSE(H_RISE, .lean = 1, .legs = L_TUCK, .arm_f = -1.5f, .arm_b = 0.4f, .sword = -1.6f, .arc = 1, .arc0 = 0.8f, .arc1 = -2.2f, .cloak = -3);
+    POSE(H_GRAB, .lean = 3, .legs = L_STAND, .arm_f = 0.0f, .arm_b = 0.2f, .sword = 2.6f);
+    POSE(H_WIN, .legs = L_STAND, .arm_f = -1.3f, .arm_b = 2.4f, .sword = -1.57f, .cloak = 2);
+    POSE(H_HURTAIR, .lean = -5, .legs = L_SPREAD, .arm_f = -2.4f, .arm_b = -2.0f, .sword = 2.4f, .cloak = 3);
+    POSE(H_JH, .lean = 3, .legs = L_TUCK, .arm_f = 0.9f, .arm_b = 0.4f, .sword = 0.9f, .arc = 1, .arc0 = -1.2f, .arc1 = 1.1f, .cloak = -2);
+#undef POSE
+    for (int i = 0; i < H_COUNT; i++) put_cell(&im, 32, 32, i, L, &P[i], i == H_DEAD);
+    return im;
+}
+
+static GeImage upscale2(const GeImage *src) {
+    GeImage out = ge_image_create(src->w * 2, src->h * 2);
+    for (int y = 0; y < out.h; y++)
+        for (int x = 0; x < out.w; x++) out.px[y * out.w + x] = src->px[(y / 2) * src->w + x / 2];
+    return out;
+}
+
+/* ---- creatures --------------------------------------------------------- */
+
+static void cell_xy(const GeImage *sheet, int cw, int ch, int cell, int *x, int *y) {
+    int cols = sheet->w / cw;
+    *x = (cell % cols) * cw;
+    *y = (cell / cols) * ch;
+}
+
+static void crawler_cell(GeImage *im, int cell, int frame, bool hurt, bool dead) {
     int ox, oy;
-    cell_origin(im, cell, &ox, &oy);
-    GeImage tmp = ge_image_create(32, 32);
-    draw_fallen(&tmp, 16, 31, L);
-    GeIRect all = { 0, 0, 32, 32 };
-    ge_blit(im, &tmp, all, ox, oy, 0, GE_WHITE);
-    ge_image_free(&tmp);
+    cell_xy(im, 24, 16, cell, &ox, &oy);
+    uint32_t shell = hurt ? GE_RGB(255, 255, 255) : GE_RGB(70, 110, 150), rim = GE_RGB(20, 14, 30);
+    int base = oy + 15, cx = ox + 12;
+    if (dead) {
+        ge_fill_rect(im, cx - 8, base - 3, 16, 3, rim, 0);
+        ge_fill_rect(im, cx - 7, base - 3, 14, 2, GE_RGB(60, 80, 100), 0);
+        return;
+    }
+    for (int i = 0; i < 3; i++) { /* legs */
+        int lx = cx - 6 + i * 6, off = ((i + frame) & 1) ? 2 : -1;
+        ge_draw_line(im, lx, base - 4, lx + off, base, 1, rim);
+    }
+    for (int y = 0; y < 8; y++) {  /* dome shell */
+        int hw = (int)(9.0f * sqrtf(1.0f - (float)(y * y) / 64.0f));
+        ge_fill_rect(im, cx - hw, base - 4 - y, hw * 2, 1, y == 7 ? rim : mix(shell, GE_RGB(150, 200, 230), (float)y / 12.0f), 0);
+    }
+    ge_fill_rect(im, cx - 9, base - 4, 18, 1, rim, 0);
+    ge_fill_rect(im, cx + 6, base - 7, 2, 2, GE_RGB(255, 230, 120), 0); /* eye */
 }
 
-static const char player_clips[] =
-    "cell 32 32\n"
-    "origin 16 31\n"
-    "clip idle loop\n  frame 0 28\n  frame 1 28\n"
-    "clip run loop\n  frame 2 5\n  frame 3 5\n  frame 4 5\n  frame 5 5\n"
-    "clip jump once\n  frame 6 8\n"
-    "clip fall once\n  frame 7 8\n"
-    "# 3-hit combo: startup / active / recovery. Chain by pressing attack again from the cancel frame.\n"
-    "clip attack1 once dmg=8 kb=2.2,-1.6 stop=4 stun=16 cancel=2 next=attack2 lunge=1.6\n"
-    "  frame 8 3\n  frame 9 3 hit=2,-31,29,24\n  frame 10 6\n"
-    "clip attack2 once dmg=9 kb=2.6,-1.8 stop=4 stun=16 cancel=2 next=attack3 lunge=1.8\n"
-    "  frame 11 3\n  frame 12 3 hit=2,-33,30,28\n  frame 13 6\n"
-    "clip attack3 once dmg=16 kb=5.2,-3.4 stop=9 stun=26 lunge=2.6\n"
-    "  frame 14 5\n  frame 15 3 hit=0,-34,36,30\n  frame 16 3 hit=0,-30,38,28\n  frame 17 10\n"
-    "clip hurt once\n  frame 18 99\n"
-    "clip dash once\n  frame 19 99\n"
-    "clip dead once\n  frame 20 999\n";
-
-int art_make_player(GeSprite *s) {
-    memset(s, 0, sizeof *s);
-    s->sheet = ge_image_create(256, 96);
-    Look L = { GE_RGB(240, 200, 160), GE_RGB(60, 40, 40), GE_RGB(220, 50, 70), GE_RGB(50, 90, 170),
-               GE_RGB(40, 44, 70), GE_RGB(90, 60, 50), GE_RGB(205, 215, 235), GE_RGB(255, 255, 255), 4, 12, 2, 0 };
-    GeImage *im = &s->sheet;
-    put(im, 0, &L, (Pose){ 0, 0, 3, 0, 0.5f, 2.2f, -0.9f, 0, 0, 0, 0 });
-    put(im, 1, &L, (Pose){ 1, 0, 3, 0, 0.55f, 2.3f, -0.85f, 0, 0, 0, 1 });
-    for (int i = 0; i < 4; i++)
-        put(im, 2 + i, &L, (Pose){ (float)(i & 1), 3, 0, i * 0.25f, 1.0f + 0.4f * sinf(i * 1.57f), 2.6f, -0.2f, 0, 0, 0, 1.5f });
-    put(im, 6, &L, (Pose){ 0, 1, 1, 0, -1.2f, 0.3f, -1.4f, 0, 0, 0, -1 });
-    put(im, 7, &L, (Pose){ 0, 1, 2, 0, -0.6f, 0.9f, -0.5f, 0, 0, 0, 2 });
-    /* combo 1: horizontal cut */
-    put(im, 8, &L, (Pose){ 0, -2, 3, 0, -2.3f, 2.4f, -2.7f, 0, 0, 0, 0 });
-    put(im, 9, &L, (Pose){ 0, 3, 3, 0, 0.0f, 2.0f, 0.0f, 1, -2.1f, 0.5f, 1 });
-    put(im, 10, &L, (Pose){ 0, 2, 3, 0, 0.4f, 2.0f, 0.7f, 0, 0, 0, 0 });
-    /* combo 2: rising reverse cut */
-    put(im, 11, &L, (Pose){ 0, -1, 3, 0, 1.5f, 2.4f, 2.0f, 0, 0, 0, 0 });
-    put(im, 12, &L, (Pose){ 0, 3, 3, 0, -0.3f, 2.0f, -0.6f, 1, 1.6f, -1.5f, 1 });
-    put(im, 13, &L, (Pose){ 0, 2, 3, 0, -0.8f, 2.0f, -1.1f, 0, 0, 0, 0 });
-    /* combo 3: big overhead */
-    put(im, 14, &L, (Pose){ 1, -3, 3, 0, -1.9f, 2.4f, -2.0f, 0, 0, 0, 0 });
-    put(im, 15, &L, (Pose){ 0, 4, 3, 0, 0.3f, 2.0f, 0.5f, 1, -2.2f, 0.7f, 2 });
-    put(im, 16, &L, (Pose){ 1, 5, 3, 0, 0.6f, 2.0f, 0.9f, 1, 0.3f, 1.4f, 2 });
-    put(im, 17, &L, (Pose){ 1, 3, 3, 0, 0.9f, 2.0f, 1.2f, 0, 0, 0, 0 });
-    put(im, 18, &L, (Pose){ 0, -4, 3, 0, -1.6f, -2.0f, 2.0f, 0, 0, 0, -1 });
-    put(im, 19, &L, (Pose){ 1, 6, 0, 0.15f, -0.2f, 2.5f, -0.1f, 0, 0, 0, 3 });
-    put_fallen(im, 20, &L);
-    return ge_sprite_parse(s, player_clips);
+static void bat_cell(GeImage *im, int cell, int frame, bool hurt, bool dead) {
+    int ox, oy;
+    cell_xy(im, 24, 16, cell, &ox, &oy);
+    uint32_t body = hurt ? GE_RGB(255, 255, 255) : GE_RGB(110, 70, 130), wing = GE_RGB(60, 36, 80);
+    int cx = ox + 12, cy = oy + 9;
+    if (dead) { ge_fill_circle(im, cx, oy + 13, 3, body, 0); ge_draw_line(im, cx - 6, oy + 15, cx + 6, oy + 14, 1, wing); return; }
+    int wy = frame ? 5 : -5;
+    ge_draw_line(im, cx - 2, cy, cx - 10, cy + wy, 2, wing);
+    ge_draw_line(im, cx - 10, cy + wy, cx - 6, cy + 2, 1, wing);
+    ge_draw_line(im, cx + 2, cy, cx + 10, cy + wy, 2, wing);
+    ge_draw_line(im, cx + 10, cy + wy, cx + 6, cy + 2, 1, wing);
+    ge_fill_circle(im, cx, cy, 4, body, 0);
+    ge_fill_rect(im, cx + 1, cy - 1, 1, 1, GE_RGB(255, 90, 90), 0);
+    ge_fill_rect(im, cx + 3, cy - 1, 1, 1, GE_RGB(255, 90, 90), 0);
 }
 
-static const char goblin_clips[] =
-    "cell 32 32\n"
-    "origin 16 31\n"
-    "clip idle loop\n  frame 0 30\n  frame 1 30\n"
-    "clip walk loop\n  frame 2 7\n  frame 3 7\n  frame 4 7\n  frame 5 7\n"
-    "# the long wind-up is the player's cue to dodge, trade or hop lanes\n"
-    "clip attack once dmg=6 kb=3.2,-2.2 stop=5 stun=18\n"
-    "  frame 6 22\n  frame 7 4 hit=2,-26,24,22\n  frame 8 16\n"
-    "clip hurt once\n  frame 9 99\n"
-    "clip dead once\n  frame 10 999\n";
+static void spitter_cell(GeImage *im, int cell, int frame, bool hurt, bool dead) {
+    int ox, oy;
+    cell_xy(im, 24, 24, cell, &ox, &oy);
+    int cx = ox + 12, base = oy + 23;
+    uint32_t stem = GE_RGB(60, 110, 70), head = hurt ? GE_RGB(255, 255, 255) : GE_RGB(170, 70, 110);
+    if (dead) { ge_draw_line(im, cx - 6, base, cx + 6, base - 2, 3, stem); return; }
+    int sway = frame == 1 ? 1 : 0;
+    ge_draw_line(im, cx, base, cx + sway, base - 10, 3, stem);
+    ge_draw_line(im, cx, base - 3, cx - 5, base - 6, 2, stem);
+    ge_draw_line(im, cx, base - 5, cx + 5, base - 8, 2, stem);
+    ge_fill_circle(im, cx + sway, base - 14, 6, head, 0);
+    if (frame == 2) ge_fill_circle(im, cx + sway + 2, base - 15, 3, GE_RGB(30, 10, 20), 0); /* open mouth */
+    else ge_fill_rect(im, cx + sway, base - 15, 5, 1, GE_RGB(30, 10, 20), 0);
+}
 
-int art_make_goblin(GeSprite *s) {
+static void fx_cell(GeImage *im, int cell) {
+    int ox, oy;
+    cell_xy(im, 16, 16, cell, &ox, &oy);
+    int cx = ox + 8, cy = oy + 8;
+    switch (cell) {
+    case FX_NEEDLE0: case FX_NEEDLE1:
+        ge_draw_line(im, cx - 6, cy, cx + 6, cy, 1, GE_RGB(230, 236, 255));
+        ge_draw_line(im, cx - 7, cy + (cell == FX_NEEDLE1), cx - 12, cy + (cell == FX_NEEDLE1 ? 2 : -1), 1, GE_RGB(220, 60, 70)); /* thread */
+        ge_fill_rect(im, cx + 5, cy - 1, 2, 3, GE_RGB(255, 255, 255), 0);
+        break;
+    case FX_GLOB0: case FX_GLOB1:
+        ge_fill_circle(im, cx, cy, cell == FX_GLOB0 ? 4 : 3, GE_RGB(190, 230, 90), 0);
+        ge_fill_rect(im, cx - 1, cy - 2, 2, 1, GE_RGB(240, 255, 200), 0);
+        break;
+    case FX_ROCK:
+        ge_fill_circle(im, cx, cy, 4, GE_RGB(20, 14, 30), 0);
+        ge_fill_circle(im, cx, cy, 3, GE_RGB(130, 110, 100), 0);
+        break;
+    case FX_WAVE0: case FX_WAVE1:
+        for (int i = 0; i < 4; i++)
+            ge_draw_line(im, cx - 4 + i * 2, oy + 15, cx - 2 + i * 2, oy + 15 - (cell == FX_WAVE0 ? 10 : 8) + i, 2, GE_ARGB(220 - i * 40, 255, 170, 90));
+        break;
+    case FX_ORB0: case FX_ORB1:
+        ge_fill_circle(im, cx, cy, cell == FX_ORB0 ? 6 : 5, GE_ARGB(110, 255, 210, 230), 0);
+        ge_fill_circle(im, cx, cy, 3, GE_RGB(255, 240, 250), 0);
+        break;
+    case FX_SPEAR:
+        ge_draw_line(im, cx - 7, cy, cx + 5, cy, 2, GE_RGB(110, 80, 60));
+        ge_draw_line(im, cx + 4, cy - 2, cx + 7, cy, 1, GE_RGB(220, 220, 230));
+        ge_draw_line(im, cx + 4, cy + 2, cx + 7, cy, 1, GE_RGB(220, 220, 230));
+        break;
+    case FX_DUST:
+        for (int i = 0; i < 6; i++) ge_fill_circle(im, cx - 4 + i * 2, cy + (i & 1 ? 2 : -2), 2, GE_ARGB(170, 220, 210, 240), 0);
+        break;
+    }
+}
+
+void art_make_sheets(Sprites *s) {
     memset(s, 0, sizeof *s);
-    s->sheet = ge_image_create(256, 64);
-    Look L = { GE_RGB(110, 170, 80), GE_RGB(70, 100, 50), GE_RGB(150, 90, 40), GE_RGB(120, 80, 50),
-               GE_RGB(70, 55, 45), GE_RGB(50, 40, 35), GE_RGB(120, 80, 45), GE_RGB(170, 125, 80), 5, 11, 3, 1 };
-    GeImage *im = &s->sheet;
-    put(im, 0, &L, (Pose){ 0, 1, 3, 0, 0.8f, 2.4f, 0.6f, 0, 0, 0, 0 });
-    put(im, 1, &L, (Pose){ 1, 1, 3, 0, 0.8f, 2.4f, 0.65f, 0, 0, 0, 0 });
-    for (int i = 0; i < 4; i++)
-        put(im, 2 + i, &L, (Pose){ (float)(i & 1), 2, 0, i * 0.25f, 0.9f, 2.4f, 0.5f, 0, 0, 0, 0 });
-    put(im, 6, &L, (Pose){ 0, -3, 3, 0, -2.2f, 2.4f, -2.2f, 0, 0, 0, 0 });
-    put(im, 7, &L, (Pose){ 0, 4, 3, 0, 0.1f, 2.4f, 0.4f, 1, -2.0f, 0.6f, 1 });
-    put(im, 8, &L, (Pose){ 1, 3, 3, 0, 0.5f, 2.4f, 1.0f, 0, 0, 0, 0 });
-    put(im, 9, &L, (Pose){ 0, -3, 3, 0, -1.4f, -2.0f, 1.8f, 0, 0, 0, 0 });
-    put_fallen(im, 10, &L);
-    return ge_sprite_parse(s, goblin_clips);
+    Look hero = { GE_RGB(242, 236, 228), GE_RGB(40, 30, 40), GE_RGB(200, 40, 60), GE_RGB(150, 30, 50), GE_RGB(60, 40, 60),
+                  GE_RGB(40, 30, 40), GE_RGB(220, 226, 240), GE_RGB(255, 255, 255), HEAD_MASK, 4, 12, 2 };
+    Look brawler = { GE_RGB(110, 170, 80), GE_RGB(70, 100, 50), GE_RGB(120, 70, 40), GE_RGB(120, 80, 50), GE_RGB(70, 55, 45),
+                     GE_RGB(50, 40, 35), GE_RGB(120, 80, 45), GE_RGB(170, 125, 80), HEAD_GOBLIN, 5, 11, 3 };
+    Look fencer = { GE_RGB(210, 205, 220), GE_RGB(90, 80, 110), GE_RGB(180, 170, 210), GE_RGB(100, 90, 140), GE_RGB(60, 55, 80),
+                    GE_RGB(40, 36, 56), GE_RGB(200, 210, 240), GE_RGB(255, 255, 255), HEAD_MOTH, 4, 15, 1 };
+    Look warden = { GE_RGB(70, 66, 80), GE_RGB(180, 50, 40), GE_RGB(90, 30, 30), GE_RGB(60, 58, 72), GE_RGB(40, 38, 50),
+                    GE_RGB(30, 28, 36), GE_RGB(150, 140, 130), GE_RGB(210, 200, 190), HEAD_HELM, 5, 14, 3 };
+    s->hero.sheet = humanoid_sheet(&hero);
+    s->brawler.sheet = humanoid_sheet(&brawler);
+    s->fencer.sheet = humanoid_sheet(&fencer);
+    GeImage w = humanoid_sheet(&warden);
+    s->warden.sheet = upscale2(&w);   /* the boss is the same puppet at double size */
+    ge_image_free(&w);
+
+    s->crawler.sheet = ge_image_create(96, 16);
+    crawler_cell(&s->crawler.sheet, 0, 0, false, false);
+    crawler_cell(&s->crawler.sheet, 1, 1, false, false);
+    crawler_cell(&s->crawler.sheet, 2, 0, true, false);
+    crawler_cell(&s->crawler.sheet, 3, 0, false, true);
+    s->bat.sheet = ge_image_create(96, 16);
+    bat_cell(&s->bat.sheet, 0, 0, false, false);
+    bat_cell(&s->bat.sheet, 1, 1, false, false);
+    bat_cell(&s->bat.sheet, 2, 0, true, false);
+    bat_cell(&s->bat.sheet, 3, 0, false, true);
+    s->spitter.sheet = ge_image_create(120, 24);
+    spitter_cell(&s->spitter.sheet, 0, 0, false, false);
+    spitter_cell(&s->spitter.sheet, 1, 1, false, false);
+    spitter_cell(&s->spitter.sheet, 2, 2, false, false);
+    spitter_cell(&s->spitter.sheet, 3, 0, true, false);
+    spitter_cell(&s->spitter.sheet, 4, 0, false, true);
+    s->fx.sheet = ge_image_create(176, 16);
+    for (int i = 0; i <= FX_DUST; i++) fx_cell(&s->fx.sheet, i);
+}
+
+void art_free(Sprites *s) {
+    GeSprite *all[] = { &s->hero, &s->brawler, &s->fencer, &s->warden, &s->crawler, &s->bat, &s->spitter, &s->fx };
+    for (unsigned i = 0; i < sizeof all / sizeof all[0]; i++) ge_sprite_free(all[i]);
 }
 
 /* ---- tiles ------------------------------------------------------------- */
 
 void art_make_tileset(GeImage *tiles) {
-    *tiles = ge_image_create(GE_TILE * 4, GE_TILE);
+    *tiles = ge_image_create(GE_TILE * TV_COUNT, GE_TILE);
     GeRng r;
     ge_rng_seed(&r, 7);
     const uint32_t d0 = GE_RGB(86, 58, 56), d1 = GE_RGB(100, 68, 62), d2 = GE_RGB(64, 44, 48);
-    for (int t = 0; t < 4; t++)
+    const uint32_t s0 = GE_RGB(70, 66, 92), s1 = GE_RGB(84, 80, 108), s2 = GE_RGB(52, 48, 72);
+    for (int t = 0; t < TV_COUNT; t++)
         for (int y = 0; y < GE_TILE; y++)
             for (int x = 0; x < GE_TILE; x++) {
                 float n = ge_rng_float(&r);
                 uint32_t c = n < 0.18f ? d2 : (n > 0.78f ? d1 : d0);
-                if (t == 2) c = 0; /* plank is built below */
+                if (t == TV_STONE || t == TV_STONE_TOP) {
+                    c = n < 0.15f ? s2 : (n > 0.8f ? s1 : s0);
+                    if (y % 8 == 7 || (x + (y / 8) * 8) % 16 == 0) c = s2;   /* brick joints */
+                }
+                if (t == TV_PLANK || t == TV_SPIKE) c = 0;
                 tiles->px[y * tiles->w + t * GE_TILE + x] = c;
             }
-    /* 0: grass-topped ground */
-    for (int x = 0; x < GE_TILE; x++) {
+    for (int x = 0; x < GE_TILE; x++) {   /* grass tops */
         int blade = 3 + (int)(ge_rng_float(&r) * 3.0f);
         for (int y = 0; y < blade; y++)
-            tiles->px[y * tiles->w + x] = y == 0 ? GE_RGB(120, 190, 100) : mix(GE_RGB(78, 140, 80), GE_RGB(48, 92, 66), (float)y / blade);
-        if (x % 3 == 0) tiles->px[blade * tiles->w + x] = GE_RGB(44, 84, 62);
+            tiles->px[y * tiles->w + TV_GRASS * GE_TILE + x] = y == 0 ? GE_RGB(120, 190, 100) : mix(GE_RGB(78, 140, 80), GE_RGB(48, 92, 66), (float)y / blade);
+        tiles->px[TV_STONE_TOP * GE_TILE + x] = GE_RGB(120, 116, 140);
+        tiles->px[tiles->w + TV_STONE_TOP * GE_TILE + x] = GE_RGB(98, 94, 120);
     }
-    /* 1, 3: dirt with stones / roots */
     for (int i = 0; i < 4; i++) {
         int sx = (int)(ge_rng_float(&r) * 12), sy = 2 + (int)(ge_rng_float(&r) * 11);
-        ge_fill_rect(tiles, GE_TILE + sx, sy, 3, 2, GE_RGB(120, 100, 104), 0);
+        ge_fill_rect(tiles, TV_DIRT * GE_TILE + sx, sy, 3, 2, GE_RGB(120, 100, 104), 0);
     }
-    ge_draw_line(tiles, 3 * GE_TILE + 2, 0, 3 * GE_TILE + 8, 9, 1, GE_RGB(60, 90, 60));
-    /* 2: one-way wooden plank, only the top 6px */
-    for (int x = 0; x < GE_TILE; x++)
+    ge_draw_line(tiles, TV_DIRT2 * GE_TILE + 2, 0, TV_DIRT2 * GE_TILE + 8, 9, 1, GE_RGB(60, 90, 60));
+    for (int x = 0; x < GE_TILE; x++)     /* one-way plank, top 6px */
         for (int y = 0; y < 6; y++) {
             uint32_t c = y == 0 ? GE_RGB(190, 140, 90) : (y == 5 ? GE_RGB(70, 46, 40) : GE_RGB(150, 104, 66));
             if (y > 0 && y < 5 && (x == 0 || x == 8)) c = GE_RGB(100, 68, 50);
-            tiles->px[y * tiles->w + 2 * GE_TILE + x] = c;
+            tiles->px[y * tiles->w + TV_PLANK * GE_TILE + x] = c;
+        }
+    for (int k = 0; k < 4; k++)           /* spikes */
+        for (int y = 0; y < 12; y++) {
+            int hw = (y + 1) / 4, x0 = TV_SPIKE * GE_TILE + k * 4 + 2 - hw;
+            ge_fill_rect(tiles, x0, 4 + y, hw * 2 + 1, 1, y < 2 ? GE_RGB(240, 240, 255) : mix(GE_RGB(190, 190, 210), GE_RGB(80, 76, 100), (float)y / 12), 0);
         }
 }
 
-/* ---- parallax backdrop ------------------------------------------------- */
-
-static GeImage make_sky(void) {
-    GeImage im = ge_image_create(400, 240);
-    ge_gradient_v(&im, 0, 110, GE_RGB(10, 8, 34), GE_RGB(58, 30, 94));
-    ge_gradient_v(&im, 110, 190, GE_RGB(58, 30, 94), GE_RGB(236, 112, 100));
-    ge_gradient_v(&im, 190, 240, GE_RGB(236, 112, 100), GE_RGB(255, 178, 110));
-    GeRng r;
-    ge_rng_seed(&r, 11);
-    for (int i = 0; i < 110; i++) {
-        int x = (int)(ge_rng_float(&r) * im.w), y = (int)(ge_rng_float(&r) * 120);
-        int a = 90 + (int)(ge_rng_float(&r) * 165);
-        ge_fill_rect(&im, x, y, 1 + (i % 9 == 0), 1 + (i % 9 == 0), GE_ARGB(a, 255, 245, 230), 0);
-    }
-    ge_fill_circle(&im, 310, 58, 36, GE_ARGB(16, 255, 220, 200), GE_ADDITIVE); /* moon glow */
-    ge_fill_circle(&im, 310, 58, 27, GE_ARGB(22, 255, 220, 200), GE_ADDITIVE);
-    ge_fill_circle(&im, 310, 58, 17, GE_RGB(252, 240, 222), 0);
-    ge_fill_circle(&im, 304, 53, 3, GE_RGB(226, 208, 196), 0);
-    ge_fill_circle(&im, 316, 63, 4, GE_RGB(230, 214, 200), 0);
-    return im;
-}
-
-static float ridge(int x, int w, float a, float b, float c) {
-    float u = (float)x / (float)w * PI2;
-    return a * sinf(u + 0.3f) + b * sinf(3 * u + 1.1f) + c * sinf(7 * u + 2.0f);
-}
-
-static GeImage make_mountains(int w, int h, uint32_t top, uint32_t bottom, float base, float a, float b, float c) {
-    GeImage im = ge_image_create(w, h);
-    for (int x = 0; x < w; x++) {
-        int top_y = (int)(base + ridge(x, w, a, b, c));
-        for (int y = top_y < 0 ? 0 : top_y; y < h; y++)
-            im.px[y * w + x] = mix(top, bottom, (float)(y - top_y) / (float)(h - top_y));
-    }
-    return im;
-}
-
-static void draw_pine(GeImage *im, int x, int base_y, int height, uint32_t c) {
-    wrap_rect(im, x - 1, base_y - 4, 3, 5, c);
-    for (int tier = 0; tier < 4; tier++) {
-        int y = base_y - 4 - tier * (height / 4);
-        int half = 8 - tier * 2;
-        for (int row = 0; row < height / 3; row++) {
-            int hw = half * (height / 3 - row) / (height / 3);
-            wrap_rect(im, x - hw, y - row, hw * 2 + 1, 1, c);
-        }
-    }
-}
-
-static GeImage make_hills(int w, int h) {
-    GeImage im = make_mountains(w, h, GE_RGB(46, 30, 78), GE_RGB(60, 36, 80), 60, 16, 7, 3);
-    GeRng r;
-    ge_rng_seed(&r, 21);
-    for (int i = 0; i < 46; i++) {
-        int x = (int)(ge_rng_float(&r) * w);
-        int y = (int)(60 + ridge(x, w, 16, 7, 3)) + 4;
-        draw_pine(&im, x, y, 20 + (int)(ge_rng_float(&r) * 16), mix(GE_RGB(32, 22, 62), GE_RGB(44, 28, 74), ge_rng_float(&r)));
-    }
-    return im;
-}
-
-static GeImage make_clouds(int w, int h) {
-    GeImage im = ge_image_create(w, h);
-    GeRng r;
-    ge_rng_seed(&r, 5);
-    for (int i = 0; i < 9; i++) {
-        int cx = (int)(ge_rng_float(&r) * w), cy = 12 + (int)(ge_rng_float(&r) * (h - 28));
-        for (int j = 0; j < 7; j++) {
-            int ox = (int)(ge_rng_range(&r, -34, 34)), oy = (int)(ge_rng_range(&r, -4, 4));
-            int rr = 6 + (int)(ge_rng_float(&r) * 8);
-            for (int k = -1; k <= 1; k++)
-                ge_fill_circle(&im, cx + ox + k * w, cy + oy, rr, GE_ARGB(34, 255, 190, 190), 0);
-        }
-    }
-    return im;
-}
-
-static GeImage make_forest(int w, int h) {
-    GeImage im = ge_image_create(w, h);
-    GeRng r;
-    ge_rng_seed(&r, 33);
-    const uint32_t trunk = GE_RGB(24, 18, 44), leaf = GE_RGB(30, 24, 58), rim = GE_RGB(70, 46, 96);
-    for (int i = 0; i < 15; i++) {
-        int x = i * (w / 15) + (int)(ge_rng_float(&r) * 24);
-        int tw = 8 + (int)(ge_rng_float(&r) * 8), top = 40 + (int)(ge_rng_float(&r) * 40);
-        wrap_rect(&im, x, top, tw, h - top, trunk);
-        wrap_rect(&im, x + tw - 2, top, 2, h - top, rim);  /* moonlit edge */
-        int cr = 16 + (int)(ge_rng_float(&r) * 12);
-        for (int j = 0; j < 5; j++) {
-            int ox = (int)ge_rng_range(&r, -cr, cr), oy = (int)ge_rng_range(&r, -cr / 2, cr / 3);
-            wrap_circle(&im, x + tw / 2 + ox, top + oy, cr * 3 / 4, leaf);
-        }
-    }
-    return im;
-}
-
-static GeImage make_shafts(int w, int h) {
-    GeImage im = ge_image_create(w, h);
-    GeRng r;
-    ge_rng_seed(&r, 47);
-    for (int i = 0; i < 6; i++) {
-        int x0 = (int)(ge_rng_float(&r) * w), sw = 10 + (int)(ge_rng_float(&r) * 16);
-        int a = 12 + (int)(ge_rng_float(&r) * 14);
-        for (int y = 0; y < h; y++) {
-            int fade = a * (h - y) / h;
-            wrap_rect(&im, x0 + y * 2 / 5, y, sw, 1, GE_ARGB(fade, 255, 190, 150));
-        }
-    }
-    return im;
-}
-
-static GeImage make_mist(int w, int h, int peak_alpha) {
-    GeImage im = ge_image_create(w, h);
-    for (int x = 0; x < w; x++) {
-        float u = (float)x / (float)w * PI2;
-        float wob = 0.65f + 0.2f * sinf(2 * u) + 0.15f * sinf(5 * u + 1.0f);
-        for (int y = 0; y < h; y++) {
-            float t = (float)y / (float)(h - 1);
-            float prof = sinf(t * 3.14159f);
-            int a = (int)((float)peak_alpha * prof * prof * wob);
-            im.px[y * w + x] = GE_ARGB(a, 214, 170, 200);
-        }
-    }
-    return im;
-}
-
-static GeImage make_grass(int w, int h) {
-    GeImage im = ge_image_create(w, h);
-    GeRng r;
-    ge_rng_seed(&r, 61);
-    for (int x = 0; x < w; x += 2) {
-        int bh = 6 + (int)(ge_rng_float(&r) * (float)(h - 8));
-        float lean = ge_rng_range(&r, -3, 3);
-        uint32_t c = mix(GE_RGB(6, 8, 16), GE_RGB(16, 30, 30), ge_rng_float(&r));
-        int px = x, py = h - 1;
-        for (int i = 0; i < bh; i++) {
-            float t = (float)i / bh;
-            int bx = x + (int)(lean * t * t);
-            for (int k = -1; k <= 1; k++) ge_fill_rect(&im, bx + k * w, h - 1 - i, 2, 1, c, 0);
-            px = bx; py = h - 1 - i;
-        }
-        (void)px; (void)py;
-    }
-    return im;
-}
-
-static GeImage make_canopy(int w, int h) {
-    GeImage im = ge_image_create(w, h);
-    GeRng r;
-    ge_rng_seed(&r, 71);
-    const uint32_t c = GE_RGB(6, 5, 14);
-    for (int i = 0; i < 26; i++) {
-        int x = (int)(ge_rng_float(&r) * w), rr = 8 + (int)(ge_rng_float(&r) * 12);
-        wrap_circle(&im, x, (int)(ge_rng_float(&r) * 8) - 4, rr, c);
-    }
-    for (int i = 0; i < 12; i++) { /* hanging vines */
-        int x = (int)(ge_rng_float(&r) * w), len = 12 + (int)(ge_rng_float(&r) * (h - 14));
-        wrap_rect(&im, x, 0, 1, len, c);
-        wrap_circle(&im, x, len, 2, c);
-    }
-    return im;
-}
-
-void art_add_layers(GeWorld *w) {
-    /* { image, factor_x, factor_y, auto_x, y, foreground, additive, opaque, optional, alpha } */
-    ge_world_add_layer(w, (GeParallaxLayer){ make_sky(), 0.0f, 0.0f, 0.0f, 0, false, false, true, false, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_mountains(800, 150, GE_RGB(60, 38, 100), GE_RGB(120, 62, 110), 66, 24, 12, 5),
-                                              0.07f, 0.0f, 0.0f, 62, false, false, false, false, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_clouds(800, 70), 0.12f, 0.0f, 0.05f, 30, false, true, false, true, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_hills(800, 130), 0.22f, 0.0f, 0.0f, 100, false, false, false, false, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_forest(640, 210), 0.45f, 0.0f, 0.0f, 30, false, false, false, false, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_shafts(480, 240), 0.35f, 0.0f, 0.0f, 0, false, true, false, true, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_mist(800, 80, 90), 0.65f, 0.0f, 0.12f, 140, false, false, false, true, 255 });
-    /* foreground: passes in front of the action, moving faster than the world */
-    ge_world_add_layer(w, (GeParallaxLayer){ make_grass(800, 34), 1.45f, 0.0f, 0.0f, 206, true, false, false, false, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_canopy(800, 40), 1.25f, 0.0f, 0.0f, 0, true, false, false, false, 255 });
-    ge_world_add_layer(w, (GeParallaxLayer){ make_mist(800, 70, 70), 1.7f, 0.0f, 0.3f, 170, true, false, false, true, 255 });
+void art_draw_bench(GeImage *fb, int x, int y) {
+    const uint32_t wood = GE_RGB(150, 104, 66), dark = GE_RGB(70, 46, 40);
+    ge_fill_rect(fb, x - 14, y - 9, 28, 3, wood, 0);
+    ge_fill_rect(fb, x - 14, y - 6, 28, 1, dark, 0);
+    ge_fill_rect(fb, x - 12, y - 6, 2, 6, dark, 0);
+    ge_fill_rect(fb, x + 10, y - 6, 2, 6, dark, 0);
+    ge_fill_rect(fb, x - 14, y - 17, 28, 2, wood, 0);
+    ge_fill_rect(fb, x - 12, y - 15, 2, 6, dark, 0);
+    ge_fill_rect(fb, x + 10, y - 15, 2, 6, dark, 0);
+    ge_fill_circle(fb, x, y - 22, 4, GE_ARGB(60, 255, 220, 150), GE_ADDITIVE); /* lantern glow */
+    ge_fill_rect(fb, x - 1, y - 24, 3, 4, GE_RGB(255, 220, 140), 0);
 }

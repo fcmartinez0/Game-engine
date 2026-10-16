@@ -37,6 +37,8 @@ void ge_vignette(GeImage *dst, int depth, int max_alpha);
 
 /* Copy a source rectangle. `tint` multiplies colour and alpha (GE_WHITE = none). */
 void ge_blit(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy, int flags, uint32_t tint);
+/* Same, magnified by an integer `scale` (nearest neighbour). */
+void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy, int scale, int flags, uint32_t tint);
 /* Draw `src` repeated horizontally so it covers the whole destination; `scroll_x`
  * is how far the layer has moved. Used for parallax. */
 void ge_blit_wrap_x(GeImage *dst, const GeImage *src, int scroll_x, int dy, int flags, uint32_t tint);

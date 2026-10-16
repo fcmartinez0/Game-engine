@@ -40,6 +40,21 @@ static int parse_clip_opt(GeClip *c, const char *tok) {
     else if (klen == 6 && !strncmp(tok, "cancel", 6)) c->cancel_from = atoi(v);
     else if (klen == 5 && !strncmp(tok, "lunge", 5)) c->lunge = (float)atof(v);
     else if (klen == 4 && !strncmp(tok, "next", 4)) { strncpy(c->next_name, v, GE_NAME_LEN - 1); }
+    else if (klen == 4 && !strncmp(tok, "pogo", 4)) c->pogo = (float)atof(v);
+    else if (klen == 6 && !strncmp(tok, "recoil", 6)) c->recoil = (float)atof(v);
+    else if (klen == 4 && !strncmp(tok, "rise", 4)) c->rise = (float)atof(v);
+    else if (klen == 5 && !strncmp(tok, "shoot", 5)) c->shoot = atoi(v);
+    else if (klen == 3 && !strncmp(tok, "inv", 3)) c->inv = atoi(v);
+    else if (klen == 5 && !strncmp(tok, "bstun", 5)) c->blockstun = atoi(v);
+    else if (klen == 4 && !strncmp(tok, "chip", 4)) c->chip = atoi(v);
+    else if (klen == 2 && !strncmp(tok, "kd", 2)) c->knockdown = atoi(v) != 0;
+    else if (klen == 5 && !strncmp(tok, "guard", 5)) {
+        if (!strcmp(v, "mid")) c->guard = GE_GUARD_MID;
+        else if (!strcmp(v, "low")) c->guard = GE_GUARD_LOW;
+        else if (!strcmp(v, "high")) c->guard = GE_GUARD_HIGH;
+        else if (!strcmp(v, "none")) c->guard = GE_GUARD_NONE;
+        else return 0;
+    }
     else return 0;
     return 1;
 }
@@ -53,8 +68,8 @@ int ge_sprite_parse(GeSprite *s, const char *text) {
 
     for (const char *p = text; ge_next_line(&p, line, sizeof line);) {
         lineno++;
-        char *tok[12];
-        int nt = ge_tokenize(line, tok, 12);
+        char *tok[20];
+        int nt = ge_tokenize(line, tok, 20);
         if (nt == 0) continue;
 
         if (!strcmp(tok[0], "cell") && nt == 3) {
@@ -68,6 +83,7 @@ int ge_sprite_parse(GeSprite *s, const char *text) {
             strncpy(cur->name, tok[1], GE_NAME_LEN - 1);
             cur->next = -1;
             cur->cancel_from = -1;
+            cur->shoot = -1;
             if (!strcmp(tok[2], "loop")) cur->loop = true;
             else if (strcmp(tok[2], "once") != 0) return -lineno;
             for (int i = 3; i < nt; i++)
@@ -132,6 +148,15 @@ void ge_anim_update(GeAnimator *a) {
 
 const GeAnimFrame *ge_anim_frame(const GeAnimator *a) {
     return &a->spr->clips[a->clip].frames[a->frame];
+}
+
+void ge_anim_draw_scaled(const GeAnimator *a, GeImage *dst, int x, int y, bool flip, int flags, uint32_t tint, int scale) {
+    if (scale <= 1) { ge_anim_draw(a, dst, x, y, flip, flags, tint); return; }
+    const GeSprite *s = a->spr;
+    int cell = ge_anim_frame(a)->cell;
+    GeIRect sr = { (cell % s->cols) * s->cell_w, (cell / s->cols) * s->cell_h, s->cell_w, s->cell_h };
+    int ox = flip ? s->cell_w - 1 - s->origin_x : s->origin_x;
+    ge_blit_scaled(dst, &s->sheet, sr, x - ox * scale, y - s->origin_y * scale, scale, flags | (flip ? GE_FLIP_X : 0), tint);
 }
 
 void ge_anim_draw(const GeAnimator *a, GeImage *dst, int x, int y, bool flip, int flags, uint32_t tint) {

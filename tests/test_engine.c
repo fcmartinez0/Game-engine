@@ -1,6 +1,7 @@
 /* Engine tests: no window, no assets. Run with `ctest` or ./engine_tests */
 
 #include "ge/ge_engine.h"
+#include "ge/ge_font.h"
 #include "ge/ge_world.h"
 
 #include <stdio.h>
@@ -18,7 +19,13 @@ static const char *CLIPS =
     "clip dead once\n frame 3 99\n"
     "clip a1 once dmg=10 kb=2,-1 stop=3 stun=10 cancel=2 next=a2\n frame 0 2\n frame 1 2 hit=2,-14,44,10\n frame 2 2\n"
     "clip a2 once dmg=10 kb=2,-1 stop=3 stun=10 cancel=2 next=a3\n frame 0 2\n frame 1 2 hit=2,-14,44,10\n frame 2 2\n"
-    "clip a3 once dmg=20 kb=4,-2 stop=6 stun=20\n frame 0 2\n frame 1 2 hit=2,-14,44,10\n frame 2 2\n";
+    "clip a3 once dmg=20 kb=4,-2 stop=6 stun=20\n frame 0 2\n frame 1 2 hit=2,-14,44,10\n frame 2 2\n"
+    "clip up once dmg=5 kb=0,-3 stop=2 stun=8\n frame 0 2\n frame 1 2 hit=-8,-36,16,18\n frame 2 2\n"
+    "clip down once dmg=5 kb=0,2 stop=0 stun=8 pogo=5.5\n frame 0 1\n frame 1 4 hit=-7,0,14,14\n frame 2 2\n"
+    "clip tool once shoot=1\n frame 0 2\n frame 1 2\n frame 2 2\n"
+    "clip skill once dmg=15 kb=3,-2 stop=4 stun=12\n frame 0 2\n frame 1 4 hit=-20,-24,40,24\n frame 2 2\n"
+    "clip heal loop\n frame 0 5\n"
+    "clip recoil once dmg=1 kb=1,0 stop=0 stun=4 recoil=2.5\n frame 0 1\n frame 1 2 hit=2,-14,44,10\n frame 2 1\n";
 
 static GeSprite make_sprite(void) {
     GeSprite s;
@@ -39,7 +46,8 @@ static GeActorDef make_def(const GeSprite *s) {
     d.clip_idle = d.clip_run = d.clip_jump = d.clip_fall = ge_sprite_find_clip(s, "idle");
     d.clip_hurt = ge_sprite_find_clip(s, "hurt");
     d.clip_dead = ge_sprite_find_clip(s, "dead");
-    d.clip_dash = -1;
+    d.clip_dash = d.clip_wall = d.clip_attack_air = d.clip_attack_up = d.clip_attack_down = -1;
+    d.clip_skill = d.clip_tool = d.clip_channel = -1;
     d.clip_attack = ge_sprite_find_clip(s, "a1");
     return d;
 }
@@ -57,7 +65,7 @@ static void run(GeWorld *w, int ticks) { for (int i = 0; i < ticks; i++) ge_worl
 static void test_parser_and_anim(void) {
     puts("parser/animator");
     GeSprite s = make_sprite();
-    CHECK(s.nclips == 6);
+    CHECK(s.nclips == 12);
     int a1 = ge_sprite_find_clip(&s, "a1");
     CHECK(a1 >= 0 && s.clips[a1].is_attack && s.clips[a1].damage == 10);
     CHECK(s.clips[a1].frames[1].has_hit && !s.clips[a1].frames[0].has_hit);
@@ -143,6 +151,273 @@ static void test_layers_file(void) {
     ge_world_free(&w);
 }
 
+static int g_ev[8];
+static void count_all(void *u, GeEventType ev, int a, int b) { (void)u; (void)a; (void)b; g_ev[ev]++; }
+static void press(GeWorld *w, int e, GeIntent in) { w->intents[e] = in; run(w, 1); memset(&w->intents[e], 0, sizeof w->intents[e]); }
+
+static void test_moveset(void) {
+    puts("overworld moveset");
+    GeSprite s = make_sprite();
+    GeActorDef d = make_def(&s);
+    d.air_jumps = 1; d.air_jump_vel = 6;
+    d.wall_slide_speed = 1; d.wall_jump_vx = 3; d.wall_jump_vy = 6; d.wall_jump_lock = 8;
+    d.dash_speed = 4; d.dash_ticks = 8; d.air_dash = true;
+    d.clip_attack_up = ge_sprite_find_clip(&s, "up");
+    d.clip_attack_down = ge_sprite_find_clip(&s, "down");
+    GeWorld w;
+
+    /* double jump: exactly one extra jump in the air, refilled on landing */
+    make_world(&w);
+    int a = ge_world_spawn(&w, &d, &s, 0, 100, 160, 100);
+    run(&w, 3);
+    press(&w, a, (GeIntent){ .jump_pressed = true, .jump_held = true });
+    for (int i = 0; i < 25; i++) { w.intents[a].jump_held = true; run(&w, 1); }
+    CHECK(!w.ents[a].on_ground && w.ents[a].vel.y > 0);           /* now falling */
+    press(&w, a, (GeIntent){ .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.y < -5.0f && w.ents[a].air_jumps_left == 0);
+    for (int i = 0; i < 25; i++) { w.intents[a].jump_held = true; run(&w, 1); }
+    press(&w, a, (GeIntent){ .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.y > 0);                                   /* no third jump */
+    run(&w, 90);
+    CHECK(w.ents[a].on_ground && w.ents[a].air_jumps_left == 1);
+    ge_world_free(&w);
+
+    /* wall slide + wall jump */
+    make_world(&w);
+    for (int y = 0; y < 10; y++) w.map.type[y * 40 + 20] = GE_TILE_SOLID;
+    a = ge_world_spawn(&w, &d, &s, 0, 320 - 5, 60, 100);
+    w.ents[a].air_jumps_left = 0;
+    for (int i = 0; i < 12; i++) { w.intents[a].move_x = 1; run(&w, 1); }
+    CHECK(w.ents[a].state == GE_ST_WALL && w.ents[a].vel.y <= 1.0f + 0.001f);
+    CHECK(w.ents[a].air_jumps_left == 1 && w.ents[a].facing == -1); /* refilled, facing away from the wall */
+    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.x < -2.0f && w.ents[a].vel.y < -5.0f && w.ents[a].wall_lock > 0);
+    ge_world_free(&w);
+
+    /* air dash: once per airtime */
+    make_world(&w);
+    a = ge_world_spawn(&w, &d, &s, 0, 100, 30, 100);
+    press(&w, a, (GeIntent){ .dash_pressed = true });
+    CHECK(w.ents[a].state == GE_ST_DASH);
+    run(&w, 9);
+    CHECK(!w.ents[a].on_ground && w.ents[a].state != GE_ST_DASH);
+    press(&w, a, (GeIntent){ .dash_pressed = true });
+    CHECK(w.ents[a].state != GE_ST_DASH);                         /* already used */
+    run(&w, 90);
+    press(&w, a, (GeIntent){ .dash_pressed = true });
+    CHECK(w.ents[a].state == GE_ST_DASH);                         /* back on the ground: available again */
+    ge_world_free(&w);
+
+    /* down-slash pogo off spikes, without touching them */
+    make_world(&w);
+    memset(g_ev, 0, sizeof g_ev);
+    w.on_event = count_all;
+    for (int x = 10; x < 15; x++) w.map.type[9 * 40 + x] = GE_TILE_SPIKE;
+    a = ge_world_spawn(&w, &d, &s, 0, 12 * 16 + 8, 128, 100);
+    w.ents[a].state = GE_ST_AIR;
+    press(&w, a, (GeIntent){ .move_y = 1, .attack_pressed = true });
+    float minvy = 0;
+    for (int i = 0; i < 8; i++) { run(&w, 1); if (w.ents[a].vel.y < minvy) minvy = w.ents[a].vel.y; }
+    CHECK(minvy < -4.5f && g_ev[GE_EV_POGO] == 1 && g_ev[GE_EV_HAZARD] == 0);
+    /* ...and touching spikes raises a hazard event */
+    int b = ge_world_spawn(&w, &d, &s, 1, 13 * 16 + 8, 160, 10);
+    run(&w, 1);
+    CHECK(g_ev[GE_EV_HAZARD] >= 1);
+    w.ents[b].active = false;
+    ge_world_free(&w);
+
+    /* pogo off an enemy's head */
+    make_world(&w);
+    memset(g_ev, 0, sizeof g_ev);
+    w.on_event = count_all;
+    int vic = ge_world_spawn(&w, &d, &s, 1, 200, 160, 50);
+    a = ge_world_spawn(&w, &d, &s, 0, 200, 132, 100);
+    w.ents[a].state = GE_ST_AIR;
+    press(&w, a, (GeIntent){ .move_y = 1, .attack_pressed = true });
+    minvy = 0;
+    for (int i = 0; i < 8; i++) { run(&w, 1); if (w.ents[a].vel.y < minvy) minvy = w.ents[a].vel.y; }
+    CHECK(w.ents[vic].hp == 45 && minvy < -4.5f && g_ev[GE_EV_POGO] == 1);
+    /* up-slash reaches above the head */
+    ge_world_free(&w);
+    make_world(&w);
+    vic = ge_world_spawn(&w, &d, &s, 1, 200, 130, 50);
+    w.ents[vic].def = &d;
+    a = ge_world_spawn(&w, &d, &s, 0, 200, 160, 100);
+    GeActorDef flyer = d; flyer.flying = true;
+    w.ents[vic].def = &flyer;                                     /* hovering just above */
+    run(&w, 2);
+    press(&w, a, (GeIntent){ .move_y = -1, .attack_pressed = true });
+    run(&w, 6);
+    CHECK(w.ents[vic].hp == 45);
+    ge_world_free(&w);
+
+    /* flyers ignore gravity and steer with move_y */
+    make_world(&w);
+    a = ge_world_spawn(&w, &flyer, &s, 1, 100, 80, 10);
+    run(&w, 30);
+    CHECK_NEAR(w.ents[a].pos.y, 80.0f);
+    for (int i = 0; i < 20; i++) { w.intents[a].move_y = 1; run(&w, 1); }
+    CHECK(w.ents[a].pos.y > 90.0f);
+    ge_world_free(&w);
+
+    /* recoil pushes the attacker back on a hit */
+    GeActorDef rd = d; rd.clip_attack = ge_sprite_find_clip(&s, "recoil");
+    make_world(&w);
+    a = ge_world_spawn(&w, &rd, &s, 0, 100, 160, 100);
+    vic = ge_world_spawn(&w, &d, &s, 1, 112, 160, 50);
+    run(&w, 3);
+    press(&w, a, (GeIntent){ .attack_pressed = true });
+    run(&w, 10);
+    CHECK(w.ents[a].pos.x < 99.0f && w.ents[vic].hp == 49);
+    ge_world_free(&w);
+    ge_sprite_free(&s);
+}
+
+static void test_contact_shots_meter(void) {
+    puts("contact damage / shots / meter / channel / skill");
+    GeSprite s = make_sprite();
+    GeActorDef pd = make_def(&s), ed = make_def(&s);
+    pd.invuln_ticks = 30;
+    ed.contact_damage = 7; ed.contact_kb_x = 3; ed.contact_kb_y = -2;
+    GeWorld w;
+
+    make_world(&w);
+    int p = ge_world_spawn(&w, &pd, &s, 0, 100, 160, 100);
+    ge_world_spawn(&w, &ed, &s, 1, 104, 160, 10);
+    run(&w, 2);
+    CHECK(w.ents[p].hp == 93 && w.ents[p].invuln > 0);
+    run(&w, 10);
+    CHECK(w.ents[p].hp == 93);                                    /* i-frames: no repeat */
+    ge_world_free(&w);
+
+    /* tool: fires on the shoot= frame, costs ammo, hits, recharges */
+    GeShotDef shot = { NULL, 0, 4, 0, 0, 6, 6, 4, 1, 0, 0, 6, 0, 0, 60, false, true, true, false };
+    GeActorDef td = make_def(&s);
+    td.shot = &shot; td.clip_tool = ge_sprite_find_clip(&s, "tool"); td.ammo_max = 2; td.ammo_recharge = 50;
+    make_world(&w);
+    memset(g_ev, 0, sizeof g_ev);
+    w.on_event = count_all;
+    p = ge_world_spawn(&w, &td, &s, 0, 100, 160, 100);
+    int e = ge_world_spawn(&w, &ed, &s, 1, 170, 160, 10);
+    w.ents[e].def = &pd;                                          /* no contact damage for this one */
+    run(&w, 2);
+    press(&w, p, (GeIntent){ .tool_pressed = true });
+    CHECK(w.ents[p].ammo == 1);
+    run(&w, 25);
+    CHECK(w.ents[e].hp == 6 && g_ev[GE_EV_SHOOT] == 1);
+    press(&w, p, (GeIntent){ .tool_pressed = true }); run(&w, 8);
+    press(&w, p, (GeIntent){ .tool_pressed = true }); run(&w, 8);
+    CHECK(g_ev[GE_EV_SHOOT] == 2 && w.ents[p].ammo == 0);         /* third press: empty */
+    run(&w, 50);
+    CHECK(w.ents[p].ammo == 1);
+    /* shots die on walls */
+    for (int y = 0; y < 10; y++) w.map.type[y * 40 + 9] = GE_TILE_SOLID;
+    w.ents[p].facing = -1;
+    press(&w, p, (GeIntent){ .tool_pressed = true });
+    run(&w, 30);
+    int live = 0;
+    for (int i = 0; i < GE_MAX_SHOTS; i++) live += w.shots[i].active;
+    CHECK(live == 0);
+    ge_world_free(&w);
+
+    /* a slash destroys a breakable enemy shot */
+    make_world(&w);
+    p = ge_world_spawn(&w, &pd, &s, 0, 100, 160, 100);
+    run(&w, 2);
+    GeShotDef slow = shot; slow.speed = 0.5f;
+    int si = ge_world_shoot(&w, 1, -1, &slow, 130, 150, -1);
+    press(&w, p, (GeIntent){ .attack_pressed = true });
+    run(&w, 6);
+    CHECK(!w.shots[si].active && w.ents[p].hp == 100);
+    ge_world_free(&w);
+
+    /* meter: earned by hits, spent by skills and channels */
+    GeActorDef md = make_def(&s);
+    md.meter_max = 30; md.meter_per_hit = 4;
+    md.clip_skill = ge_sprite_find_clip(&s, "skill"); md.skill_cost = 15;
+    md.clip_channel = ge_sprite_find_clip(&s, "heal"); md.channel_cost = 10; md.channel_ticks = 30;
+    make_world(&w);
+    memset(g_ev, 0, sizeof g_ev);
+    w.on_event = count_all;
+    p = ge_world_spawn(&w, &md, &s, 0, 100, 160, 100);
+    int v = ge_world_spawn(&w, &pd, &s, 1, 112, 160, 100);
+    run(&w, 2);
+    press(&w, p, (GeIntent){ .attack_pressed = true });
+    run(&w, 10);
+    CHECK(w.ents[p].meter == 4);
+    w.ents[v].active = false;
+    run(&w, 20);
+    press(&w, p, (GeIntent){ .skill_pressed = true });
+    CHECK(w.ents[p].state != GE_ST_ATTACK);                       /* 4 < 15: refused */
+    w.ents[p].meter = 20;
+    press(&w, p, (GeIntent){ .skill_pressed = true });
+    CHECK(w.ents[p].state == GE_ST_ATTACK && w.ents[p].meter == 5);
+    run(&w, 20);
+    w.ents[p].meter = 20;
+    for (int i = 0; i < 10; i++) { w.intents[p].channel_held = true; run(&w, 1); }
+    CHECK(w.ents[p].state == GE_ST_CHANNEL);
+    w.intents[p].channel_held = false; run(&w, 2);
+    CHECK(w.ents[p].state != GE_ST_CHANNEL && g_ev[GE_EV_CHANNEL] == 0 && w.ents[p].meter == 20); /* let go: cancelled */
+    for (int i = 0; i < 40; i++) { w.intents[p].channel_held = true; run(&w, 1); }
+    CHECK(g_ev[GE_EV_CHANNEL] == 1 && w.ents[p].meter <= 10);
+    ge_world_free(&w);
+    ge_sprite_free(&s);
+}
+
+static void test_armor_grounded_zoom_font(void) {
+    puts("armour / floor shots / zoom / font");
+    GeSprite s = make_sprite();
+    GeActorDef d = make_def(&s), boss = make_def(&s);
+    boss.armored = true;
+    GeWorld w;
+    make_world(&w);
+    int a = ge_world_spawn(&w, &d, &s, 0, 100, 160, 100);
+    int b = ge_world_spawn(&w, &boss, &s, 1, 112, 160, 100);
+    run(&w, 3);
+    press(&w, a, (GeIntent){ .attack_pressed = true });
+    run(&w, 6);
+    CHECK(w.ents[b].hp == 90 && w.ents[b].state != GE_ST_HURT && fabsf(w.ents[b].vel.x) < 0.01f); /* damaged, not flinched */
+    ge_world_free(&w);
+
+    /* a grounded shot rides the floor and dies at the ledge */
+    make_world(&w);
+    for (int y = 10; y < 12; y++) w.map.type[y * 40 + 20] = GE_TILE_EMPTY;   /* a hole at column 20 */
+    GeShotDef wave = { .speed = 3, .w = 12, .h = 14, .damage = 1, .life = 200, .grounded = true, .pierce = true };
+    int si = ge_world_shoot(&w, 1, -1, &wave, 200, 140, 1);
+    run(&w, 5);
+    CHECK(w.shots[si].active && fabsf(w.shots[si].pos.y - (160.0f - 7.0f)) < 0.01f);
+    run(&w, 60);
+    CHECK(!w.shots[si].active);
+    ge_world_free(&w);
+
+    /* zoom: entities are drawn magnified around the camera */
+    GeSprite red;
+    memset(&red, 0, sizeof red);
+    red.sheet = ge_image_create(16, 16);
+    for (int i = 0; i < 256; i++) red.sheet.px[i] = GE_RGB(255, 0, 0);
+    ge_sprite_parse(&red, "cell 16 16\norigin 8 15\nclip idle loop\n frame 0 10\n");
+    GeActorDef rd = make_def(&red);
+    rd.clip_idle = rd.clip_run = rd.clip_jump = rd.clip_fall = 0;
+    make_world(&w);
+    w.zoom = 2;
+    int e = ge_world_spawn(&w, &rd, &red, 1, 100, 100, 1);
+    w.ents[e].external = true;                                 /* hold it still */
+    GeImage fb = ge_image_create(400, 240);
+    ge_world_draw(&w, &fb);
+    CHECK(fb.px[180 * 400 + 200] == GE_RGB(255, 0, 0));       /* (100-8..100+8, 85..100) x2 covers (200, 180) */
+    CHECK(fb.px[180 * 400 + 100] != GE_RGB(255, 0, 0));       /* where it would sit unzoomed: nothing */
+    ge_image_free(&fb);
+    ge_world_free(&w);
+    ge_sprite_free(&red);
+
+    CHECK(ge_text_width("AB", 1) == 11 && ge_text_width("AB", 2) == 22 && ge_text_width("", 1) == 0);
+    GeImage t = ge_image_create(20, 10);
+    ge_text(&t, 0, 0, "I", GE_WHITE, 1);
+    CHECK(t.px[0 * 20 + 2] == GE_WHITE && t.px[3 * 20 + 2] == GE_WHITE && t.px[3 * 20 + 0] == 0);
+    ge_image_free(&t);
+    ge_sprite_free(&s);
+}
+
 static void test_gfx(void) {
     puts("gfx");
     GeImage a = ge_image_create(4, 2), b = ge_image_create(4, 2);
@@ -226,7 +501,7 @@ static void test_physics(void) {
     }
     CHECK_NEAR(w.ents[a].pos.y, 7 * 16.0f);        /* passed through from below, landed on top */
     memset(&w.intents[a], 0, sizeof w.intents[a]);
-    w.intents[a].drop_held = true; w.intents[a].jump_pressed = true;
+    w.intents[a].move_y = 1; w.intents[a].jump_pressed = true;
     run(&w, 1);
     w.intents[a].jump_pressed = false;
     run(&w, 60);
@@ -292,19 +567,6 @@ static void test_combat(void) {
     int guard = 0;
     while (w.ents[vic].hp == 100 && guard++ < 30) run(&w, 1);
     CHECK(w.ents[vic].hitstop > 0 && w.ents[atk].hitstop > 0);
-
-    /* a different depth lane dodges the swing entirely */
-    ge_world_free(&w);
-    make_world(&w);
-    w.on_event = count_events;
-    g_hits = 0;
-    atk = ge_world_spawn(&w, &d, &s, 0, 100, 160, 100);
-    vic = ge_world_spawn(&w, &d, &s, 1, 112, 160, 100);
-    w.ents[vic].lane = GE_LANE_BACK;
-    run(&w, 3);
-    w.intents[atk].attack_pressed = true; run(&w, 1);
-    w.intents[atk].attack_pressed = false; run(&w, 30);
-    CHECK(w.ents[vic].hp == 100 && g_hits == 0);
 
     /* combo chain: pressing attack again inside the cancel window advances a1 -> a2 -> a3 */
     ge_world_free(&w);
@@ -391,6 +653,9 @@ int main(void) {
     test_parser_and_anim();
     test_asset_prep_roundtrip();
     test_layers_file();
+    test_moveset();
+    test_contact_shots_meter();
+    test_armor_grounded_zoom_font();
     test_gfx();
     test_tilemap();
     test_physics();

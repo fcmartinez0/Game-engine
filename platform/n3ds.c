@@ -22,7 +22,7 @@ int ge_plat_poll(uint32_t *buttons) {
     if (!aptMainLoop()) return 0;
     hidScanInput();
     u32 k = hidKeysHeld();
-    if (k & KEY_SELECT) return 0;
+    if ((k & KEY_START) && (k & KEY_SELECT)) return 0; /* Start+Select quits */
     circlePosition cp;
     hidCircleRead(&cp);
     uint32_t b = 0;
@@ -30,12 +30,14 @@ int ge_plat_poll(uint32_t *buttons) {
     if ((k & KEY_DRIGHT) || cp.dx > 40) b |= GE_BTN_RIGHT;
     if ((k & KEY_DUP) || cp.dy > 40) b |= GE_BTN_UP;
     if ((k & KEY_DDOWN) || cp.dy < -40) b |= GE_BTN_DOWN;
-    if (k & KEY_B) b |= GE_BTN_JUMP;
-    if (k & KEY_Y) b |= GE_BTN_ATTACK;
-    if (k & KEY_A) b |= GE_BTN_DASH;
-    if (k & KEY_L) b |= GE_BTN_LANE_BACK;
-    if (k & KEY_R) b |= GE_BTN_LANE_FRONT;
+    if (k & KEY_A) b |= GE_BTN_A;
+    if (k & KEY_B) b |= GE_BTN_B;
+    if (k & KEY_X) b |= GE_BTN_X;
+    if (k & KEY_Y) b |= GE_BTN_Y;
+    if (k & KEY_L) b |= GE_BTN_L;
+    if (k & KEY_R) b |= GE_BTN_R;
     if (k & KEY_START) b |= GE_BTN_START;
+    if (k & KEY_SELECT) b |= GE_BTN_SELECT;
     *buttons = b;
     return 1;
 }

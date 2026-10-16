@@ -166,6 +166,29 @@ void ge_blit(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy, int f
     }
 }
 
+void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy, int scale, int flags, uint32_t tint) {
+    if (scale <= 1) { ge_blit(dst, src, sr, dx, dy, flags, tint); return; }
+    if (sr.x < 0 || sr.y < 0 || sr.x + sr.w > src->w || sr.y + sr.h > src->h) return;
+    int w = sr.w * scale, h = sr.h * scale;
+    int x0 = dx < 0 ? 0 : dx, y0 = dy < 0 ? 0 : dy;
+    int x1 = dx + w > dst->w ? dst->w : dx + w, y1 = dy + h > dst->h ? dst->h : dy + h;
+    bool plain = tint == GE_WHITE;
+    int flash = flags & GE_FLASH;
+    for (int y = y0; y < y1; y++) {
+        int ly = (y - dy) / scale;
+        int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
+        const uint32_t *srow = src->px + (size_t)sy * src->w;
+        uint32_t *drow = dst->px + (size_t)y * dst->w;
+        for (int x = x0; x < x1; x++) {
+            int lx = (x - dx) / scale;
+            uint32_t s = srow[(flags & GE_FLIP_X) ? sr.x + sr.w - 1 - lx : sr.x + lx];
+            if (!(s >> 24)) continue;
+            if (!plain) s = px_tint(s, tint, flash);
+            drow[x] = px_blend(drow[x], s, flags & ~GE_OPAQUE);
+        }
+    }
+}
+
 void ge_blit_wrap_x(GeImage *dst, const GeImage *src, int scroll_x, int dy, int flags, uint32_t tint) {
     if (src->w <= 0) return;
     int off = scroll_x % src->w;

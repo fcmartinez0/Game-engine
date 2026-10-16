@@ -3,19 +3,23 @@
 
 #include <stdint.h>
 
-/* Abstract buttons. Each platform backend maps its hardware onto these
- * (3DS: D-pad/circle pad, B=jump, Y=attack, A=dash, L/R=depth lane). */
+/* Physical buttons, named by *position* in the Nintendo layout (A right,
+ * B bottom, X top, Y left). Each game mode decides what they mean -- the
+ * overworld and the fighting game use different layouts. Backends map their
+ * hardware here: an Xbox pad's bottom button is GE_BTN_B, its right one GE_BTN_A. */
 enum {
     GE_BTN_LEFT = 1 << 0,
     GE_BTN_RIGHT = 1 << 1,
     GE_BTN_UP = 1 << 2,
     GE_BTN_DOWN = 1 << 3,
-    GE_BTN_JUMP = 1 << 4,
-    GE_BTN_ATTACK = 1 << 5,
-    GE_BTN_DASH = 1 << 6,
-    GE_BTN_LANE_BACK = 1 << 7,  /* step into the background lane */
-    GE_BTN_LANE_FRONT = 1 << 8, /* step into the foreground lane */
-    GE_BTN_START = 1 << 9
+    GE_BTN_A = 1 << 4,
+    GE_BTN_B = 1 << 5,
+    GE_BTN_X = 1 << 6,
+    GE_BTN_Y = 1 << 7,
+    GE_BTN_L = 1 << 8,
+    GE_BTN_R = 1 << 9,
+    GE_BTN_START = 1 << 10,
+    GE_BTN_SELECT = 1 << 11
 };
 
 typedef struct {

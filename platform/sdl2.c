@@ -47,28 +47,35 @@ int ge_plat_poll(uint32_t *buttons) {
     }
     const Uint8 *k = SDL_GetKeyboardState(NULL);
     uint32_t b = 0;
+    /* arrows or WASD to move; face buttons on Z X C V (or K J L I), shoulders on Q E (or U O) */
     if (k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_A]) b |= GE_BTN_LEFT;
     if (k[SDL_SCANCODE_RIGHT] || k[SDL_SCANCODE_D]) b |= GE_BTN_RIGHT;
     if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_W]) b |= GE_BTN_UP;
     if (k[SDL_SCANCODE_DOWN] || k[SDL_SCANCODE_S]) b |= GE_BTN_DOWN;
-    if (k[SDL_SCANCODE_Z] || k[SDL_SCANCODE_SPACE]) b |= GE_BTN_JUMP;
-    if (k[SDL_SCANCODE_X] || k[SDL_SCANCODE_J]) b |= GE_BTN_ATTACK;
-    if (k[SDL_SCANCODE_C] || k[SDL_SCANCODE_K]) b |= GE_BTN_DASH;
-    if (k[SDL_SCANCODE_Q]) b |= GE_BTN_LANE_BACK;
-    if (k[SDL_SCANCODE_E]) b |= GE_BTN_LANE_FRONT;
+    if (k[SDL_SCANCODE_Z] || k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_K]) b |= GE_BTN_B;
+    if (k[SDL_SCANCODE_X] || k[SDL_SCANCODE_J]) b |= GE_BTN_Y;
+    if (k[SDL_SCANCODE_C] || k[SDL_SCANCODE_L]) b |= GE_BTN_A;
+    if (k[SDL_SCANCODE_V] || k[SDL_SCANCODE_I]) b |= GE_BTN_X;
+    if (k[SDL_SCANCODE_Q] || k[SDL_SCANCODE_U]) b |= GE_BTN_L;
+    if (k[SDL_SCANCODE_E] || k[SDL_SCANCODE_O]) b |= GE_BTN_R;
     if (k[SDL_SCANCODE_RETURN]) b |= GE_BTN_START;
+    if (k[SDL_SCANCODE_BACKSPACE]) b |= GE_BTN_SELECT;
     if (g_pad) {
         int lx = SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX);
+        int ly = SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTY);
         if (lx < -12000 || SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) b |= GE_BTN_LEFT;
         if (lx > 12000 || SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) b |= GE_BTN_RIGHT;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_UP)) b |= GE_BTN_UP;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) b |= GE_BTN_DOWN;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_A)) b |= GE_BTN_JUMP;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X)) b |= GE_BTN_ATTACK;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_B)) b |= GE_BTN_DASH;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) b |= GE_BTN_LANE_BACK;
-        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) b |= GE_BTN_LANE_FRONT;
+        if (ly < -12000 || SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_UP)) b |= GE_BTN_UP;
+        if (ly > 12000 || SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) b |= GE_BTN_DOWN;
+        /* SDL names buttons Xbox-style (A = bottom); map by position */
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_A)) b |= GE_BTN_B;
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_B)) b |= GE_BTN_A;
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X)) b |= GE_BTN_Y;
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_Y)) b |= GE_BTN_X;
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) b |= GE_BTN_L;
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) b |= GE_BTN_R;
         if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_START)) b |= GE_BTN_START;
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_BACK)) b |= GE_BTN_SELECT;
     }
     *buttons = b;
     return 1;

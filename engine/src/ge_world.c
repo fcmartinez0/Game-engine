@@ -27,7 +27,7 @@ int ge_tilemap_from_ascii(GeTilemap *m, const char *const *rows, int nrows) {
     for (int y = 0; y < nrows; y++)
         for (int x = 0; x < w; x++) {
             char c = rows[y][x];
-            m->type[y * w + x] = c == '#' ? GE_TILE_SOLID : c == '=' ? GE_TILE_ONEWAY : GE_TILE_EMPTY;
+            m->type[y * w + x] = c == '#' ? GE_TILE_SOLID : c == '=' ? GE_TILE_ONEWAY : c == '^' ? GE_TILE_SPIKE : GE_TILE_EMPTY;
         }
     return 0;
 }
@@ -45,8 +45,9 @@ void ge_world_init(GeWorld *w, int view_w, int view_h, uint32_t seed) {
 
 void ge_world_free(GeWorld *w) {
     ge_tilemap_free(&w->map);
-    ge_image_free(&w->tileset);
-    for (int i = 0; i < w->nlayers; i++) ge_image_free(&w->layers[i].img);
+    if (!w->tileset_borrowed) ge_image_free(&w->tileset);
+    for (int i = 0; i < w->nlayers; i++)
+        if (!w->layers[i].borrowed) ge_image_free(&w->layers[i].img);
     w->nlayers = 0;
 }
 
@@ -69,11 +70,17 @@ int ge_world_spawn(GeWorld *w, const GeActorDef *def, const GeSprite *spr, int t
         e->facing = 1;
         e->hp = e->max_hp = hp;
         e->def = def;
+        e->ammo = def->ammo_max;
+        e->air_jumps_left = def->air_jumps;
         e->anim.spr = spr;
         e->anim.clip = def->clip_idle;
         return i;
     }
     return -1;
+}
+
+void ge_world_event(GeWorld *w, GeEventType ev, int a, int b) {
+    if (w->on_event) w->on_event(w->user, ev, a, b);
 }
 
 /* ---- particles --------------------------------------------------------- */
@@ -87,6 +94,16 @@ void ge_world_emit(GeWorld *w, float x, float y, float vx, float vy, float g, in
     }
 }
 
+void ge_world_spark(GeWorld *w, float x, float y, int dir, int count, uint32_t color) {
+    ge_world_emit(w, x - 4, y - 4, 0, 0, 0, 4, GE_ARGB(255, 255, 255, 230), 8, GE_P_ADD); /* impact flash */
+    for (int i = 0; i < count; i++) {
+        float ang = ge_rng_range(&w->rng, -2.6f, 2.6f) + (dir >= 0 ? 0.0f : 3.14159f);
+        float sp = ge_rng_range(&w->rng, 1.0f, 3.2f);
+        ge_world_emit(w, x, y, cosf(ang) * sp, sinf(ang) * sp - 0.6f, 0.12f,
+                      10 + (int)ge_rng_range(&w->rng, 0, 8), color, 2, GE_P_ADD);
+    }
+}
+
 int ge_world_particle_count(const GeWorld *w) {
     int n = 0;
     for (int i = 0; i < GE_MAX_PARTS; i++) n += w->parts[i].life > 0;
@@ -95,6 +112,31 @@ int ge_world_particle_count(const GeWorld *w) {
 
 void ge_world_shake(GeWorld *w, float amount) {
     if (amount > w->cam.shake) w->cam.shake = amount;
+}
+
+/* ---- shots ------------------------------------------------------------- */
+
+int ge_world_shoot(GeWorld *w, int team, int owner, const GeShotDef *def, float x, float y, int facing) {
+    for (int i = 0; i < GE_MAX_SHOTS; i++) {
+        GeShot *s = &w->shots[i];
+        if (s->active) continue;
+        memset(s, 0, sizeof *s);
+        s->active = true;
+        s->team = team; s->owner = owner; s->def = def;
+        s->pos = (GeVec2){ x, y };
+        s->vel = (GeVec2){ (float)facing * def->speed, def->vy };
+        s->facing = facing;
+        s->life = def->life;
+        s->anim.spr = def->spr;
+        s->anim.clip = def->clip;
+        ge_world_event(w, GE_EV_SHOOT, owner, i);
+        return i;
+    }
+    return -1;
+}
+
+GeRect ge_shot_box(const GeShot *s) {
+    return (GeRect){ s->pos.x - s->def->w * 0.5f, s->pos.y - s->def->h * 0.5f, s->def->w, s->def->h };
 }
 
 /* ---- queries ----------------------------------------------------------- */
@@ -107,6 +149,15 @@ float ge_world_ground_y(const GeWorld *w, float x, float y) {
         if (t == GE_TILE_SOLID || t == GE_TILE_ONEWAY) return (float)(r * GE_TILE);
     }
     return -1.0f;
+}
+
+bool ge_world_touches_tile(const GeWorld *w, GeRect r, int tile_type) {
+    int tx0 = (int)floorf(r.x / GE_TILE), tx1 = (int)floorf((r.x + r.w - 0.01f) / GE_TILE);
+    int ty0 = (int)floorf(r.y / GE_TILE), ty1 = (int)floorf((r.y + r.h - 0.01f) / GE_TILE);
+    for (int ty = ty0; ty <= ty1; ty++)
+        for (int tx = tx0; tx <= tx1; tx++)
+            if (tx >= 0 && tx < w->map.w && ge_tilemap_get(&w->map, tx, ty) == tile_type) return true;
+    return false;
 }
 
 GeRect ge_entity_hurtbox(const GeEntity *e) {
@@ -149,8 +200,10 @@ static void update_camera(GeWorld *w) {
         c->x += (tx - c->x) * c->smooth;
         c->y += (ty - c->y) * c->smooth;
     }
-    float maxx = (float)(w->map.w * GE_TILE - c->vw), maxy = (float)(w->map.h * GE_TILE - c->vh);
-    c->x = ge_clampf(c->x, 0.0f, maxx > 0 ? maxx : 0.0f);
+    float minx = 0.0f, maxx = (float)(w->map.w * GE_TILE - c->vw), maxy = (float)(w->map.h * GE_TILE - c->vh);
+    if (c->locked) { minx = c->lock_x0; maxx = c->lock_x1 - c->vw; }
+    if (maxx < minx) maxx = minx;
+    c->x = ge_clampf(c->x, minx, maxx);
     c->y = ge_clampf(c->y, 0.0f, maxy > 0 ? maxy : 0.0f);
     if (c->shake > 0.3f) {
         c->shake_x = ge_rng_range(&w->rng, -1.0f, 1.0f) * c->shake;
@@ -164,8 +217,9 @@ static void update_camera(GeWorld *w) {
 void ge_world_update(GeWorld *w) {
     w->tick++;
     for (int i = 0; i < GE_MAX_ENTS; i++)
-        if (w->ents[i].active) ge_actor_update(w, i);
-    ge_combat_resolve(w);
+        if (w->ents[i].active && !w->ents[i].external) ge_actor_update(w, i);
+    ge_shots_update(w);
+    if (!w->custom_combat) ge_combat_resolve(w);
     update_particles(w);
     update_camera(w);
 }
@@ -179,47 +233,52 @@ static void draw_layer(const GeWorld *w, GeImage *fb, const GeParallaxLayer *l, 
     ge_blit_wrap_x(fb, &l->img, sx, dy, (l->additive ? GE_ADDITIVE : 0) | (l->opaque ? GE_OPAQUE : 0), tint);
 }
 
-static void draw_tiles(const GeWorld *w, GeImage *fb, int camx, int camy) {
+static void draw_tiles(const GeWorld *w, GeImage *fb, int camx, int camy, int z) {
     const GeTilemap *m = &w->map;
-    int tx0 = (int)floorf((float)camx / GE_TILE), tx1 = (camx + fb->w) / GE_TILE + 1;
-    int ty0 = (int)floorf((float)camy / GE_TILE), ty1 = (camy + fb->h) / GE_TILE + 1;
+    if (!w->tileset.px) return;
+    int tx0 = (int)floorf((float)camx / GE_TILE), tx1 = (camx + fb->w / z) / GE_TILE + 1;
+    int ty0 = (int)floorf((float)camy / GE_TILE), ty1 = (camy + fb->h / z) / GE_TILE + 1;
     for (int ty = ge_clampi(ty0, 0, m->h); ty < ge_clampi(ty1 + 1, 0, m->h); ty++)
         for (int tx = ge_clampi(tx0, 0, m->w); tx < ge_clampi(tx1 + 1, 0, m->w); tx++) {
             if (m->type[ty * m->w + tx] == GE_TILE_EMPTY) continue;
             GeIRect sr = { m->vis[ty * m->w + tx] * GE_TILE, 0, GE_TILE, GE_TILE };
-            ge_blit(fb, &w->tileset, sr, tx * GE_TILE - camx, ty * GE_TILE - camy, 0, GE_WHITE);
+            ge_blit_scaled(fb, &w->tileset, sr, (tx * GE_TILE - camx) * z, (ty * GE_TILE - camy) * z, z, 0, GE_WHITE);
         }
 }
 
-static void draw_entity(const GeWorld *w, GeImage *fb, const GeEntity *e, int camx, int camy) {
-    /* lanes: a few pixels of vertical offset and a cool shade sell the depth */
-    int lane_dy = e->lane * 5;
-    uint32_t tint = e->lane < 0 ? GE_RGB(165, 172, 205) : GE_WHITE;
-    int sx = (int)floorf(e->pos.x) - camx, sy = (int)floorf(e->pos.y) - camy + lane_dy;
+static void draw_entity(const GeWorld *w, GeImage *fb, const GeEntity *e, int camx, int camy, int z) {
+    int sx = ((int)floorf(e->pos.x) - camx) * z, sy = ((int)floorf(e->pos.y) - camy) * z;
 
     /* soft contact shadow, shrinking as the entity leaves the ground */
     float gy = ge_world_ground_y(w, e->pos.x, e->pos.y - 1.0f);
-    if (gy >= 0.0f && e->state != GE_ST_DEAD) {
+    if (gy >= 0.0f && e->state != GE_ST_DEAD && !e->def->flying) {
         float height = gy - e->pos.y;
         if (height < 0) height = 0;
-        int hw = (int)(e->def->body_w * 0.8f - height * 0.12f);
+        int hw = (int)(e->def->body_w * 0.8f - height * 0.12f) * z;
         if (hw >= 2) {
-            int gsy = (int)gy - camy + lane_dy;
-            ge_fill_rect(fb, sx - hw / 2 + 1, gsy - 1, hw - 2, 1, GE_ARGB(70, 0, 0, 0), 0);
-            ge_fill_rect(fb, sx - hw / 2, gsy, hw, 1, GE_ARGB(90, 0, 0, 0), 0);
-            ge_fill_rect(fb, sx - hw / 2 + 1, gsy + 1, hw - 2, 1, GE_ARGB(70, 0, 0, 0), 0);
+            int gsy = ((int)gy - camy) * z;
+            ge_fill_rect(fb, sx - hw / 2 + z, gsy - z, hw - 2 * z, z, GE_ARGB(70, 0, 0, 0), 0);
+            ge_fill_rect(fb, sx - hw / 2, gsy, hw, z, GE_ARGB(90, 0, 0, 0), 0);
+            ge_fill_rect(fb, sx - hw / 2 + z, gsy + z, hw - 2 * z, z, GE_ARGB(70, 0, 0, 0), 0);
         }
     }
 
     if (e->state == GE_ST_DEAD && e->dead_timer < 30 && (e->dead_timer & 3) < 2) return;
-    if (e->invuln > 0 && e->state != GE_ST_HURT && ((e->invuln / 3) & 1)) return;
+    if (!e->external && e->invuln > 0 && e->state != GE_ST_HURT && e->state != GE_ST_DASH &&
+        e->state != GE_ST_ATTACK && ((e->invuln / 3) & 1)) return;
 
-    int flags = 0;
-    if (e->flash > 0) { flags |= GE_FLASH; tint = GE_WHITE; }
-    ge_anim_draw(&e->anim, fb, sx, sy, e->facing < 0, flags, tint);
+    ge_anim_draw_scaled(&e->anim, fb, sx, sy, e->facing < 0, e->flash > 0 ? GE_FLASH : 0, GE_WHITE, z);
 }
 
-static void draw_particles(const GeWorld *w, GeImage *fb, int camx, int camy) {
+static void draw_shots(const GeWorld *w, GeImage *fb, int camx, int camy, int z) {
+    for (int i = 0; i < GE_MAX_SHOTS; i++) {
+        const GeShot *s = &w->shots[i];
+        if (!s->active || !s->def->spr) continue;
+        ge_anim_draw_scaled(&s->anim, fb, ((int)floorf(s->pos.x) - camx) * z, ((int)floorf(s->pos.y) - camy) * z, s->facing < 0, 0, GE_WHITE, z);
+    }
+}
+
+static void draw_particles(const GeWorld *w, GeImage *fb, int camx, int camy, int z) {
     for (int i = 0; i < GE_MAX_PARTS; i++) {
         const GeParticle *p = &w->parts[i];
         if (p->life <= 0) continue;
@@ -229,35 +288,37 @@ static void draw_particles(const GeWorld *w, GeImage *fb, int camx, int camy) {
             a = (int)((float)a * (0.25f + 0.75f * t));
         }
         uint32_t c = ((uint32_t)a << 24) | (p->color & 0x00FFFFFFu);
-        ge_fill_rect(fb, (int)p->x - camx, (int)p->y - camy, p->size, p->size, c, (p->flags & GE_P_ADD) ? GE_ADDITIVE : 0);
+        ge_fill_rect(fb, ((int)p->x - camx) * z, ((int)p->y - camy) * z, p->size * z, p->size * z, c, (p->flags & GE_P_ADD) ? GE_ADDITIVE : 0);
     }
 }
 
 void ge_world_draw(GeWorld *w, GeImage *fb) {
     int camx = (int)floorf(w->cam.x + w->cam.shake_x);
     int camy = (int)floorf(w->cam.y + w->cam.shake_y);
+    int z = w->zoom > 1 ? w->zoom : 1;
+    int lcamy = z > 1 ? 0 : camy;   /* a zoomed view keeps the backdrop framed as authored */
 
     ge_clear(fb, GE_RGB(8, 6, 16));
     for (int i = 0; i < w->nlayers; i++)
         if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
-            draw_layer(w, fb, &w->layers[i], camx, camy);
+            draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
 
-    draw_tiles(w, fb, camx, camy);
+    draw_tiles(w, fb, camx, camy, z);
+    if (w->draw_props) w->draw_props(w->user, fb, camx, camy);
 
-    /* back to front; within a lane enemies first so the player is never hidden */
-    for (int lane = GE_LANE_BACK; lane <= GE_LANE_FRONT; lane++)
-        for (int team = 1; team >= 0; team--)
-            for (int i = 0; i < GE_MAX_ENTS; i++) {
-                const GeEntity *e = &w->ents[i];
-                if (e->active && e->lane == lane && (e->team != 0) == (team != 0))
-                    draw_entity(w, fb, e, camx, camy);
-            }
+    /* enemies first so the player is never hidden behind them */
+    for (int team = 1; team >= 0; team--)
+        for (int i = 0; i < GE_MAX_ENTS; i++) {
+            const GeEntity *e = &w->ents[i];
+            if (e->active && (e->team != 0) == (team != 0)) draw_entity(w, fb, e, camx, camy, z);
+        }
 
-    draw_particles(w, fb, camx, camy);
+    draw_shots(w, fb, camx, camy, z);
+    draw_particles(w, fb, camx, camy, z);
 
     for (int i = 0; i < w->nlayers; i++)
         if (w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
-            draw_layer(w, fb, &w->layers[i], camx, camy);
+            draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
 
     if (w->vignette > 0 && !w->low_detail) ge_vignette(fb, w->vignette, 150);
 }

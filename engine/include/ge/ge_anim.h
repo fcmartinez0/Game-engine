@@ -13,7 +13,7 @@
  * Clips are normally written in a small text format (see ge_sprite_parse). */
 
 #define GE_ANIM_MAX_FRAMES 16
-#define GE_SPRITE_MAX_CLIPS 32
+#define GE_SPRITE_MAX_CLIPS 64
 #define GE_NAME_LEN 24
 
 typedef struct {
@@ -22,6 +22,9 @@ typedef struct {
     bool has_hit;
     GeRect hit;     /* relative to the sprite origin, facing right */
 } GeAnimFrame;
+
+/* how an attack must be blocked in the fighting-game mode */
+enum { GE_GUARD_MID = 0, GE_GUARD_LOW = 1, GE_GUARD_HIGH = 2, GE_GUARD_NONE = 3 };
 
 typedef struct {
     char name[GE_NAME_LEN];
@@ -33,11 +36,20 @@ typedef struct {
     int damage;
     float kb_x, kb_y;   /* knockback applied to the victim (x is away from attacker) */
     float lunge;        /* forward speed given to the attacker when the clip starts */
+    float rise;         /* upward speed given to the attacker when the clip starts (rising slashes) */
     int hitstop;        /* freeze frames on both fighters when it connects */
     int stun;           /* victim hit-stun ticks */
     int cancel_from;    /* frame index from which a buffered attack may chain; -1 = never */
     char next_name[GE_NAME_LEN];
     int next;           /* resolved index of next_name, or -1 */
+    float pogo;         /* attacker bounces up at this speed when it hits (down-slash) */
+    float recoil;       /* attacker is pushed back at this speed when it hits */
+    int shoot;          /* frame index that fires the actor's projectile, -1 = none */
+    int inv;            /* attacker is invulnerable for this many ticks from the start */
+    /* fighting-game mode */
+    int guard;          /* GE_GUARD_*: mid blocks either way, low must crouch, high must stand */
+    int blockstun, chip;
+    bool knockdown;     /* the victim is floored even from a grounded hit */
 } GeClip;
 
 typedef struct {
@@ -59,6 +71,9 @@ typedef struct {
  *   frame 8 4                   # startup
  *   frame 9 3 hit=6,-27,28,22   # active: hitbox x,y,w,h relative to origin
  *   frame 10 6                  # recovery
+ *
+ * More attack keys: pogo=F recoil=F rise=F shoot=N inv=N  (overworld)
+ *                   guard=mid|low|high|none bstun=N chip=N kd=1  (fighting game)
  */
 int ge_sprite_parse(GeSprite *s, const char *text);
 int ge_sprite_find_clip(const GeSprite *s, const char *name); /* -1 if absent */
@@ -77,5 +92,6 @@ void ge_anim_play(GeAnimator *a, int clip, bool restart);
 void ge_anim_update(GeAnimator *a);
 const GeAnimFrame *ge_anim_frame(const GeAnimator *a);
 void ge_anim_draw(const GeAnimator *a, GeImage *dst, int x, int y, bool flip, int flags, uint32_t tint);
+void ge_anim_draw_scaled(const GeAnimator *a, GeImage *dst, int x, int y, bool flip, int flags, uint32_t tint, int scale);
 
 #endif
