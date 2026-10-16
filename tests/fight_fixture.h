@@ -3,6 +3,7 @@
 #define FIGHT_FIXTURE_H
 #include "ge/ge_fight.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_checks, g_failed;

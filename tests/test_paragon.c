@@ -2,6 +2,7 @@
 
 #include "fight_fixture.h"
 #include "ge/ge_model.h"
+#include "ge/ge_paragon.h"
 
 static GeFightInput poke(void) { return btn(0, 0, GE_FB_L); }
 
@@ -118,6 +119,100 @@ static void test_frame_data(void) {
     CHECK(n >= start - 3 && n <= start + 3);        /* the estimate matches the real recovery */
 }
 
+
+/* ---- the brain ---------------------------------------------------------- */
+
+typedef struct { int winner, ticks, hp_lost, hp_dealt; } Result;
+typedef GeFightInput (*BotFn)(int tick);
+
+/* A habitual player: walks in, throws the same medium punch whenever close, never blocks. */
+static GeFightInput habit_bot(int tick) {
+    (void)tick;
+    GeEntity *a = E(0), *b = E(1);
+    float gap = fabsf(b->pos.x - a->pos.x);
+    int toward = b->pos.x > a->pos.x ? 1 : -1;
+    if (F.f[0].state != GE_FS_STAND && F.f[0].state != GE_FS_CROUCH) return NONE;
+    if (gap > 44) return dirs(toward, 0);
+    return (tick & 7) == 0 ? btn(0, 0, GE_FB_M) : NONE;
+}
+
+/* `bot` null = the built-in CPU at level 3. Returns the result of one first-to-`rounds` match. */
+static Result run_match(uint32_t seed, BotFn bot, GeParagon *brain, GePlayerModel *model, int rounds, bool undying) {
+    if (F_live) ge_fight_free(&F);
+    BOSS = D1;
+    BOSS.undying = undying;
+    BOSS.clip_finisher = BOSS.clip_idle;
+    ge_fight_init(&F, &D0, &spr, &BOSS, &spr, NULL, seed);
+    F_live = true;
+    F.rounds_to_win = rounds;
+    ge_fight_observe(&F, model, 0);
+    Result r = { -1, 0, 0, 0 };
+    int tick = 0, hp1 = BOSS.max_hp;
+    for (; tick < 60000 && !F.over; tick++) {
+        GeFightInput a = NONE, b = NONE;
+        if (F.phase == GE_FP_FIGHT) {
+            if (bot) a = bot(tick); else ge_fight_cpu(&F, 0, 3, &a);
+            ge_paragon_think(brain, &F, 1, &b);
+        }
+        step(a, b);
+        if (E(1)->hp < hp1) { r.hp_lost += hp1 - E(1)->hp; }
+        hp1 = E(1)->hp > hp1 ? E(1)->hp : E(1)->hp;   /* refills between rounds are not damage */
+        if (F.phase == GE_FP_INTRO) hp1 = E(1)->hp;
+    }
+    r.winner = F.winner;
+    r.ticks = tick;
+    return r;
+}
+
+static void test_brain(void) {
+    puts("paragon brain");
+    /* 1. against the built-in level-3 CPU, with nothing learned yet */
+    int wins = 0, n = 12;
+    for (int sd = 1; sd <= n; sd++) {
+        GePlayerModel M; ge_model_init(&M);
+        GeParagon P; ge_paragon_init(&P, &M);
+        ge_paragon_set_learn(&P, 0, 0);
+        Result r = run_match(100 + sd, NULL, &P, &M, 2, false);
+        wins += r.winner == 1;
+    }
+    printf("  untrained paragon vs level-3 CPU: %d / %d matches won\n", wins, n);
+    CHECK(wins >= n * 3 / 4);
+
+    /* 2. the same, fully grown */
+    wins = 0;
+    for (int sd = 1; sd <= n; sd++) {
+        GePlayerModel M; ge_model_init(&M);
+        GeParagon P; ge_paragon_init(&P, &M);
+        ge_paragon_set_learn(&P, 100, 1);
+        Result r = run_match(100 + sd, NULL, &P, &M, 2, false);
+        wins += r.winner == 1;
+    }
+    printf("  grown paragon vs level-3 CPU:     %d / %d matches won\n", wins, n);
+    CHECK(wins >= n * 11 / 12);
+
+    /* 3. it learns: against one habit, an informed Paragon takes less damage than an ignorant one */
+    int lost_blank = 0, lost_taught = 0;
+    GePlayerModel taught; ge_model_init(&taught);
+    for (int sd = 1; sd <= 6; sd++) {                             /* a few earlier duels teach it */
+        GeParagon P; ge_paragon_init(&P, &taught);
+        ge_paragon_set_learn(&P, 40, 0);
+        run_match(500 + sd, habit_bot, &P, &taught, 1, false);
+    }
+    printf("  after 6 duels its confidence in the model is %.2f\n", ge_model_confidence(&taught));
+    for (int sd = 1; sd <= 10; sd++) {
+        GePlayerModel blank; ge_model_init(&blank);
+        GeParagon P; ge_paragon_init(&P, &blank);
+        ge_paragon_set_learn(&P, 40, 0);
+        lost_blank += run_match(900 + sd, habit_bot, &P, &blank, 1, false).hp_lost;
+        GePlayerModel copy = taught;
+        GeParagon Q; ge_paragon_init(&Q, &copy);
+        ge_paragon_set_learn(&Q, 40, 0);
+        lost_taught += run_match(900 + sd, habit_bot, &Q, &copy, 1, false).hp_lost;
+    }
+    printf("  damage taken vs a habitual player over 10 fights: blank memory %d, taught memory %d\n", lost_blank, lost_taught);
+    CHECK(lost_taught <= lost_blank);
+}
+
 int main(void) {
     memset(&spr, 0, sizeof spr);
     spr.sheet = ge_image_create(64, 16);
@@ -127,6 +222,7 @@ int main(void) {
     test_model_learns();
     test_finisher();
     test_frame_data();
+    test_brain();
     if (F_live) ge_fight_free(&F);
     ge_sprite_free(&spr);
     printf("%d checks, %d failed\n", g_checks, g_failed);
