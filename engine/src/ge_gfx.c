@@ -25,6 +25,11 @@ uint32_t ge_image_checksum(const GeImage *img) {
 
 /* ---- pixel blending ---------------------------------------------------- */
 
+/* x / 255, rounded, for x in 0..65535 -- without a divide. The original 3DS's
+ * ARM11 has no hardware integer divide, so a plain "/ 255" is a library call
+ * per channel per pixel. */
+static inline uint32_t div255(uint32_t x) { x += 128; return (x + (x >> 8)) >> 8; }
+
 static inline uint32_t px_blend(uint32_t d, uint32_t s, int flags) {
     uint32_t sa = s >> 24;
     if (sa == 0) return d;
@@ -40,16 +45,16 @@ static inline uint32_t px_blend(uint32_t d, uint32_t s, int flags) {
     if (sa == 255) return s;
     uint32_t da = d >> 24;
     if (da == 255) { /* opaque destination: the common case (framebuffer) */
-        int dr = (d >> 16) & 255, dg = (d >> 8) & 255, db = d & 255;
-        int r = dr + ((((int)((s >> 16) & 255) - dr) * (int)sa) / 255);
-        int g = dg + ((((int)((s >> 8) & 255) - dg) * (int)sa) / 255);
-        int b = db + ((((int)(s & 255) - db) * (int)sa) / 255);
-        return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+        uint32_t ia = 255 - sa;
+        uint32_t r = div255(((s >> 16) & 255) * sa + ((d >> 16) & 255) * ia);
+        uint32_t g = div255(((s >> 8) & 255) * sa + ((d >> 8) & 255) * ia);
+        uint32_t b = div255((s & 255) * sa + (d & 255) * ia);
+        return 0xFF000000u | (r << 16) | (g << 8) | b;
     }
     /* general "over" for textures with transparency (used when generating art) */
-    uint32_t oa = sa + da * (255 - sa) / 255;
+    uint32_t oa = sa + div255(da * (255 - sa));
     if (oa == 0) return 0;
-    uint32_t wd = da * (255 - sa) / 255;
+    uint32_t wd = div255(da * (255 - sa));
     uint32_t r = (((s >> 16) & 255) * sa + ((d >> 16) & 255) * wd) / oa;
     uint32_t g = (((s >> 8) & 255) * sa + ((d >> 8) & 255) * wd) / oa;
     uint32_t b = ((s & 255) * sa + (d & 255) * wd) / oa;
@@ -57,11 +62,11 @@ static inline uint32_t px_blend(uint32_t d, uint32_t s, int flags) {
 }
 
 static inline uint32_t px_tint(uint32_t s, uint32_t t, int flash) {
-    uint32_t a = ((s >> 24) * (t >> 24)) / 255;
+    uint32_t a = div255((s >> 24) * (t >> 24));
     if (flash) return (a << 24) | (t & 0x00FFFFFFu);
-    uint32_t r = (((s >> 16) & 255) * ((t >> 16) & 255)) / 255;
-    uint32_t g = (((s >> 8) & 255) * ((t >> 8) & 255)) / 255;
-    uint32_t b = ((s & 255) * (t & 255)) / 255;
+    uint32_t r = div255(((s >> 16) & 255) * ((t >> 16) & 255));
+    uint32_t g = div255(((s >> 8) & 255) * ((t >> 8) & 255));
+    uint32_t b = div255((s & 255) * (t & 255));
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
@@ -174,13 +179,14 @@ void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy
     int x1 = dx + w > dst->w ? dst->w : dx + w, y1 = dy + h > dst->h ? dst->h : dy + h;
     bool plain = tint == GE_WHITE;
     int flash = flags & GE_FLASH;
+    int lx0 = (x0 - dx) / scale, sub0 = (x0 - dx) % scale;   /* once per call, not per pixel */
     for (int y = y0; y < y1; y++) {
         int ly = (y - dy) / scale;
         int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
         const uint32_t *srow = src->px + (size_t)sy * src->w;
         uint32_t *drow = dst->px + (size_t)y * dst->w;
-        for (int x = x0; x < x1; x++) {
-            int lx = (x - dx) / scale;
+        int lx = lx0, sub = sub0;
+        for (int x = x0; x < x1; x++, sub = sub + 1 == scale ? (lx++, 0) : sub + 1) {
             uint32_t s = srow[(flags & GE_FLIP_X) ? sr.x + sr.w - 1 - lx : sr.x + lx];
             if (!(s >> 24)) continue;
             if (!plain) s = px_tint(s, tint, flash);

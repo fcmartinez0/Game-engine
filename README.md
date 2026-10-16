@@ -13,7 +13,7 @@ cmake -S . -B build && cmake --build build -j
 ./build/demo                       # windowed (needs SDL2)
 ./build/demo --autoplay            # a scripted bot plays it, duels included
 ./build/demo --warp 150            # start at a column (150 = just before the boss)
-ctest --test-dir build             # 155 checks, no window needed
+ctest --test-dir build             # 156 checks, no window needed
 ./build/demo_headless --autoplay --frames 3000 --dump-every 300 --dump-dir shots   # PNGs, no display
 ```
 
@@ -128,6 +128,10 @@ ge_world_load_layers(&world, "forest.layers", &line);   // or: ./build/demo --la
 
 You need a 3DS with custom firmware (Luma3DS) and the Homebrew Launcher.
 
+**Ready-made package:** `3ds/package.sh` builds the game and writes `dist/gloamwood-3ds.zip`. Unzip it onto the SD card root to get `/3ds/gloamwood/gloamwood.3dsx` plus a readme with the controls.
+
+**Dev menu and play log:** press **Select** in-game to pause and open the dev menu: speed readout, detail level, play log, god mode, warps, and "mark this moment". On the 3DS the play log is on by default and goes to `/3ds/gloamwood/log.txt`. Each session is appended, with play time, a performance line every 10 seconds, duels, deaths, the boss, your markers, and a summary when you quit with Start + Select. On desktop, pass `--log` to write `gloamwood_log.txt`.
+
 **Build.** Either install devkitPro (`dkp-pacman -S 3ds-dev`) and run:
 
 ```sh
@@ -151,7 +155,7 @@ To skip the SD card shuffle while iterating, start the launcher, press Y for net
 
 ## Testing
 
-* `engine_tests` (116 checks): the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, and the `.layers` and asset-tool round trips.
+* `engine_tests` (117 checks): the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, the 3DS screen rotation, and the `.layers` and asset-tool round trips.
 * `fight_tests` (39 checks): motion inputs (including too-slow ones, and left-facing fighters), command normals, dashes, high/low/mid blocking, chip damage, throws in and out of range, cancels only on contact, the L→M→H combo, the juggle limit, supers, invulnerable anti-airs, K.O., time over, best-of-three, and a deterministic CPU-vs-CPU match.
 * **Full run:** `--autoplay` plays the whole demo. In a 45,000-tick run (12.5 minutes of game time) the bot climbed the shaft, won all four duels (one after a retry; the champion 2-0) and reached the boss. Its best attempt got the boss down to 78 of 180 health; the boss won every time. With `--god` (a dev flag) it beats the boss and the victory screen plays. Set `GLOAM_LOG=1` to print duels, deaths and boss events.
 

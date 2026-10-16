@@ -3,6 +3,7 @@
  * knows nothing about benches, masks or goblins. */
 
 #include "demo.h"
+#include "devlog.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
 #include "ge/ge_platform.h"
@@ -60,15 +61,28 @@ typedef struct {
     int bot_climb;
 
     int kills, duels_won, duels_lost, deaths, heals;
-    bool show_perf;                       /* Select: frame-rate / CPU-time readout */
+    bool show_perf;                       /* frame-rate / CPU-time readout */
     uint64_t last_draw_us;
     float fps, update_ms, draw_ms;        /* smoothed */
+
+    /* dev menu + play log */
+    bool menu_open;
+    int menu_sel, warp_sel;
+    int detail_mode;                      /* 0 auto, 1 low, 2 full */
+    bool auto_low;                        /* what "auto" picks on this console */
+    bool log_wanted;
+    const char *console;
+    uint64_t start_us, now_us, next_sample_us;
+    struct { int frames, slow; double dt_sum, dt_max, draw_sum, draw_max, update_sum; } win, tot, duel_perf;
+    int ticks_world, ticks_duel;
     uint32_t tick;
 } Demo;
 
 static Demo g;
 static bool g_log;
-#define LOG(...) do { if (g_log) { fprintf(stderr, "[%6u] ", (unsigned)g.tick); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
+/* events go to stderr with GLOAM_LOG=1, and to the play log file when it's on */
+#define LOG(...) do { if (g_log) { fprintf(stderr, "[%6u] ", (unsigned)g.tick); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } \
+                      devlog(__VA_ARGS__); } while (0)
 
 static GeEntity *hero(void) { return &g.world.ents[g.player]; }
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
@@ -379,6 +393,7 @@ static void hero_intent(const GeInput *in) {
             p->hp = p->max_hp;
             g.bench_col = level_benches[i];
             say("RESTED. THIS BENCH IS YOUR RESPAWN POINT", 120);
+            LOG("rested at the bench in column %d", g.bench_col);
         }
     }
 }
@@ -532,6 +547,7 @@ static void begin_battle(void) {
     g.fight.rounds_to_win = s->rounds;
     if (g.first_strike) g.fight.start_hp[1] = opp->max_hp * 85 / 100;
     g.fight_live = true;
+    memset(&g.duel_perf, 0, sizeof g.duel_perf);
 }
 
 static GeFightInput fight_input(const GeInput *in) {
@@ -550,8 +566,9 @@ static GeFightInput fight_input(const GeInput *in) {
 static void end_battle(void) {
     GeEntity *p = hero();
     int ent = g.ent_of[g.duel];
-    LOG("duel over: %s vs WREN -> %s (rounds %d-%d)", level_spawns[g.duel].name, g.duel_result == 0 ? "WON" : "LOST",
-        g.fight.f[0].wins, g.fight.f[1].wins);
+    LOG("duel over: %s vs WREN -> %s (rounds %d-%d), duel ran at %.1f fps avg, worst frame %.1f ms",
+        level_spawns[g.duel].name, g.duel_result == 0 ? "WON" : "LOST", g.fight.f[0].wins, g.fight.f[1].wins,
+        g.duel_perf.dt_sum > 0 ? g.duel_perf.frames / (g.duel_perf.dt_sum / 1000.0) : 0.0, g.duel_perf.dt_max);
     if (g.duel_result == 0) {
         g.duels_won++;
         g.beaten[g.duel] = true;
@@ -625,11 +642,107 @@ static int demo_init(void *user) {
 
 static void demo_update_inner(const GeInput *in);
 
+/* ---- dev menu ------------------------------------------------------------ */
+
+static const struct { const char *name; int col; } WARPS[] = {
+    { "START BENCH", 5 }, { "WALL SHAFT", 49 }, { "DUELIST 2", 80 }, { "BENCH 2", 106 }, { "CHAMPION", 141 }, { "BOSS", 150 },
+};
+#define NWARPS ((int)(sizeof WARPS / sizeof WARPS[0]))
+enum { MI_PERF, MI_DETAIL, MI_LOG, MI_GOD, MI_WARP, MI_MARK, MI_CLOSE, MI_COUNT };
+
+static void apply_detail(void) {
+    bool low = g.detail_mode == 0 ? g.auto_low : g.detail_mode == 1;
+    g.low_detail = low;
+    g.world.low_detail = low;
+    if (g.fight_live) g.fight.world.low_detail = low;
+}
+
+static void set_logging(bool on) {
+    g.log_wanted = on;
+    if (on && !devlog_is_open() && devlog_open()) {
+        devlog("session start: Gloamwood, built %s %s, console %s, detail %s", __DATE__, __TIME__, g.console,
+               g.low_detail ? "low" : "full");
+        devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw ms");
+        devlog_flush();
+    } else if (!on && devlog_is_open()) {
+        devlog("play log switched off from the dev menu");
+        devlog_close();
+    }
+}
+
+static void warp_to(int col) {
+    GeEntity *p = hero();
+    if (!p->active || g.mode != M_OVERWORLD) return;
+    if (g.boss_engaged && col < BOSS_COL0) reset_boss();
+    float x = col * GE_TILE + 8.0f;
+    p->pos = (GeVec2){ x, ground_at(x, 0) };
+    p->vel = (GeVec2){ 0, 0 };
+    p->state = GE_ST_IDLE;
+    g.safe_x = x; g.safe_y = p->pos.y;
+    g.world.cam.x = x - SCREEN_W * 0.5f;
+    g.duel_cd = 120;
+    LOG("dev: warped to column %d", col);
+}
+
+static void menu_input(const GeInput *in) {
+    if (in->pressed & (GE_BTN_SELECT | GE_BTN_B)) { g.menu_open = false; return; }
+    if (in->pressed & GE_BTN_UP) g.menu_sel = (g.menu_sel + MI_COUNT - 1) % MI_COUNT;
+    if (in->pressed & GE_BTN_DOWN) g.menu_sel = (g.menu_sel + 1) % MI_COUNT;
+    int dir = (in->pressed & GE_BTN_RIGHT) ? 1 : (in->pressed & GE_BTN_LEFT) ? -1 : 0;
+    bool act = (in->pressed & GE_BTN_A) != 0;
+    switch (g.menu_sel) {
+    case MI_PERF:   if (act || dir) g.show_perf = !g.show_perf; break;
+    case MI_DETAIL: if (act || dir) { g.detail_mode = (g.detail_mode + (dir < 0 ? 2 : 1)) % 3; apply_detail(); LOG("dev: detail now %s", g.low_detail ? "low" : "full"); } break;
+    case MI_LOG:    if (act || dir) set_logging(!g.log_wanted); break;
+    case MI_GOD:    if (act || dir) { g.god = !g.god; LOG("dev: god mode %s", g.god ? "on" : "off"); } break;
+    case MI_WARP:
+        if (dir) g.warp_sel = (g.warp_sel + NWARPS + dir) % NWARPS;
+        if (act) { warp_to(WARPS[g.warp_sel].col); g.menu_open = false; }
+        break;
+    case MI_MARK:
+        if (act) { LOG("--- marked by the player (something worth looking at happened here) ---"); devlog_flush(); say("LOG MARKED", 60); g.menu_open = false; }
+        break;
+    case MI_CLOSE:  if (act) g.menu_open = false; break;
+    }
+}
+
+static void draw_menu(GeImage *fb) {
+    char buf[96];
+    const uint32_t ink = GE_RGB(20, 14, 30);
+    ge_fill_rect(fb, 60, 30, 280, 176, GE_ARGB(225, 16, 10, 30), 0);
+    ge_fill_rect(fb, 60, 30, 280, 1, GE_RGB(190, 120, 255), 0);
+    ge_text_outlined(fb, 72, 38, "DEV MENU", GE_RGB(220, 190, 255), ink, 2);
+    ge_text(fb, 196, 44, "PAUSED - SELECT CLOSES", GE_RGB(150, 140, 180), 1);
+    const char *detail = g.detail_mode == 0 ? (g.auto_low ? "AUTO (LOW)" : "AUTO (FULL)") : g.detail_mode == 1 ? "LOW" : "FULL";
+    const char *val[MI_COUNT] = { g.show_perf ? "ON" : "OFF", detail, devlog_is_open() ? "ON" : (g.log_wanted ? "NO SD?" : "OFF"),
+                                  g.god ? "ON" : "OFF", WARPS[g.warp_sel].name, "A", "A" };
+    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "WARP  < >", "MARK THIS MOMENT", "BACK TO GAME" };
+    for (int i = 0; i < MI_COUNT; i++) {
+        int y = 62 + i * 14;
+        uint32_t c = i == g.menu_sel ? GE_RGB(255, 236, 160) : GE_RGB(210, 205, 230);
+        if (i == g.menu_sel) ge_text(fb, 70, y, ">", c, 1);
+        ge_text(fb, 80, y, label[i], c, 1);
+        ge_text(fb, 330 - ge_text_width(val[i], 1), y, val[i], c, 1);
+    }
+    uint64_t secs = (g.now_us - g.start_us) / 1000000u;
+    snprintf(buf, sizeof buf, "PLAY TIME %s   %s", devlog_hms(secs), g.console);
+    ge_text(fb, 72, 166, buf, GE_RGB(160, 230, 170), 1);
+    snprintf(buf, sizeof buf, "LOG: %s", devlog_is_open() ? devlog_path() : "OFF");
+    ge_text(fb, 72, 178, buf, GE_RGB(150, 140, 180), 1);
+    snprintf(buf, sizeof buf, "AVG %.0f FPS SO FAR, %d%% FRAMES BELOW 60", g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0,
+             g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
+    ge_text(fb, 72, 190, buf, GE_RGB(150, 140, 180), 1);
+}
+
 static void demo_update(void *user, const GeInput *in) {
     (void)user;
     uint64_t t0 = ge_plat_time_us();
-    if (in->pressed & GE_BTN_SELECT) g.show_perf = !g.show_perf;
-    demo_update_inner(in);
+    if (g.menu_open) menu_input(in);                       /* the game is paused underneath */
+    else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; }
+    else {
+        demo_update_inner(in);
+        if (g.mode == M_BATTLE) g.ticks_duel++; else g.ticks_world++;
+    }
     g.update_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.update_ms) * 0.1f;
 }
 
@@ -737,7 +850,7 @@ static void draw_hud(GeImage *fb) {
         if (p->active && fabsf(p->pos.x - (level_benches[i] * GE_TILE + 8.0f)) < 18.0f && g.msg_timer == 0)
             ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST",
                              GE_WHITE, GE_RGB(20, 14, 30), 1);
-    if (g.tick < 420 && g.mode == M_OVERWORLD) {   /* controls, for the first few seconds */
+    if (g.tick < 420 && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
         const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   A DASH";
         const char *l2 = "X THROW NEEDLE   R SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
         int a = g.tick > 360 ? (420 - (int)g.tick) * 255 / 60 : 255;
@@ -786,10 +899,48 @@ static void demo_draw_inner(GeImage *fb);
 static void demo_draw(void *user, GeImage *fb) {
     (void)user;
     uint64_t t0 = ge_plat_time_us();
-    if (g.last_draw_us && t0 > g.last_draw_us) g.fps += (1e6f / (float)(t0 - g.last_draw_us) - g.fps) * 0.1f;
+    if (!g.start_us) {
+        g.start_us = g.next_sample_us = t0;
+        if (g.log_wanted) set_logging(true);
+    }
+    g.now_us = t0;
+    devlog_set_clock(g.start_us, t0);
+    double dt_ms = g.last_draw_us && t0 > g.last_draw_us ? (double)(t0 - g.last_draw_us) / 1000.0 : 0.0;
+    if (dt_ms > 0) g.fps += (1000.0f / (float)dt_ms - g.fps) * 0.1f;
     g.last_draw_us = t0;
     demo_draw_inner(fb);
-    g.draw_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.draw_ms) * 0.1f;
+    if (g.menu_open) draw_menu(fb);
+    double draw = (double)(ge_plat_time_us() - t0) / 1000.0;
+    g.draw_ms += ((float)draw - g.draw_ms) * 0.1f;
+
+    /* frame statistics for the play log (menu time excluded) */
+    if (dt_ms > 0 && dt_ms < 1000 && !g.menu_open) {
+        bool slow = dt_ms > 1000.0 / 60.0 + 1.5;
+        g.win.frames++; g.tot.frames++;
+        g.win.slow += slow; g.tot.slow += slow;
+        g.win.dt_sum += dt_ms; g.tot.dt_sum += dt_ms;
+        if (dt_ms > g.win.dt_max) g.win.dt_max = dt_ms;
+        if (dt_ms > g.tot.dt_max) g.tot.dt_max = dt_ms;
+        g.win.draw_sum += draw;
+        if (draw > g.win.draw_max) g.win.draw_max = draw;
+        g.win.update_sum += g.update_ms;
+        if (g.mode == M_BATTLE) {
+            g.duel_perf.frames++; g.duel_perf.dt_sum += dt_ms;
+            if (dt_ms > g.duel_perf.dt_max) g.duel_perf.dt_max = dt_ms;
+        }
+    }
+    if (t0 >= g.next_sample_us + 10000000u) {
+        g.next_sample_us = t0;
+        if (g.win.frames > 0 && devlog_is_open()) {
+            const char *where = g.mode == M_BATTLE ? "duel" : (g.boss_engaged ? "boss fight" : "exploring");
+            devlog("perf: %.1f fps avg, worst frame %.1f ms, %d%% of frames below 60 fps | update %.1f ms, draw %.1f ms (max %.1f) | %s, column %d, masks %d | detail %s",
+                   g.win.frames / (g.win.dt_sum / 1000.0), g.win.dt_max, g.win.slow * 100 / g.win.frames,
+                   g.win.update_sum / g.win.frames, g.win.draw_sum / g.win.frames, g.win.draw_max, where,
+                   (int)(hero()->pos.x / GE_TILE), hero()->active ? hero()->hp : 0, g.low_detail ? "low" : "full");
+            devlog_flush();
+        }
+        memset(&g.win, 0, sizeof g.win);
+    }
     if (g.show_perf) {
         char buf[80];
         snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%dMS  DRAW %d.%dMS  %s", (int)(g.fps + 0.5f),
@@ -838,6 +989,18 @@ static void demo_draw_inner(GeImage *fb) {
 
 static void demo_shutdown(void *user) {
     (void)user;
+    if (devlog_is_open()) {
+        uint64_t secs = (g.now_us - g.start_us) / 1000000u;
+        devlog("session end. play time %s (exploring %s, duelling %s)", devlog_hms(secs), devlog_hms((uint64_t)g.ticks_world / 60),
+               devlog_hms((uint64_t)g.ticks_duel / 60));
+        devlog("  duels won %d, lost %d | deaths %d | enemies defeated %d | heals %d | boss %s",
+               g.duels_won, g.duels_lost, g.deaths, g.kills, g.heals,
+               g.beaten[g.boss_spawn] ? "defeated" : (g.boss_engaged ? "fought, not beaten" : "not reached"));
+        devlog("  overall %.1f fps avg, worst frame %.1f ms, %d%% of frames below 60 fps",
+               g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0, g.tot.dt_max,
+               g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
+        devlog_close();
+    }
 #ifdef DEMO_HEADLESS
     GeEntity *p = hero();
     printf("mode=%d x=%.0f (col %d) masks=%d kills=%d duels_won=%d duels_lost=%d deaths=%d heals=%d boss=%s checksum=%08x\n",
@@ -849,6 +1012,31 @@ static void demo_shutdown(void *user) {
     art_free(&g.spr);
 }
 
+#ifdef DEMO_HEADLESS
+/* --press SELECT@300,DOWN@310: scripted one-frame button taps for headless UI checks */
+static struct { uint32_t btn; int frame; } g_taps[32];
+static int g_ntaps;
+static uint32_t tap_script(void *user, int frame) {
+    (void)user;
+    uint32_t b = 0;
+    for (int i = 0; i < g_ntaps; i++) if (g_taps[i].frame == frame) b |= g_taps[i].btn;
+    return b;
+}
+static void parse_taps(const char *s) {
+    static const struct { const char *n; uint32_t b; } names[] = {
+        { "LEFT", GE_BTN_LEFT }, { "RIGHT", GE_BTN_RIGHT }, { "UP", GE_BTN_UP }, { "DOWN", GE_BTN_DOWN }, { "A", GE_BTN_A }, { "B", GE_BTN_B },
+        { "X", GE_BTN_X }, { "Y", GE_BTN_Y }, { "L", GE_BTN_L }, { "R", GE_BTN_R }, { "START", GE_BTN_START }, { "SELECT", GE_BTN_SELECT } };
+    char name[16];
+    int frame, used;
+    while (g_ntaps < 32 && sscanf(s, "%15[A-Z]@%d%n", name, &frame, &used) == 2) {
+        for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+            if (!strcmp(names[i].n, name)) { g_taps[g_ntaps].btn = names[i].b; g_taps[g_ntaps++].frame = frame; }
+        s += used;
+        if (*s == ',') s++;
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     int frames = 1800, dump_every = 0;
     g_log = getenv("GLOAM_LOG") != NULL;
@@ -857,6 +1045,10 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--autoplay")) g.autoplay = true;
         else if (!strcmp(argv[i], "--low-detail")) g.low_detail = true;
         else if (!strcmp(argv[i], "--god")) g.god = true;        /* dev: the hero can't be hurt */
+        else if (!strcmp(argv[i], "--log")) g.log_wanted = true; /* write gloamwood_log.txt */
+#ifdef DEMO_HEADLESS
+        else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_taps(argv[++i]);
+#endif
         else if (!strcmp(argv[i], "--layers") && i + 1 < argc) g.layers_path = argv[++i];
         else if (!strcmp(argv[i], "--warp") && i + 1 < argc) g.warp_col = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
@@ -867,9 +1059,16 @@ int main(int argc, char **argv) {
     bool is_new3ds = false;
     APT_CheckNew3DS(&is_new3ds);
     g.low_detail = !is_new3ds; /* original 3DS: 268 MHz, drop the decorative layers */
+    g.console = is_new3ds ? "NEW 3DS" : "ORIGINAL 3DS";
+    g.log_wanted = true;       /* playtest builds keep a play log on the SD card */
+#elif defined(DEMO_HEADLESS)
+    g.console = "HEADLESS";
+#else
+    g.console = "DESKTOP";
 #endif
+    g.auto_low = g.low_detail;
 #ifdef DEMO_HEADLESS
-    ge_null_configure(frames, dump_every, dump_dir, NULL, NULL);
+    ge_null_configure(frames, dump_every, dump_dir, g_ntaps ? tap_script : NULL, NULL);
 #else
     (void)frames; (void)dump_every; (void)dump_dir;
 #endif

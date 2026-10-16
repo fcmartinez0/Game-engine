@@ -28,7 +28,7 @@ int ge_plat_poll(uint32_t *buttons) {
 }
 
 void ge_plat_present(const GeImage *fb) {
-    g_checksum = ge_image_checksum(fb);
+    if (g_frame == g_max_frames - 1) g_checksum = ge_image_checksum(fb); /* only the last one is reported */
     if (g_dump_every > 0 && g_frame % g_dump_every == 0) {
         char path[512];
         snprintf(path, sizeof path, "%s/frame_%05d.png", g_dump_dir, g_frame);
