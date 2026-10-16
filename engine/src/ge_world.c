@@ -233,7 +233,8 @@ void ge_world_update(GeWorld *w) {
 static void draw_layer(const GeWorld *w, GeImage *fb, const GeParallaxLayer *l, int camx, int camy) {
     int sx = (int)(camx * l->factor_x + l->auto_x * (float)w->tick);
     int dy = l->y - (int)(camy * l->factor_y);
-    if (l->spans.spans) { ge_spans_draw_wrap_x(fb, &l->img, &l->spans, sx, dy, l->additive ? GE_ADDITIVE : 0); return; }
+    int clip = w->background_clip_x > 0 && !l->foreground ? w->background_clip_x : fb->w;
+    if (l->spans.spans) { ge_spans_draw_wrap_x_clip(fb, &l->img, &l->spans, sx, dy, l->additive ? GE_ADDITIVE : 0, clip); return; }
     uint32_t tint = l->alpha == 255 ? GE_WHITE : GE_ARGB(l->alpha, 255, 255, 255);
     ge_blit_wrap_x(fb, &l->img, sx, dy, (l->additive ? GE_ADDITIVE : 0) | (l->opaque ? GE_OPAQUE : 0), tint);
 }
@@ -320,10 +321,13 @@ void ge_world_draw(GeWorld *w, GeImage *fb) {
     const GeParallaxLayer *l0 = w->nlayers > 0 ? &w->layers[0] : NULL;
     bool covers = l0 && l0->opaque && !l0->additive && l0->img.w >= fb->w && l0->y <= 0 && l0->y + l0->img.h >= fb->h &&
                   l0->factor_y == 0.0f && !(w->low_detail && l0->optional);
-    if (w->backdrop_pattern) {
+    if (w->background_off) {
+        /* nothing: tiles and props cover every pixel */
+    } else if (w->backdrop_pattern) {
         ge_pattern_draw(w->backdrop_pattern, fb, (int)w->tick);
     } else {
         if (!covers) ge_clear(fb, GE_RGB(8, 6, 16));
+        else if (w->background_clip_x > 0 && l0 && !l0->spans.spans) ge_clear(fb, GE_RGB(8, 6, 16));
         for (int i = 0; i < w->nlayers; i++)
             if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
                 draw_layer(w, fb, &w->layers[i], camx * z, lcamy);

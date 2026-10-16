@@ -87,8 +87,8 @@ typedef struct {
     int clip_hurt, clip_hurt_air, clip_block, clip_block_low, clip_down, clip_ko, clip_win;
     int clip_throw, clip_thrown, clip_dash, clip_backdash;
     /* Boss rules: an `undying` fighter's health stops at 1 instead of 0, and the moment that happens (or the
-     * fight clock `finisher_tick` runs out) it performs its finisher: a scripted, unblockable KO of the other
-     * fighter. clip_finisher is the pose it plays while doing it (-1 = the idle clip). */
+     * fight clock `finisher_tick` runs out, or its opponent's health would reach 0) it performs its finisher:
+     * a scripted, unblockable KO of the other fighter, so that is always how the fight ends. clip_finisher is the pose it plays while doing it (-1 = the idle clip). */
     bool undying;
     int clip_finisher;
     GeMove moves[GE_FIGHT_MAX_MOVES];

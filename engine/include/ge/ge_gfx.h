@@ -45,6 +45,8 @@ void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy
 typedef struct { uint16_t x, len; uint8_t opaque; } GeSpan;
 typedef struct { GeSpan *spans; uint32_t *row_start; int rows; } GeSpans;
 int  ge_spans_build(GeSpans *out, const GeImage *img);   /* 0 on success */
+/* as ge_spans_draw_wrap_x, but only the screen columns left of clip_x1 */
+void ge_spans_draw_wrap_x_clip(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags, int clip_x1);
 void ge_spans_free(GeSpans *s);
 /* Like ge_blit_wrap_x, from a span table. `flags` may be GE_ADDITIVE; tint must be GE_WHITE
  * (bake any layer alpha into the image first with ge_image_scale_alpha). */

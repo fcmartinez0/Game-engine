@@ -290,7 +290,13 @@ void ge_spans_free(GeSpans *s) {
 }
 
 void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags) {
+    ge_spans_draw_wrap_x_clip(dst, src, sp, scroll_x, dy, flags, dst->w);
+}
+
+void ge_spans_draw_wrap_x_clip(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags, int clip_x1) {
     if (src->w <= 0 || !sp->spans) return;
+    int cw = clip_x1 < dst->w ? clip_x1 : dst->w;
+    if (cw <= 0) return;
     int off = scroll_x % src->w;
     if (off < 0) off += src->w;
     int y0 = dy < 0 ? 0 : dy, y1 = dy + src->h > dst->h ? dst->h : dy + src->h;
@@ -299,14 +305,14 @@ void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, i
         const uint32_t *srow = src->px + (size_t)(y - dy) * src->w;
         uint32_t *drow = dst->px + (size_t)y * dst->w;
         uint32_t first = sp->row_start[y - dy], last = sp->row_start[y - dy + 1];
-        for (int base = -off; base < dst->w; base += src->w) {
+        for (int base = -off; base < cw; base += src->w) {
             for (uint32_t k = first; k < last; k++) {
                 const GeSpan *g = &sp->spans[k];
                 int a = base + g->x, b = a + g->len;
-                if (b <= 0 || a >= dst->w) continue;
+                if (b <= 0 || a >= cw) continue;
                 int from = a < 0 ? -a : 0;
                 if (a < 0) a = 0;
-                if (b > dst->w) b = dst->w;
+                if (b > cw) b = cw;
                 const uint32_t *s = srow + g->x + from;
                 if (g->opaque && !add) memcpy(drow + a, s, (size_t)(b - a) * sizeof(uint32_t));
                 else for (int x = a; x < b; x++, s++) drow[x] = px_blend(drow[x], *s, flags);
@@ -319,12 +325,14 @@ void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, i
 
 /* one magnified glyph pixel: written straight into the image when opaque (no call, no blend) */
 static inline void block(GeImage *dst, int x, int y, int scale, uint32_t color) {
-    if ((color >> 24) != 255) { ge_fill_rect(dst, x, y, scale, scale, color, 0); return; }
     int x0 = x < 0 ? 0 : x, x1 = x + scale > dst->w ? dst->w : x + scale;
     int y0 = y < 0 ? 0 : y, y1 = y + scale > dst->h ? dst->h : y + scale;
+    if ((color >> 24) == 0) return;
+    bool opaque = (color >> 24) == 255;   /* fading text blends here directly, not through ge_fill_rect */
     for (int yy = y0; yy < y1; yy++) {
         uint32_t *row = dst->px + (size_t)yy * dst->w;
-        for (int xx = x0; xx < x1; xx++) row[xx] = color;
+        if (opaque) for (int xx = x0; xx < x1; xx++) row[xx] = color;
+        else for (int xx = x0; xx < x1; xx++) row[xx] = px_blend(row[xx], color, 0);
     }
 }
 

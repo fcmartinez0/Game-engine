@@ -1026,6 +1026,10 @@ static void demo_update_inner(const GeInput *in) {
         }
         bool in_hall = p->pos.x >= (HALL_COL0 - 2) * GE_TILE;
         w->foreground_off = p->pos.x >= (HALL_COL0 - 12) * GE_TILE;      /* indoors: no forest grass in front */
+        /* inside the hall its walls, ceiling and floor cover the whole view: don't paint the forest behind them */
+        int open_x = HALL_COL0 * GE_TILE - (int)w->cam.x;  /* screen column where the hall's solid art begins */
+        w->background_off = open_x <= 0;
+        w->background_clip_x = open_x > 0 && open_x < SCREEN_W ? open_x : 0;
         if (in_hall && !g.hall_named) { g.hall_named = true; say("THE STILL HALL", 150); }
         if (w->tick % 9 == 0 && ge_world_particle_count(w) < 90)   /* fireflies; in the hall, slow gold dust */
             ge_world_emit(w, w->cam.x + ge_rng_range(&w->rng, 0, SCREEN_W), w->cam.y + ge_rng_range(&w->rng, in_hall ? 100 : 70, 200), 0,
@@ -1226,6 +1230,8 @@ static void demo_draw_inner(GeImage *fb) {
             const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B THRUST  L BLOCK  R DASH  A+B SUPER";
             if (g.fight.phase == GE_FP_INTRO) ge_text_outlined(fb, (SCREEN_W - ge_text_width(hint, 1)) / 2, 200, hint, GE_RGB(220, 210, 240), GE_RGB(20, 14, 30), 1);
         }
+    } else if (g.mode == M_REPORT && g.mode_timer >= 30) {
+        paragon_draw_report(fb, g.facts, g.nfacts, &g.model, g.learn_shown, g.gifts, g.mode_timer);   /* opaque: no world under it */
     } else {
         ge_world_draw(&g.world, fb);
         draw_hud(fb);

@@ -62,6 +62,7 @@ Two rails, both authored, either of which ends the fight:
 
 1. **It cannot be knocked out.** Its health clamps at 1. The moment it would drop below that, the finisher plays.
 2. **The clock.** After 75 seconds of fighting, the finisher plays regardless.
+3. **It never simply knocks you out.** If its ordinary attacks would take your last health, you are left at 1 and the finisher plays instead. (Added after the first hardware playtest: the player was beaten in 10 seconds and never saw the finisher.)
 
 The **finisher** is a short cinematic: the screen darkens, the Paragon gathers itself, one slash crosses the whole screen, and the player is struck down (unblockable, no input possible). It is the same rule for everyone, every time. **[story hook: this is where the Paragon speaks, or does not.]**
 

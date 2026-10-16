@@ -509,6 +509,8 @@ static void lose_hp(GeFight *f, int s, int amount) {
     e->hp -= amount;
     if (e->hp < 0) e->hp = 0;
     if (f->f[s].def->undying && e->hp < 1) { e->hp = 1; f->finisher_pending = true; }
+    /* and its opponent is never simply knocked out either: the finisher is always how the fight ends */
+    if (f->finisher_side >= 0 && s != f->finisher_side && e->hp < 1) { e->hp = 1; f->finisher_pending = true; }
 }
 
 static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, float x, float y) {

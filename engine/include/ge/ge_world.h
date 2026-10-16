@@ -217,6 +217,8 @@ typedef struct GeWorld {
     int vignette;
     bool low_detail;          /* drop optional layers + vignette (original 3DS) */
     bool foreground_off;      /* skip the foreground layers (e.g. indoors) */
+    bool background_off;      /* skip the clear and the background layers: the game's own art covers the view */
+    int background_clip_x;    /* if > 0: the background is only needed left of this screen column (the rest is covered) */
     GePattern *backdrop_pattern;  /* when set, drawn instead of the background layers (fight screens) */
     bool custom_combat;       /* another module resolves hits (ge_fight) */
     int zoom;                 /* draw tiles/entities/effects magnified (parallax stays native); 0 or 1 = none.

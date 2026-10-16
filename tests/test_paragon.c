@@ -181,6 +181,7 @@ static void test_never_loses(void) {
     }
     printf("  %d / %d matches taken by the Paragon, the finisher decided %d of them\n", paragon_wins, n, finishers);
     CHECK(paragon_wins == n);
+    CHECK(finishers == n);                         /* it never just knocks you out: the finisher always ends it */
     GePlayerModel Ma, Mb; ge_model_init(&Ma); ge_model_init(&Mb);
     GeParagon Pa, Pb; ge_paragon_init(&Pa, &Ma); ge_paragon_init(&Pb, &Mb);
     ge_paragon_set_learn(&Pa, 50, 0); ge_paragon_set_learn(&Pb, 50, 0);
