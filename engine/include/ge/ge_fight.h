@@ -162,6 +162,10 @@ typedef struct {
     float damage_scale[2];   /* damage dealt BY each side is multiplied by this (1 by default): difficulty settings */
     /* per side, for play logs: attacks blocked, hits taken while trying to block at the wrong height, other hits, throws */
     int stat_blocked[2], stat_wrong_height[2], stat_hit[2], stat_thrown[2];
+    /* ...and what the hit fighter was doing when a hit got through: attacking, in the air, already in a combo,
+     * standing open (no guard), or holding the guard button while busy */
+    int stat_hit_attacking[2], stat_hit_air[2], stat_hit_combo[2], stat_hit_open[2], stat_hit_guard_busy[2];
+    bool forgiving_guard;    /* the guard button also blocks in the air, mid-dash and in your own move's recovery */
 } GeFight;
 
 /* Set up a match. `backdrop` (may be NULL) lends its parallax layers and tileset. */

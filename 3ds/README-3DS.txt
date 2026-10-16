@@ -19,7 +19,9 @@ CONTROLS - exploring
 
 CONTROLS - duels (when a duelist spots you)
   hold L               GUARD: blocks everything (low, high, jump-ins) except
-                       throws. You stand still while you hold it.
+                       throws. You stand still while you hold it. On EASY and
+                       NORMAL it also works in the air, mid-dash, and while
+                       your own swing is finishing.
   D-pad                walk, UP jump, DOWN crouch. Holding BACK also blocks,
                        but only at the right height: back = high and middle,
                        down-back = low and middle. Words over your fighter

@@ -187,6 +187,10 @@ static void spawn_level_part(bool ordinary_only) {
         e->ai_x0 = x;
         e->ai_y0 = y;
         e->ai_state = -1;
+        if (ordinary_only)   /* a puff where each one comes back, so a respawn can be seen */
+            for (int k = 0; k < 10; k++)
+                ge_world_emit(&g.world, x + ge_rng_range(&g.world.rng, -8, 8), y - ge_rng_range(&g.world.rng, 0, 14), ge_rng_range(&g.world.rng, -0.6f, 0.6f),
+                              -0.5f, 0, 40, GE_ARGB(220, 200, 170, 255), 2, GE_P_ADD);
     }
 }
 
@@ -256,6 +260,7 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
             level_set_gate(w, false);
             level_set_exit(w, false);
             g.mode = M_VICTORY; g.mode_timer = 0;
+            g.boss_engaged = false;
             LOG("boss defeated");
             g.beaten[g.boss_spawn] = true;
             for (int i = 0; i < 40; i++)
@@ -474,7 +479,7 @@ static void hero_intent(const GeInput *in) {
         if (fabsf(p->pos.x - bx) < 18.0f && p->on_ground && (in->pressed & GE_BTN_UP)) {
             p->hp = p->max_hp;
             g.bench_col = level_benches[i];
-            say("RESTED. THIS BENCH IS YOUR RESPAWN POINT", 120);
+            say("RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
             respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
         }
@@ -650,6 +655,7 @@ static void begin_battle(void) {
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
     if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); }
+    g.fight.forgiving_guard = g.difficulty <= 0;      /* easy and normal: L also guards in the air and after your own swing */
     g.fight.hints = 1;                                 /* teaching aids for the player's side */
     if (final) {
         int learn = paragon_learn_level(&g.model, g.gifts);
@@ -695,6 +701,8 @@ static void end_battle(void) {
         g.duel_perf.dt_sum > 0 ? g.duel_perf.frames / (g.duel_perf.dt_sum / 1000.0) : 0.0, g.duel_perf.dt_max);
     LOG("  your defence: blocked %d, hit at the wrong height while blocking %d, hit while not blocking %d, thrown %d",
         g.fight.stat_blocked[0], g.fight.stat_wrong_height[0], g.fight.stat_hit[0], g.fight.stat_thrown[0]);
+    LOG("  those hits came while you were: attacking %d, in the air %d, already in a combo %d, standing open %d, holding L but busy %d",
+        g.fight.stat_hit_attacking[0], g.fight.stat_hit_air[0], g.fight.stat_hit_combo[0], g.fight.stat_hit_open[0], g.fight.stat_hit_guard_busy[0]);
     g.model.duels++;
     g.model.rounds += g.fight.f[0].wins + g.fight.f[1].wins;
     if (g.duel_result == 0) g.model.wins++; else g.model.losses++;
@@ -1009,6 +1017,8 @@ static void demo_update_inner(const GeInput *in) {
     switch (g.mode) {
     case M_OVERWORLD:
     case M_VICTORY: {
+        /* the victory words show for a few seconds, then it is the overworld again (duels, the Paragon's hall) */
+        if (g.mode == M_VICTORY && g.mode_timer >= 300) { g.mode = M_OVERWORLD; g.mode_timer = 0; }
         if (g.duel_cd > 0) g.duel_cd--;
         GeEntity *p = hero();
         if (g.god && p->active) p->invuln = 2;
@@ -1239,7 +1249,7 @@ static void demo_draw_inner(GeImage *fb) {
         if (g.mode == M_TRANS_IN) { draw_alert(fb); draw_trans_in(fb, g.mode_timer); }
         if (g.mode == M_REPORT) paragon_draw_report(fb, g.facts, g.nfacts, &g.model, g.learn_shown, g.gifts, g.mode_timer);
         if (g.mode == M_VICTORY && g.mode_timer > 60) {
-            const char *a = "THORNWARDEN FELLED", *b = "THE GLOAMWOOD IS QUIET AGAIN";
+            const char *a = "THORNWARDEN FELLED", *b = "THE FAR DOOR HAS OPENED";
             ge_text_outlined(fb, (SCREEN_W - ge_text_width(a, 2)) / 2, 90, a, GE_RGB(255, 220, 160), GE_RGB(20, 14, 30), 2);
             ge_text_outlined(fb, (SCREEN_W - ge_text_width(b, 1)) / 2, 112, b, GE_RGB(230, 220, 250), GE_RGB(20, 14, 30), 1);
         }
@@ -1283,12 +1293,13 @@ static void demo_shutdown(void *user) {
 
 #ifdef DEMO_HEADLESS
 /* --press SELECT@300,DOWN@310: scripted one-frame button taps for headless UI checks */
-static struct { uint32_t btn; int frame; } g_taps[32];
+/* --press SELECT@300,RIGHT@10-90: buttons held on one frame, or over a range of frames */
+static struct { uint32_t btn; int frame, last; } g_taps[64];
 static int g_ntaps;
 static uint32_t tap_script(void *user, int frame) {
     (void)user;
     uint32_t b = 0;
-    for (int i = 0; i < g_ntaps; i++) if (g_taps[i].frame == frame) b |= g_taps[i].btn;
+    for (int i = 0; i < g_ntaps; i++) if (frame >= g_taps[i].frame && frame <= g_taps[i].last) b |= g_taps[i].btn;
     return b;
 }
 /* --touch 160,100@300: a scripted tap on the bottom screen */
@@ -1314,10 +1325,12 @@ static void parse_taps(const char *s) {
         { "X", GE_BTN_X }, { "Y", GE_BTN_Y }, { "L", GE_BTN_L }, { "R", GE_BTN_R }, { "START", GE_BTN_START }, { "SELECT", GE_BTN_SELECT } };
     char name[16];
     int frame, used;
-    while (g_ntaps < 32 && sscanf(s, "%15[A-Z]@%d%n", name, &frame, &used) == 2) {
-        for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
-            if (!strcmp(names[i].n, name)) { g_taps[g_ntaps].btn = names[i].b; g_taps[g_ntaps++].frame = frame; }
+    while (g_ntaps < 64 && sscanf(s, "%15[A-Z]@%d%n", name, &frame, &used) == 2) {
         s += used;
+        int last = frame;
+        if (*s == '-' && sscanf(s, "-%d%n", &last, &used) == 1) s += used;
+        for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+            if (!strcmp(names[i].n, name)) { g_taps[g_ntaps].btn = names[i].b; g_taps[g_ntaps].frame = frame; g_taps[g_ntaps++].last = last; }
         if (*s == ',') s++;
     }
 }

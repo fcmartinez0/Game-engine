@@ -513,6 +513,16 @@ static void lose_hp(GeFight *f, int s, int amount) {
     if (f->finisher_side >= 0 && s != f->finisher_side && e->hp < 1) { e->hp = 1; f->finisher_pending = true; }
 }
 
+/* past the last frame that can hit: the move is only recovering now */
+static bool past_active(const GeFight *f, int s) {
+    const GeFighter *F = &f->f[s];
+    if (F->state != GE_FS_MOVE) return false;
+    const GeClip *c = clip_at(f, s, F->def->moves[F->move].clip_idx);
+    int last = -1;
+    for (int i = 0; i < c->nframes; i++) if (c->frames[i].has_hit) last = i;
+    return cent(f, s)->anim.done || cent(f, s)->anim.frame > last;
+}
+
 static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, float x, float y) {
     GeFighter *A = &f->f[s], *D = &f->f[1 - s];
     GeEntity *ae = ent(f, s), *de = ent(f, 1 - s);
@@ -521,11 +531,22 @@ static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, flo
     bool hold_back = D->in.x == dir || button_guard;
     bool low = D->in.y > 0 || (button_guard && st->guard == GE_GUARD_LOW);   /* (a guard drops to meet a low: it reads clearly) */
     bool can_block = (D->state == GE_FS_STAND || D->state == GE_FS_CROUCH || D->state == GE_FS_BLOCKSTUN) && de->on_ground && hold_back;
+    /* the forgiving guard: holding the button is enough while jumping, dashing, or finishing your own swing */
+    if (!can_block && button_guard && f->forgiving_guard &&
+        (D->state == GE_FS_AIR || D->state == GE_FS_DASH || (D->state == GE_FS_MOVE && past_active(f, 1 - s))))
+        can_block = true;
     bool guard_ok = button_guard || st->guard == GE_GUARD_MID || (st->guard == GE_GUARD_LOW && low) || (st->guard == GE_GUARD_HIGH && !low);
     bool show = (f->hints >> (1 - s)) & 1u;
     if (can_block && guard_ok) f->stat_blocked[1 - s]++;
     else if (can_block) f->stat_wrong_height[1 - s]++;
-    else f->stat_hit[1 - s]++;
+    else {
+        f->stat_hit[1 - s]++;
+        if (D->state == GE_FS_HITSTUN || D->state == GE_FS_DOWN) f->stat_hit_combo[1 - s]++;
+        else if (button_guard) f->stat_hit_guard_busy[1 - s]++;
+        else if (D->state == GE_FS_MOVE) f->stat_hit_attacking[1 - s]++;
+        else if (D->state == GE_FS_AIR || !de->on_ground) f->stat_hit_air[1 - s]++;
+        else f->stat_hit_open[1 - s]++;
+    }
     if (can_block && guard_ok) { D->pop = "BLOCK"; D->pop_timer = 24; D->pop_color = GE_RGB(150, 210, 255); }
     else if (show && can_block) {                                    /* they tried to block but used the wrong height: say so */
         D->pop = st->guard == GE_GUARD_LOW ? "LOW! HOLD DOWN-BACK (OR L)" : "HIGH! STAND TO BLOCK (OR L)";

@@ -107,6 +107,40 @@ static void test_shoulder_buttons(void) {
     CHECK(F.f[0].state == GE_FS_DASH && E(0)->pos.x < x0 - 4.0f);
 }
 
+/* the forgiving guard (easy / normal in the demo): L also blocks in your own move's recovery and in the air */
+static void test_forgiving_guard(void) {
+    puts("forgiving guard");
+    for (int forgiving = 0; forgiving <= 1; forgiving++) {
+        fresh(); close_in(80);                                         /* far enough that P2's heavy whiffs */
+        F.forgiving_guard = forgiving;
+        GeFightInput h = btn(0, 0, GE_FB_H); h.held |= GE_FB_BLOCK;
+        step(NONE, h);                                                 /* P2 swings a heavy, holding L */
+        GeFightInput hold = NONE; hold.held = GE_FB_BLOCK;
+        int n = 0;
+        while (n++ < 60 && !(F.f[1].state == GE_FS_MOVE && ge_fight_frames_until_free(&F, 1) < 12)) step(NONE, hold);
+        CHECK(F.f[1].state == GE_FS_MOVE);                             /* in its recovery now */
+        close_in(30);
+        attack_vs(btn(0, 0, GE_FB_L), hold, 6);
+        if (forgiving) CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->hp == 100);
+        else CHECK(F.f[1].state == GE_FS_HITSTUN);
+    }
+    /* in the air: an anti-air into a jumper who holds L */
+    for (int forgiving = 0; forgiving <= 1; forgiving++) {
+        fresh(); close_in(24);
+        F.forgiving_guard = forgiving;
+        GeFightInput up = dirs(0, -1); up.held = GE_FB_BLOCK;
+        GeFightInput hold = NONE; hold.held = GE_FB_BLOCK;
+        step(NONE, up);
+        for (int i = 0; i < 4; i++) step(NONE, hold);
+        step(dirs(1, 0), hold); step(dirs(0, 1), hold); step(dirs(1, 1), hold);   /* 6 2 3 + H = rising anti-air */
+        step(btn(1, 1, GE_FB_H), hold);
+        bool blocked = false, hit = false;
+        for (int i = 0; i < 20; i++) { step(NONE, hold); blocked |= F.f[1].state == GE_FS_BLOCKSTUN; hit |= F.f[1].state == GE_FS_HITSTUN; }
+        if (forgiving) CHECK(blocked && !hit && E(1)->hp == 100);
+        else CHECK(hit);
+    }
+}
+
 static void test_buffer_and_tech(void) {
     puts("input buffer, throw break window");
     /* a light pressed during the last ticks of a move comes out the moment the move ends */
@@ -285,6 +319,7 @@ int main(void) {
     test_blocking();
     test_shoulder_buttons();
     test_buffer_and_tech();
+    test_forgiving_guard();
     test_throws_cancels_juggles();
     test_rounds();
     test_cpu();
