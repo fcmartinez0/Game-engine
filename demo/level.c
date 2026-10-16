@@ -4,7 +4,8 @@
  *   51 wall-jump shaft up to a plateau -- duelist 1 waits on top
  *   87 duelist 2              92 spike floor with planks     105 bench
  *   121 duelist 3             132 second spike pit + bats    146 the champion (best of 3)
- *   154-175 boss arena: the gate shuts behind you
+ *   154-175 boss arena: the gate shuts behind you; the far door (176) opens when the boss falls
+ *   178-211 the Paragon's hall: a bench at 182, the Paragon waits at 200
  */
 
 #include "demo.h"
@@ -32,10 +33,11 @@ const Spawn level_spawns[] = {
     { EN_BAT, 137, 8, 0, 0, 0, NULL },
     { EN_DUELIST, 146, GROUND_ROW, DUEL_FENCER, 3, 2, "THE CHAMPION" },
     { EN_BOSS, 168, GROUND_ROW, 0, 0, 0, "THORNWARDEN" },
+    { EN_DUELIST, 200, GROUND_ROW, DUEL_PARAGON, 4, 1, "PARAGON" },
 };
 const int level_nspawns = (int)(sizeof level_spawns / sizeof level_spawns[0]);
-const int level_benches[] = { 4, 105 };
-const int level_nbenches = 2;
+const int level_benches[] = { 4, 105, 182 };
+const int level_nbenches = 3;
 
 static void fill(GeTilemap *m, int x0, int x1, int y0, int y1, uint8_t t, uint8_t vis) {
     for (int y = y0; y <= y1; y++)
@@ -47,6 +49,10 @@ static void fill(GeTilemap *m, int x0, int x1, int y0, int y1, uint8_t t, uint8_
 
 void level_set_gate(GeWorld *w, bool closed) {
     fill(&w->map, GATE_COL, GATE_COL, 9, 11, closed ? GE_TILE_SOLID : GE_TILE_EMPTY, TV_STONE);
+}
+
+void level_set_exit(GeWorld *w, bool closed) {
+    fill(&w->map, EXIT_COL, EXIT_COL, 9, 11, closed ? GE_TILE_SOLID : GE_TILE_EMPTY, TV_STONE);
 }
 
 void level_build(GeWorld *w) {
@@ -73,6 +79,10 @@ void level_build(GeWorld *w) {
     fill(m, 135, 135, 10, 10, GE_TILE_ONEWAY, TV_PLANK);
     /* boss arena: a doorway in, a wall at the far end */
     fill(m, GATE_COL - 1, GATE_COL, 0, 8, GE_TILE_SOLID, TV_STONE);
+    fill(m, EXIT_COL, EXIT_COL + 1, 0, 8, GE_TILE_SOLID, TV_STONE);
+    level_set_exit(w, true);
+    /* the Paragon's hall: a long low stone room, with a ceiling and a wall at the end */
+    fill(m, HALL_COL0, LEVEL_W - 1, 0, 5, GE_TILE_SOLID, TV_STONE);
     fill(m, LEVEL_W - 2, LEVEL_W - 1, 0, GROUND_ROW - 1, GE_TILE_SOLID, TV_STONE);
 
     for (int y = 0; y < m->h; y++)

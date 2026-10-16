@@ -29,6 +29,7 @@ enum { HEAD_HUMAN, HEAD_MASK, HEAD_GOBLIN, HEAD_MOTH, HEAD_HELM };
 typedef struct {
     uint32_t skin, hair, cloak, tunic, pants, boots, weapon, weapon_hi;
     int head, head_r, weapon_len, weapon_w;
+    uint32_t eye;                       /* optional glow colour for the mask's eye (0 = plain) */
 } Look;
 
 enum { L_WALK, L_TUCK, L_SPREAD, L_STAND, L_CROUCH, L_KICK, L_SWEEP, L_KNEEL };
@@ -70,7 +71,8 @@ static void draw_head(GeImage *im, int hx, int hy, const Look *L) {
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
         ge_fill_rect(im, hx + r - 1, hy + 1, 3, 2, L->skin, 0);                    /* small snout */
         ge_fill_rect(im, hx + r + 1, hy + 1, 1, 2, ink, 0);
-        ge_fill_rect(im, hx + 1, hy - 2, 3, 4, ink, 0);                            /* big front eye */
+        ge_fill_rect(im, hx + 1, hy - 2, 3, 4, L->eye ? L->eye : ink, 0);          /* big front eye */
+        if (L->eye) ge_fill_rect(im, hx + 2, hy - 1, 1, 2, GE_RGB(255, 255, 255), 0);
         ge_fill_rect(im, hx - 3, hy - 1, 2, 2, mix(L->skin, ink, 0.25f), 0);       /* shading at the back of the head */
         break;
     case HEAD_GOBLIN:
@@ -376,14 +378,18 @@ static void fx_cell(GeImage *im, int cell) {
 void art_make_sheets(Sprites *s) {
     memset(s, 0, sizeof *s);
     Look hero = { GE_RGB(242, 236, 228), GE_RGB(40, 30, 40), GE_RGB(200, 40, 60), GE_RGB(150, 30, 50), GE_RGB(60, 40, 60),
-                  GE_RGB(40, 30, 40), GE_RGB(220, 226, 240), GE_RGB(255, 255, 255), HEAD_MASK, 4, 12, 2 };
+                  GE_RGB(40, 30, 40), GE_RGB(220, 226, 240), GE_RGB(255, 255, 255), HEAD_MASK, 4, 12, 2, 0 };
     Look brawler = { GE_RGB(110, 170, 80), GE_RGB(70, 100, 50), GE_RGB(120, 70, 40), GE_RGB(120, 80, 50), GE_RGB(70, 55, 45),
-                     GE_RGB(50, 40, 35), GE_RGB(120, 80, 45), GE_RGB(170, 125, 80), HEAD_GOBLIN, 5, 11, 3 };
+                     GE_RGB(50, 40, 35), GE_RGB(120, 80, 45), GE_RGB(170, 125, 80), HEAD_GOBLIN, 5, 11, 3, 0 };
     Look fencer = { GE_RGB(210, 205, 220), GE_RGB(90, 80, 110), GE_RGB(180, 170, 210), GE_RGB(100, 90, 140), GE_RGB(60, 55, 80),
-                    GE_RGB(40, 36, 56), GE_RGB(200, 210, 240), GE_RGB(255, 255, 255), HEAD_MOTH, 4, 15, 1 };
+                    GE_RGB(40, 36, 56), GE_RGB(200, 210, 240), GE_RGB(255, 255, 255), HEAD_MOTH, 4, 15, 1, 0 };
     Look warden = { GE_RGB(70, 66, 80), GE_RGB(180, 50, 40), GE_RGB(90, 30, 30), GE_RGB(60, 58, 72), GE_RGB(40, 38, 50),
-                    GE_RGB(30, 28, 36), GE_RGB(150, 140, 130), GE_RGB(210, 200, 190), HEAD_HELM, 5, 14, 3 };
+                    GE_RGB(30, 28, 36), GE_RGB(150, 140, 130), GE_RGB(210, 200, 190), HEAD_HELM, 5, 14, 3, 0 };
+    /* the Paragon: the hero's own silhouette, drained of colour, with a gold eye. The same shape is the point. */
+    Look paragon = { GE_RGB(70, 66, 88), GE_RGB(20, 18, 30), GE_RGB(34, 28, 52), GE_RGB(52, 44, 80), GE_RGB(28, 26, 44),
+                     GE_RGB(20, 18, 30), GE_RGB(255, 226, 150), GE_RGB(255, 255, 255), HEAD_MASK, 4, 12, 2, GE_RGB(255, 205, 60) };
     s->hero.sheet = humanoid_sheet(&hero);
+    s->paragon.sheet = humanoid_sheet(&paragon);
     s->brawler.sheet = humanoid_sheet(&brawler);
     s->fencer.sheet = humanoid_sheet(&fencer);
     GeImage w = humanoid_sheet(&warden);
@@ -411,7 +417,7 @@ void art_make_sheets(Sprites *s) {
 }
 
 void art_free(Sprites *s) {
-    GeSprite *all[] = { &s->hero, &s->brawler, &s->fencer, &s->warden, &s->crawler, &s->bat, &s->spitter, &s->fx };
+    GeSprite *all[] = { &s->hero, &s->paragon, &s->brawler, &s->fencer, &s->warden, &s->crawler, &s->bat, &s->spitter, &s->fx };
     for (unsigned i = 0; i < sizeof all / sizeof all[0]; i++) ge_sprite_free(all[i]);
 }
 

@@ -31,7 +31,7 @@ enum { FX_NEEDLE0, FX_NEEDLE1, FX_GLOB0, FX_GLOB1, FX_ROCK, FX_WAVE0, FX_WAVE1, 
 enum { TV_GRASS = 0, TV_DIRT = 1, TV_PLANK = 2, TV_DIRT2 = 3, TV_SPIKE = 4, TV_STONE = 5, TV_STONE_TOP = 6, TV_COUNT = 7 };
 
 typedef struct {
-    GeSprite hero, brawler, fencer, warden, crawler, bat, spitter, fx;
+    GeSprite hero, paragon, brawler, fencer, warden, crawler, bat, spitter, fx;
 } Sprites;
 
 void art_make_sheets(Sprites *s);     /* images only; chars_init() parses the clips */
@@ -45,21 +45,41 @@ typedef struct {
     GeActorDef hero, crawler, bat, spitter, grunt, duelist, warden;
     GeShotDef needle, glob, spear, shockwave;                   /* overworld shots */
     GeShotDef f_needle, f_orb, f_rock, f_dust;                  /* fighting-game shots */
-    GeFighterDef f_hero, f_brawler, f_fencer;
+    GeFighterDef f_hero, f_brawler, f_fencer, f_paragon;
 } Chars;
 
 int chars_init(Chars *c, Sprites *s);  /* 0, or prints what failed */
 
+/* ---- the Paragon (paragon.c) ---------------------------------------------
+ * The final boss: a fighter that has been watching the whole journey. See docs/PARAGON.md. */
+#include "ge/ge_model.h"
+#include "ge/ge_paragon.h"
+
+enum { GIFT_GROBB = 1, GIFT_SILKE = 2, GIFT_MOSSHIDE = 4, GIFT_CHAMPION = 8, GIFT_THORNWARDEN = 16 };
+#define PARAGON_CLOCK_TICKS (75 * 60)           /* the finisher fires after this long, whatever happens */
+
+/* The Paragon's fighter def: the hero's move list, undying, plus what it took from each duelist beaten. */
+void paragon_build_def(const Chars *c, Sprites *s, unsigned gifts, GeFighterDef *out);
+int  paragon_learn_level(const GePlayerModel *m, unsigned gifts);
+/* Cross-session memory: a text file next to the game. */
+void paragon_set_profile_path(const char *path);
+const char *paragon_profile_path(void);
+void paragon_profile_load(GePlayerModel *m);
+void paragon_profile_save(const GePlayerModel *m);
+void paragon_draw_report(GeImage *fb, const char facts[][72], int nfacts, const GePlayerModel *m, int learn, unsigned gifts, int t);
+
 /* ---- level (level.c) ---------------------------------------------------- */
-#define LEVEL_W 178
+#define LEVEL_W 214
 #define LEVEL_H 15
 #define GROUND_ROW 12
 #define BOSS_COL0 154               /* boss arena: columns BOSS_COL0..BOSS_COL1 */
 #define BOSS_COL1 175
 #define GATE_COL 153
+#define EXIT_COL 176                /* the arena's far door: opens when the boss falls */
+#define HALL_COL0 178               /* the Paragon's hall: columns HALL_COL0..LEVEL_W-3 */
 
 enum { EN_CRAWLER, EN_BAT, EN_SPITTER, EN_GRUNT, EN_DUELIST, EN_BOSS };
-enum { DUEL_BRAWLER, DUEL_FENCER };
+enum { DUEL_BRAWLER, DUEL_FENCER, DUEL_PARAGON };
 
 typedef struct {
     int kind, col, row;
@@ -75,5 +95,6 @@ extern const int level_nbenches;
 
 void level_build(GeWorld *w);
 void level_set_gate(GeWorld *w, bool closed);
+void level_set_exit(GeWorld *w, bool closed);
 
 #endif

@@ -145,6 +145,7 @@ static Result run_match(uint32_t seed, BotFn bot, GeParagon *brain, GePlayerMode
     ge_fight_init(&F, &D0, &spr, &BOSS, &spr, NULL, seed);
     F_live = true;
     F.rounds_to_win = rounds;
+    if (undying) { F.infinite_clock = true; F.finisher_tick = 75 * 60; }      /* the demo's boss rules */
     ge_fight_observe(&F, model, 0);
     Result r = { -1, 0, 0, 0 };
     int tick = 0, hp1 = BOSS.max_hp;
@@ -162,6 +163,30 @@ static Result run_match(uint32_t seed, BotFn bot, GeParagon *brain, GePlayerMode
     r.winner = F.winner;
     r.ticks = tick;
     return r;
+}
+
+/* The guarantee: whoever the opponent is, the undying Paragon takes the match, every time, and the
+ * finisher is what ends it. Also run twice to check the whole thing is deterministic. */
+static void test_never_loses(void) {
+    puts("the Paragon cannot be beaten");
+    int paragon_wins = 0, finishers = 0, n = 24;
+    for (int sd = 1; sd <= n; sd++) {
+        GePlayerModel M; ge_model_init(&M);
+        GeParagon P; ge_paragon_init(&P, &M);
+        ge_paragon_set_learn(&P, (sd * 17) % 101, sd & 1);
+        Result r = run_match(7000 + sd, (sd % 3 == 0) ? habit_bot : NULL, &P, &M, 1, true);
+        paragon_wins += r.winner == 1;
+        finishers += F.finisher_seen;
+        CHECK(E(1)->hp >= 1);
+    }
+    printf("  %d / %d matches taken by the Paragon, the finisher decided %d of them\n", paragon_wins, n, finishers);
+    CHECK(paragon_wins == n);
+    GePlayerModel Ma, Mb; ge_model_init(&Ma); ge_model_init(&Mb);
+    GeParagon Pa, Pb; ge_paragon_init(&Pa, &Ma); ge_paragon_init(&Pb, &Mb);
+    ge_paragon_set_learn(&Pa, 50, 0); ge_paragon_set_learn(&Pb, 50, 0);
+    Result a = run_match(31337, NULL, &Pa, &Ma, 2, true), b = run_match(31337, NULL, &Pb, &Mb, 2, true);
+    CHECK(a.ticks == b.ticks && a.winner == b.winner && a.hp_lost == b.hp_lost);
+    CHECK(memcmp(&Ma.attacks, &Mb.attacks, sizeof Ma.attacks) == 0);
 }
 
 static void test_brain(void) {
@@ -223,6 +248,7 @@ int main(void) {
     test_finisher();
     test_frame_data();
     test_brain();
+    test_never_loses();
     if (F_live) ge_fight_free(&F);
     ge_sprite_free(&spr);
     printf("%d checks, %d failed\n", g_checks, g_failed);

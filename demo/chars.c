@@ -176,6 +176,15 @@ int chars_init(Chars *c, Sprites *s) {
     fight_clips(&fencer_style);
     rc |= parse(&s->fencer, "fencer");
 
+    /* the Paragon: the hero's own clips (it fights exactly as the player can), plus a finisher pose and a
+     * gift from the last duelist: an invulnerable-startup charge */
+    hero_overworld();
+    fight_clips(&hero_style);
+    emit("clip f_finisher once\n frame %d 40\n frame %d 8\n frame %d 12\n frame %d 99\n", H_HVA, H_HVB, H_HVC, H_HVD);
+    emit("clip f_charge once dmg=14 kb=4,-3 stop=10 stun=28 bstun=16 inv=18 lunge=6\n frame %d 6\n frame %d 5 hit=0,-32,44,28\n frame %d 12\n",
+         H_DASH, H_S1B, H_S1C);
+    rc |= parse(&s->paragon, "paragon");
+
     /* the boss: the same puppet at double size, so double-size boxes */
     emit("cell 64 64\norigin 32 63\n");
     emit("clip idle loop\n frame %d 30\n frame %d 30\n", H_IDLE0, H_IDLE1);
@@ -296,10 +305,11 @@ int chars_init(Chars *c, Sprites *s) {
     fighter_def(&c->f_hero, &s->hero, &c->f_needle, 1.3f, 6.2f, 12);
     fighter_def(&c->f_brawler, &s->brawler, &c->f_rock, 1.1f, 5.9f, 16);
     fighter_def(&c->f_fencer, &s->fencer, &c->f_dust, 1.45f, 6.4f, 10);
+    fighter_def(&c->f_paragon, &s->paragon, &c->f_needle, 1.3f, 6.2f, 12);
     c->f_brawler.max_hp = 115;
     c->f_fencer.max_hp = 90;
     if (ge_fighter_def_finish(&c->f_hero, &s->hero) || ge_fighter_def_finish(&c->f_brawler, &s->brawler) ||
-        ge_fighter_def_finish(&c->f_fencer, &s->fencer)) {
+        ge_fighter_def_finish(&c->f_fencer, &s->fencer) || ge_fighter_def_finish(&c->f_paragon, &s->paragon)) {
         fprintf(stderr, "fighter move list: unknown clip or bad input\n");
         return 1;
     }

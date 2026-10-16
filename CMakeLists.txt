@@ -23,7 +23,7 @@ endif()
 # compiled straight into each executable (a static library would create a
 # circular dependency with the core).
 find_package(SDL2 QUIET)
-set(DEMO_SRC demo/main.c demo/art.c demo/backdrop.c demo/chars.c demo/level.c demo/devlog.c)
+set(DEMO_SRC demo/main.c demo/art.c demo/backdrop.c demo/chars.c demo/level.c demo/devlog.c demo/paragon.c)
 
 add_executable(demo_headless ${DEMO_SRC} platform/null.c)
 target_compile_definitions(demo_headless PRIVATE DEMO_HEADLESS)
@@ -54,3 +54,7 @@ add_test(NAME fight_tests COMMAND fight_tests)
 add_executable(paragon_tests tests/test_paragon.c)
 target_link_libraries(paragon_tests ge)
 add_test(NAME paragon_tests COMMAND paragon_tests)
+
+# the whole story end to end: walk into the Paragon's hall, lose to it as designed, see the report
+add_test(NAME paragon_demo COMMAND demo_headless --autoplay --god --paragon --fresh --profile paragon_test_profile.txt --frames 9000)
+set_tests_properties(paragon_demo PROPERTIES PASS_REGULAR_EXPRESSION "duels_lost=[12] ")

@@ -92,4 +92,20 @@ So the best possible player outcome is to take it to 1 HP and watch the finisher
 
 ## 9. Measured results
 
-*Filled in at the end of the build.*
+All numbers come from `tests/test_paragon.c` (run by `ctest`) and the end-to-end demo run; they are repeatable because everything is seeded.
+
+| Question | Result |
+|---|---|
+| Is it strong? Paragon with an empty memory vs the built-in level-3 CPU, best of 3, 12 seeds | **12 / 12 won** (30 / 30 over a bigger sweep, at learn levels 0, 40 and 100) |
+| Does learning help? Ten fights against a player who always throws the same medium punch: damage the Paragon takes | **49 with a blank memory, 35 after six earlier duels with that player** (28% less) |
+| Can it be beaten? 24 matches with the demo's boss rules against a mix of the level-3 CPU and a habitual player, different seeds and learn levels | **24 / 24 taken by the Paragon**; its health never went below 1 |
+| Is it deterministic? The same seed twice | identical length, result, damage and learned counters |
+| End to end in the demo? Walk into the hall, lose, see the report, rematch | passes (`paragon_demo` in `ctest`); the rematch starts at a higher level (8 → 30 on a fresh profile, 68 → 90 → 100 with every technique) |
+| Clean under AddressSanitizer + UBSan? | yes, all four test programs |
+
+**Not measured yet:** how hard it *feels* to a human (only a person can say), and its frame rate on a real 3DS. The brain costs a few thousand instructions per tick, small next to the renderer, but the first play log from hardware will say for certain.
+
+**Things found while building it** (worth knowing if you tune it):
+
+* A walk, a pause and another walk is a *dash* by the engine's own input rules, and a dashing fighter cannot block. The brain now refuses to double-tap by accident (`odir` in `ge_paragon.c`). Before that fix (and the guarding below) it lost about 1 match in 10 to the level-3 CPU; after, none in 30.
+* Reacting only after a human-length delay is not enough against a 3-tick poke. It also guards by default whenever it is inside the opponent's reach, and crouches to do it (lows and mids are common, the overhead is slow enough to see).

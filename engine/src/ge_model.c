@@ -317,7 +317,7 @@ int ge_model_describe(const GePlayerModel *m, char out[][72], int max) {
     if (m->ow[GE_OW_POGO] >= 3) add(facts, &n, 0.45f, "YOU BOUNCED OFF %u THINGS WITH A DOWN-SLASH", (unsigned)m->ow[GE_OW_POGO]);
     if (m->ow[GE_OW_DASH] >= 10) add(facts, &n, 0.4f, "YOU DASHED %u TIMES", (unsigned)m->ow[GE_OW_DASH]);
     if (m->ow[GE_OW_DEATH] >= 2) add(facts, &n, 0.5f, "YOU FELL %u TIMES. IT REMEMBERS EACH ONE", (unsigned)m->ow[GE_OW_DEATH]);
-    if (m->duels >= 1) add(facts, &n, 0.35f, "%u DUELS WATCHED. YOU WON %u. IT LEARNED FROM ALL", (unsigned)m->duels, (unsigned)m->wins);
+    if (m->duels >= 1) add(facts, &n, 0.35f, "%u %s WATCHED. YOU WON %u. IT LEARNED FROM ALL", (unsigned)m->duels, m->duels == 1 ? "DUEL" : "DUELS", (unsigned)m->wins);
     /* most distinctive first (simple selection sort; there are only a handful) */
     int count = 0;
     while (count < max && n > 0) {
