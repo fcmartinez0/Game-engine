@@ -50,3 +50,7 @@ add_test(NAME engine_tests COMMAND engine_tests)
 add_executable(fight_tests tests/test_fight.c)
 target_link_libraries(fight_tests ge)
 add_test(NAME fight_tests COMMAND fight_tests)
+
+add_executable(paragon_tests tests/test_paragon.c)
+target_link_libraries(paragon_tests ge)
+add_test(NAME paragon_tests COMMAND paragon_tests)

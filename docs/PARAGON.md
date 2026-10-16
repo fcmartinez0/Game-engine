@@ -1,0 +1,95 @@
+# The Paragon: design
+
+*A fighter that watches the whole journey, learns the player, and is the final boss. In the demo it cannot be beaten. The story (who it is, why it watches) comes after this design; every place a story beat will plug in is marked **[story hook]**.*
+
+**Working names.** The fighter is called **PARAGON** on screen until the story names it. "Paragon" here means *the best possible opponent*, not a character with a past yet.
+
+## 1. Goals
+
+1. **Feels perfect.** It never wastes a frame, never misses an input, knows every move's frame data exactly, and always has a counter to what you usually do.
+2. **Feels personal.** It plays *you*. Two players meet two different Paragons, because it learned from what each of them actually did.
+3. **Grows with the journey.** Every duel feeds it, and every duelist you beat teaches it something. Winning makes the end harder.
+4. **Cannot be beaten (demo).** Extremely hard, but never actually winnable. The loss has to feel *inevitable*, not buggy or cheap.
+5. **Fair to read.** It only reacts to what a human could see (animations and positions, after a short reaction delay). It never reads button presses.
+
+## 2. What it learns (the Observer)
+
+A **player model** (`GePlayerModel`, `engine/ge_model`) watches every duel from the player's side. It is plain counters, kept small, saved as a text file, so the Paragon remembers across play sessions (on a 3DS: `/3ds/gloamwood/profile.txt`).
+
+| It records | Why it matters |
+|---|---|
+| Attacks you start, by **role** (poke, low, overhead, anti-air, projectile, rush, combo, super, jump-in, throw) and by **range** (close / near / mid / far) | Predicts what you'll try at the range you're standing at |
+| Which attack tends to **follow** which (a bigram) | Predicts your next button after the last one |
+| Neutral habits by range: walk in, walk back, stand, crouch, jump, dash, block high, block low | Predicts what you'll do when *not* attacking |
+| Defence by **guard height**: how often you block a low, an overhead, a mid | Tells it which mix-up works on you |
+| Your answer to **jump-ins** (anti-air, block, or nothing) | Tells it when jumping is safe |
+| Your answer to **projectiles** (jump, block, dash, shoot back) | Tells it how to zone you |
+| What you do **after blocking** and **after getting up** | Tells it when to throw or to wait |
+| How you handle **throws** (tech or not) | Tells it whether grabbing is worth it |
+| Overworld stats (slashes, pogo bounces, dashes, needles, heals, deaths) | Not used in fights yet; shown on the end screen. **[story hook]** |
+
+Counters decay slowly between duels and quickly *inside* the final fight, so if you change your style mid-fight it re-learns within a few exchanges.
+
+## 3. How it decides (the Brain)
+
+Every tick, in priority order:
+
+1. **Defend.** It reacts to what you are doing as it looked `react` ticks ago (see knobs). It blocks at the right height, tech-escapes throws, and jumps or dashes through projectiles depending on what the model says works.
+2. **Punish.** If you are in recovery (a whiffed or blocked move, or hit-stun), it computes *exactly* how many frames you are stuck for, picks the strongest move whose startup plus approach fits inside that window, and fires it on the right tick. On a hit it cancels along the highest-damage route and spends meter on a super when it will connect.
+3. **Read and counter.** In neutral it asks the model for a probability distribution over what you will do next (given range and your last attack), then picks the response with the best expected payoff from a hand-authored table. Examples: your habit is jumping, so it anti-airs; you block standing, so it goes low; you block crouching, so it uses an overhead; you hold block, so it throws; you walk in at range, so it pokes; you spam projectiles, so it rushes. A small exploration chance keeps it from being predictable; the chance shrinks as it learns.
+4. **Space.** Otherwise it walks to the range where its best poke hits and yours doesn't.
+
+It perfectly executes the plan it chooses, but the *plan* can be wrong. When it reads you wrong it takes the hit. That is why it can be hurt, which is what makes the fight feel real.
+
+## 4. How it grows with the journey
+
+* **Learning level (0 to 100)** rises with how much it has observed. It controls the *reaction delay* (12 ticks at the start, down to 5 at the end), how often it exploits the model instead of exploring, and how sharp its spacing is.
+* **Techniques absorbed from beaten duelists.** Each duelist you win against gives it something: **[story hook: why does it take their power?]**
+
+| Beat | It gains |
+|---|---|
+| Grobb | Rock-throw projectile; more health |
+| Silke | Ground-dust projectile; faster walk and dash |
+| Mosshide | Hits harder; much more health |
+| The Champion | Starts the fight with a full super meter; faster reactions |
+| Thornwarden | Armoured rush |
+
+* **Losing teaches it too.** Every duel, won or lost, goes into the model.
+
+## 5. The guaranteed loss
+
+Two rails, both authored, either of which ends the fight:
+
+1. **It cannot be knocked out.** Its health clamps at 1. The moment it would drop below that, the finisher plays.
+2. **The clock.** After 75 seconds of fighting, the finisher plays regardless.
+
+The **finisher** is a short cinematic: the screen darkens, the Paragon gathers itself, one slash crosses the whole screen, and the player is struck down (unblockable, no input possible). It is the same rule for everyone, every time. **[story hook: this is where the Paragon speaks, or does not.]**
+
+So the best possible player outcome is to take it to 1 HP and watch the finisher play. That is the "extremely difficult but guaranteed death" the demo needs.
+
+## 6. After the loss (demo flow)
+
+1. The finisher plays and the player is struck down.
+2. An **end-of-demo screen** lists what the Paragon learned about this player: the six most distinctive habits, in plain words (for example, "YOU BLOCK HIGH 94% OF THE TIME. YOU BLOCK LOW 11%").
+3. The player wakes at the last bench. The Paragon is still waiting, and now it has learned from this loss too. A rematch is harder than the first fight, but still cannot be won.
+
+## 7. Tuning knobs
+
+| Knob | Where | Effect |
+|---|---|---|
+| `react` ticks (12 to 5) | `GeParagon.react` | How late it sees what you do |
+| Exploration rate | `GeParagon.explore` | How often it plays a non-optimal option |
+| Max health, damage scale | its `GeFighterDef` | Length and pressure of the fight |
+| Finisher clock | `GeFight.finisher_tick` | How long you can survive |
+| Learning rate / decay | `GePlayerModel` | How fast it forms and changes opinions |
+| Payoff table | `ge_paragon.c` | Its *style* (more throws, more zoning, ...) |
+
+## 8. What a story needs from this
+
+* A **name and a reason** for the watching. The model already counts things worth quoting.
+* A **voice** at the intro, at the finisher, and on the end screen.
+* A decision on the **ending**: the demo ends in the loss; a full game could use the same finisher as a *cutscene* when the story wants it, and make the fight winnable by flipping one flag (`undying`) at the right point.
+
+## 9. Measured results
+
+*Filled in at the end of the build.*

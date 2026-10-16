@@ -31,6 +31,8 @@
 
 enum { GE_FB_L = 1, GE_FB_M = 2, GE_FB_H = 4, GE_FB_S = 8 }; /* light, medium, heavy, special/super */
 
+typedef struct GePlayerModel GePlayerModel;   /* see ge_model.h */
+
 #define GE_FIGHT_MAX_MOVES 32
 #define GE_FIGHT_HIST 32
 #define GE_FIGHT_METER 100
@@ -75,6 +77,11 @@ typedef struct {
     int clip_idle, clip_walk_f, clip_walk_b, clip_crouch, clip_jump, clip_fall;
     int clip_hurt, clip_hurt_air, clip_block, clip_block_low, clip_down, clip_ko, clip_win;
     int clip_throw, clip_thrown, clip_dash, clip_backdash;
+    /* Boss rules: an `undying` fighter's health stops at 1 instead of 0, and the moment that happens (or the
+     * fight clock `finisher_tick` runs out) it performs its finisher: a scripted, unblockable KO of the other
+     * fighter. clip_finisher is the pose it plays while doing it (-1 = the idle clip). */
+    bool undying;
+    int clip_finisher;
     GeMove moves[GE_FIGHT_MAX_MOVES];
     int nmoves;
 } GeFighterDef;
@@ -108,7 +115,7 @@ typedef struct {
     int ai_timer, ai_cd, ai_hold_x, ai_hold_y, ai_block_for; /* CPU state */
 } GeFighter;
 
-typedef enum { GE_FP_INTRO, GE_FP_FIGHT, GE_FP_KO, GE_FP_TIME, GE_FP_ROUND_END, GE_FP_MATCH_END } GeFightPhase;
+typedef enum { GE_FP_INTRO, GE_FP_FIGHT, GE_FP_KO, GE_FP_TIME, GE_FP_ROUND_END, GE_FP_MATCH_END, GE_FP_FINISHER } GeFightPhase;
 
 typedef struct {
     GeWorld world;           /* the arena; layers and tileset are borrowed from the caller */
@@ -126,6 +133,16 @@ typedef struct {
     int combo_show[2], combo_count[2];
     int start_hp[2];         /* hp for round 1 (e.g. a first-strike bonus); later rounds start full */
     int arena_w;
+    /* observer: a player model fed from every tick of the fight (see ge_model.h) */
+    GePlayerModel *model;
+    int model_side;
+    /* boss rules */
+    bool infinite_clock;     /* no round timer (the HUD shows --) */
+    int fight_ticks;         /* ticks spent in the FIGHT phase this round */
+    int finisher_tick;       /* when > 0: an undying fighter's finisher fires at this fight_ticks */
+    int finisher_side;       /* who performs it */
+    bool finisher_pending;   /* an undying fighter hit its floor: the finisher fires at the next chance */
+    bool finisher_seen;      /* it has happened at least once this fight (for the game to react to) */
 } GeFight;
 
 /* Set up a match. `backdrop` (may be NULL) lends its parallax layers and tileset. */
@@ -141,6 +158,13 @@ void ge_fight_cpu(GeFight *f, int side, int level, GeFightInput *out);
 /* exposed for tests / tools */
 bool ge_fight_motion_done(const GeFighter *F, const int *motion, int n, int window);
 GeRect ge_fighter_hurtbox(const GeFight *f, int side);
+/* Frames until the fighter can act again (0 = free now). Counts the rest of the current attack animation,
+ * hit-stun, block-stun and knockdown. Used by the AI to find punish windows. */
+int  ge_fight_frames_until_free(const GeFight *f, int side);
+/* Startup (ticks before the first hit frame) and reach (furthest hitbox edge in front of the fighter) of a move. */
+int  ge_fight_move_startup(const GeFight *f, int side, int move);
+int  ge_fight_move_reach(const GeFight *f, int side, int move);
+int  ge_fight_move_total(const GeFight *f, int side, int move);   /* whole animation, in ticks */
 bool ge_fight_can_start(const GeFight *f, int side, int move);
 
 #endif
