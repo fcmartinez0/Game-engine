@@ -47,13 +47,17 @@ void ge_world_free(GeWorld *w) {
     ge_tilemap_free(&w->map);
     if (!w->tileset_borrowed) ge_image_free(&w->tileset);
     for (int i = 0; i < w->nlayers; i++)
-        if (!w->layers[i].borrowed) ge_image_free(&w->layers[i].img);
+        if (!w->layers[i].borrowed) { ge_image_free(&w->layers[i].img); ge_spans_free(&w->layers[i].spans); }
     w->nlayers = 0;
 }
 
 int ge_world_add_layer(GeWorld *w, GeParallaxLayer layer) {
     if (w->nlayers >= GE_MAX_LAYERS) return -1;
     if (layer.alpha == 0) layer.alpha = 255;
+    if (!layer.spans.spans && !layer.borrowed) {        /* compile once; borrowed layers arrive compiled */
+        if (layer.alpha != 255) { ge_image_scale_alpha(&layer.img, layer.alpha); layer.alpha = 255; }
+        ge_spans_build(&layer.spans, &layer.img);
+    }
     w->layers[w->nlayers] = layer;
     return w->nlayers++;
 }
@@ -229,20 +233,34 @@ void ge_world_update(GeWorld *w) {
 static void draw_layer(const GeWorld *w, GeImage *fb, const GeParallaxLayer *l, int camx, int camy) {
     int sx = (int)(camx * l->factor_x + l->auto_x * (float)w->tick);
     int dy = l->y - (int)(camy * l->factor_y);
+    if (l->spans.spans) { ge_spans_draw_wrap_x(fb, &l->img, &l->spans, sx, dy, l->additive ? GE_ADDITIVE : 0); return; }
     uint32_t tint = l->alpha == 255 ? GE_WHITE : GE_ARGB(l->alpha, 255, 255, 255);
     ge_blit_wrap_x(fb, &l->img, sx, dy, (l->additive ? GE_ADDITIVE : 0) | (l->opaque ? GE_OPAQUE : 0), tint);
 }
 
-static void draw_tiles(const GeWorld *w, GeImage *fb, int camx, int camy, int z) {
+static void draw_tiles(GeWorld *w, GeImage *fb, int camx, int camy, int z) {
     const GeTilemap *m = &w->map;
     if (!w->tileset.px) return;
+    if (!w->tile_opaque_ready) {
+        int cells = w->tileset.w / GE_TILE > 256 ? 256 : w->tileset.w / GE_TILE;
+        for (int c = 0; c < cells; c++) {
+            bool opaque = true;
+            for (int y = 0; y < GE_TILE && opaque; y++)
+                for (int x = 0; x < GE_TILE; x++)
+                    if ((w->tileset.px[y * w->tileset.w + c * GE_TILE + x] >> 24) != 255) { opaque = false; break; }
+            w->tile_opaque[c] = opaque;
+        }
+        w->tile_opaque_ready = true;
+    }
     int tx0 = (int)floorf((float)camx / GE_TILE), tx1 = (camx + fb->w / z) / GE_TILE + 1;
     int ty0 = (int)floorf((float)camy / GE_TILE), ty1 = (camy + fb->h / z) / GE_TILE + 1;
     for (int ty = ge_clampi(ty0, 0, m->h); ty < ge_clampi(ty1 + 1, 0, m->h); ty++)
         for (int tx = ge_clampi(tx0, 0, m->w); tx < ge_clampi(tx1 + 1, 0, m->w); tx++) {
             if (m->type[ty * m->w + tx] == GE_TILE_EMPTY) continue;
-            GeIRect sr = { m->vis[ty * m->w + tx] * GE_TILE, 0, GE_TILE, GE_TILE };
-            ge_blit_scaled(fb, &w->tileset, sr, (tx * GE_TILE - camx) * z, (ty * GE_TILE - camy) * z, z, 0, GE_WHITE);
+            int cell = m->vis[ty * m->w + tx];
+            GeIRect sr = { cell * GE_TILE, 0, GE_TILE, GE_TILE };
+            ge_blit_scaled(fb, &w->tileset, sr, (tx * GE_TILE - camx) * z, (ty * GE_TILE - camy) * z, z,
+                           w->tile_opaque[cell] ? GE_OPAQUE : 0, GE_WHITE);
         }
 }
 
@@ -298,7 +316,11 @@ void ge_world_draw(GeWorld *w, GeImage *fb) {
     int z = w->zoom > 1 ? w->zoom : 1;
     int lcamy = z > 1 ? 0 : camy;   /* a zoomed view keeps the backdrop framed as authored */
 
-    ge_clear(fb, GE_RGB(8, 6, 16));
+    /* the first layer usually paints the whole screen (the sky): clearing first would be wasted work */
+    const GeParallaxLayer *l0 = w->nlayers > 0 ? &w->layers[0] : NULL;
+    bool covers = l0 && l0->opaque && !l0->additive && l0->img.w >= fb->w && l0->y <= 0 && l0->y + l0->img.h >= fb->h &&
+                  l0->factor_y == 0.0f && !(w->low_detail && l0->optional);
+    if (!covers) ge_clear(fb, GE_RGB(8, 6, 16));
     for (int i = 0; i < w->nlayers; i++)
         if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
             draw_layer(w, fb, &w->layers[i], camx * z, lcamy);

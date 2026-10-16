@@ -39,6 +39,22 @@ void ge_vignette(GeImage *dst, int depth, int max_alpha);
 void ge_blit(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy, int flags, uint32_t tint);
 /* Same, magnified by an integer `scale` (nearest neighbour). */
 void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy, int scale, int flags, uint32_t tint);
+/* Pre-digested image for drawing wide, mostly hard-edged art (parallax layers) fast.
+ * Each row becomes a list of runs: fully opaque runs are copied as plain memory,
+ * runs with any partial alpha are blended per pixel, transparent gaps cost nothing. */
+typedef struct { uint16_t x, len; uint8_t opaque; } GeSpan;
+typedef struct { GeSpan *spans; uint32_t *row_start; int rows; } GeSpans;
+int  ge_spans_build(GeSpans *out, const GeImage *img);   /* 0 on success */
+void ge_spans_free(GeSpans *s);
+/* Like ge_blit_wrap_x, from a span table. `flags` may be GE_ADDITIVE; tint must be GE_WHITE
+ * (bake any layer alpha into the image first with ge_image_scale_alpha). */
+void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags);
+void ge_image_scale_alpha(GeImage *img, int alpha); /* multiply every pixel's alpha by alpha/255 */
+
+/* 5x7 bitmap rows (bit 4 = leftmost), drawn magnified `scale` times; used by the font. */
+void ge_draw_bits(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, uint32_t color);
+void ge_draw_bits_outline(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, uint32_t color);
+
 /* Draw `src` repeated horizontally so it covers the whole destination; `scroll_x`
  * is how far the layer has moved. Used for parallax. */
 void ge_blit_wrap_x(GeImage *dst, const GeImage *src, int scroll_x, int dy, int flags, uint32_t tint);

@@ -25,7 +25,7 @@ static bool is_absolute(const char *p) {
 }
 
 static void undo(GeWorld *w, int first) {
-    for (int i = first; i < w->nlayers; i++) ge_image_free(&w->layers[i].img);
+    for (int i = first; i < w->nlayers; i++) { ge_image_free(&w->layers[i].img); ge_spans_free(&w->layers[i].spans); }
     w->nlayers = first;
 }
 

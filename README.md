@@ -13,7 +13,7 @@ cmake -S . -B build && cmake --build build -j
 ./build/demo                       # windowed (needs SDL2)
 ./build/demo --autoplay            # a scripted bot plays it, duels included
 ./build/demo --warp 150            # start at a column (150 = just before the boss)
-ctest --test-dir build             # 156 checks, no window needed
+ctest --test-dir build             # 161 checks, no window needed
 ./build/demo_headless --autoplay --frames 3000 --dump-every 300 --dump-dir shots   # PNGs, no display
 ```
 
@@ -149,13 +149,15 @@ docker run --rm -v "$PWD":/src -w /src/3ds devkitpro/devkitarm make
 
 To skip the SD card shuffle while iterating, start the launcher, press Y for netloader, then run `3dslink 3ds/gloamwood.3dsx` from the PC (it ships with devkitPro).
 
+**Performance work for the original 3DS.** Its ARM11 is slow, has no hardware divide and no NEON, so the renderer is written around that: parallax layers are compiled once into runs of opaque pixels (plain copies) and translucent pixels (blended), skipping empty space entirely; the first full-screen layer replaces the clear; opaque tiles are copied; text writes pixels directly; blends use packed multiplies instead of per-channel divides; and the screen copy rotates the picture in cache-friendly 8×8 blocks with word-sized stores. Instructions per frame in the overworld dropped roughly 7× on the desktop profile (8.2M → 1.1M); see the dev menu's speed readout for the real number on your console.
+
 **Which 3DS:** the original 3DS / 3DS XL / 2DS (268 MHz) automatically gets `low_detail`, which drops the mist, light shafts, clouds and vignette. A New 3DS / New 3DS XL / New 2DS XL (804 MHz, recognisable by the C-stick nub and ZL/ZR) runs full detail. Press **Select** in-game for a readout of frames per second and milliseconds per frame.
 
 **Status:** the build uses the real devkitARM toolchain and libctru, and compiles with no warnings. It **has not been run on hardware or an emulator yet**, and performance on the console is unmeasured. The renderer is software. The demo turns off its decorative layers on the original 3DS (`low_detail`). If it isn't fast enough, the next step is a GPU path (citro2d).
 
 ## Testing
 
-* `engine_tests` (117 checks): the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, the 3DS screen rotation, and the `.layers` and asset-tool round trips.
+* `engine_tests` (122 checks): the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, the 3DS screen rotation, the fast blit paths against the plain ones (including off-screen and clipped), and the `.layers` and asset-tool round trips.
 * `fight_tests` (39 checks): motion inputs (including too-slow ones, and left-facing fighters), command normals, dashes, high/low/mid blocking, chip damage, throws in and out of range, cancels only on contact, the L→M→H combo, the juggle limit, supers, invulnerable anti-airs, K.O., time over, best-of-three, and a deterministic CPU-vs-CPU match.
 * **Full run:** `--autoplay` plays the whole demo. In a 45,000-tick run (12.5 minutes of game time) the bot climbed the shaft, won all four duels (one after a retry; the champion 2-0) and reached the boss. Its best attempt got the boss down to 78 of 180 health; the boss won every time. With `--god` (a dev flag) it beats the boss and the victory screen plays. Set `GLOAM_LOG=1` to print duels, deaths and boss events.
 

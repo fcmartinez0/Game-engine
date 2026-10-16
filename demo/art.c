@@ -44,43 +44,68 @@ typedef struct {
     float cloak;        /* cloak flutter */
 } Pose;
 
-static void leg(GeImage *im, int hx, int hy, int kx, int ky, int fx, int fy, const Look *L, bool knee) {
-    if (knee) { ge_draw_line(im, hx, hy, kx, ky, 3, L->pants); ge_draw_line(im, kx, ky, fx, fy, 3, L->pants); }
-    else ge_draw_line(im, hx, hy, fx, fy, 3, L->pants);
-    ge_fill_rect(im, fx - 1, fy - 1, 4, 2, L->boots, 0);
+/* `far` = the leg on the far side of the body: drawn darker, so near and far limbs read as depth.
+ * The boot always has a long toe in front and a short heel behind: the clearest facing cue at the feet. */
+static void leg(GeImage *im, int hx, int hy, int kx, int ky, int fx, int fy, const Look *L, bool knee, bool far) {
+    const uint32_t ink = GE_RGB(20, 14, 30);
+    uint32_t pants = far ? mix(L->pants, ink, 0.45f) : L->pants, boots = far ? mix(L->boots, ink, 0.4f) : L->boots;
+    if (knee) { ge_draw_line(im, hx, hy, kx, ky, 3, pants); ge_draw_line(im, kx, ky, fx, fy, 3, pants); }
+    else ge_draw_line(im, hx, hy, fx, fy, 3, pants);
+    ge_fill_rect(im, fx - 2, fy - 1, 3, 2, boots, 0);                 /* heel */
+    ge_fill_rect(im, fx + 1, fy - 1, 4, 2, boots, 0);                 /* toe, pointing forward */
+    ge_fill_rect(im, fx + 3, fy - 1, 2, 1, mix(boots, GE_RGB(255, 255, 255), 0.3f), 0);   /* toe-cap highlight */
 }
 
 static void draw_head(GeImage *im, int hx, int hy, const Look *L) {
     const uint32_t ink = GE_RGB(20, 14, 30);
     int r = L->head_r;
+    /* Every head has a FACE on its front side (an eye near the front edge and a protruding nose or snout)
+     * and everything else -- horns, ears, antennae, plume -- sweeps BACK. Read that way round the sprite
+     * can't be mistaken for facing the other direction. */
     switch (L->head) {
-    case HEAD_MASK: /* pale mask with two horns */
-        ge_draw_line(im, hx - 2, hy - r, hx - 4, hy - r - 5, 2, L->skin);
-        ge_draw_line(im, hx + 2, hy - r, hx + 3, hy - r - 5, 2, L->skin);
+    case HEAD_MASK:
+        ge_draw_line(im, hx - 1, hy - r, hx - 8, hy - r - 1, 2, L->skin);          /* horns sweep back */
+        ge_draw_line(im, hx + 1, hy - r, hx - 4, hy - r - 2, 2, L->skin);
         ge_fill_circle(im, hx, hy, r + 1, ink, 0);
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
-        ge_fill_rect(im, hx, hy - 1, 2, 3, ink, 0);
-        ge_fill_rect(im, hx + 3, hy - 1, 1, 3, ink, 0);
+        ge_fill_rect(im, hx + r - 1, hy + 1, 3, 2, L->skin, 0);                    /* small snout */
+        ge_fill_rect(im, hx + r + 1, hy + 1, 1, 2, ink, 0);
+        ge_fill_rect(im, hx + 1, hy - 2, 3, 4, ink, 0);                            /* big front eye */
+        ge_fill_rect(im, hx - 3, hy - 1, 2, 2, mix(L->skin, ink, 0.25f), 0);       /* shading at the back of the head */
         break;
     case HEAD_GOBLIN:
-        ge_draw_line(im, hx - r, hy - 1, hx - r - 4, hy - 4, 1, L->skin);
-        ge_draw_line(im, hx + r, hy - 1, hx + r + 3, hy - 4, 1, L->skin);
+        ge_draw_line(im, hx - r, hy - 1, hx - r - 6, hy - 5, 1, L->skin);          /* long ears swept back */
+        ge_draw_line(im, hx - r, hy, hx - r - 5, hy - 2, 1, mix(L->skin, ink, 0.3f));
         ge_fill_circle(im, hx, hy, r + 1, ink, 0);
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
-        ge_fill_rect(im, hx + 2, hy - 1, 2, 2, GE_RGB(255, 220, 80), 0);
+        ge_draw_line(im, hx + r - 1, hy + 1, hx + r + 4, hy + 3, 2, L->skin);      /* long pointed nose */
+        ge_fill_rect(im, hx + r + 3, hy + 3, 2, 1, ink, 0);
+        ge_fill_rect(im, hx + 1, hy - 2, 4, 3, GE_RGB(255, 235, 90), 0);           /* big yellow eye */
+        ge_fill_rect(im, hx + 3, hy - 1, 2, 2, ink, 0);                            /* pupil looks forward */
+        ge_fill_rect(im, hx + 1, hy + 3, 3, 1, ink, 0);                            /* mouth with a fang */
+        ge_fill_rect(im, hx + 3, hy + 2, 1, 1, GE_RGB(240, 240, 230), 0);
+        ge_fill_rect(im, hx - 3, hy, 2, 3, mix(L->skin, ink, 0.3f), 0);            /* shaded back of head */
         break;
     case HEAD_MOTH:
-        ge_draw_line(im, hx - 1, hy - r, hx - 5, hy - r - 6, 1, L->hair);
-        ge_draw_line(im, hx + 1, hy - r, hx + 4, hy - r - 6, 1, L->hair);
+        ge_draw_line(im, hx - 1, hy - r, hx - 9, hy - r - 1, 1, L->hair);          /* antennae sweep back */
+        ge_draw_line(im, hx + 1, hy - r, hx - 6, hy - r - 2, 1, L->hair);
         ge_fill_circle(im, hx, hy, r + 1, ink, 0);
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
-        ge_fill_rect(im, hx + 1, hy - 1, 3, 2, GE_RGB(40, 30, 60), 0);
+        ge_fill_rect(im, hx + r - 2, hy - 1, 6, 4, ink, 0);                        /* long snout outline */
+        ge_fill_rect(im, hx + r - 2, hy, 5, 3, L->skin, 0);
+        ge_fill_rect(im, hx + 1, hy - 2, 4, 3, GE_RGB(90, 235, 255), 0);          /* glowing cyan eye */
+        ge_fill_rect(im, hx + 3, hy - 1, 2, 2, GE_RGB(20, 60, 90), 0);
+        ge_fill_rect(im, hx - 3, hy - 1, 2, 3, L->hair, 0);                        /* dark hair at the back */
         break;
     case HEAD_HELM:
+        ge_draw_line(im, hx - 1, hy - r, hx - 8, hy - r - 1, 2, L->hair);          /* plume streams back */
         ge_fill_circle(im, hx, hy, r + 1, ink, 0);
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
-        ge_fill_rect(im, hx - 1, hy - 1, r + 2, 2, GE_RGB(255, 120, 60), 0); /* glowing visor */
-        ge_draw_line(im, hx - 1, hy - r, hx - 6, hy - r - 3, 2, L->hair);       /* plume */
+        ge_fill_rect(im, hx - 4, hy - 4, 3, 8, mix(L->skin, ink, 0.5f), 0);       /* dark, plain back of the helm */
+        ge_fill_rect(im, hx + r - 1, hy - 1, 5, 4, ink, 0);                        /* pointed front of the helm */
+        ge_fill_rect(im, hx + r, hy, 3, 2, L->skin, 0);
+        ge_fill_rect(im, hx + 1, hy - 2, r - 1, 3, GE_RGB(255, 140, 60), 0);       /* glowing visor: front half only */
+        ge_fill_rect(im, hx + 3, hy - 1, 2, 1, GE_RGB(255, 240, 160), 0);          /* hot core of the visor */
         break;
     default:
         ge_fill_circle(im, hx, hy, r + 1, ink, 0);
@@ -103,31 +128,34 @@ static void draw_figure(GeImage *im, int cx, int base, const Look *L, const Pose
 
     float s = sinf(P->phase * 2 * PI), c = cosf(P->phase * 2 * PI);
     switch (P->legs) {   /* back leg */
-    case L_WALK:   leg(im, hipx, hipy, 0, 0, cx - (int)(s * 6), base - (int)(fmaxf(0, -c) * 3), L, false); break;
-    case L_TUCK:   leg(im, hipx, hipy, 0, 0, cx - 2, base - 4, L, false); break;
-    case L_SPREAD: leg(im, hipx, hipy, 0, 0, cx - 4, base - 1, L, false); break;
-    case L_CROUCH: leg(im, hipx, hipy, cx - 3, base - 4, cx - 5, base, L, true); break;
-    case L_KICK:   leg(im, hipx, hipy, 0, 0, cx - 3, base, L, false); break;
-    case L_SWEEP:  leg(im, hipx, hipy, cx - 3, base - 4, cx - 7, base, L, true); break;
-    case L_KNEEL:  leg(im, hipx, hipy, cx - 3, base, cx - 9, base, L, true); break;
-    default:       leg(im, hipx, hipy, 0, 0, cx - 3, base, L, false); break;
+    case L_WALK:   leg(im, hipx, hipy, 0, 0, cx - (int)(s * 6), base - (int)(fmaxf(0, -c) * 3), L, false, true); break;
+    case L_TUCK:   leg(im, hipx, hipy, 0, 0, cx - 2, base - 4, L, false, true); break;
+    case L_SPREAD: leg(im, hipx, hipy, 0, 0, cx - 4, base - 1, L, false, true); break;
+    case L_CROUCH: leg(im, hipx, hipy, cx - 3, base - 4, cx - 5, base, L, true, true); break;
+    case L_KICK:   leg(im, hipx, hipy, 0, 0, cx - 3, base, L, false, true); break;
+    case L_SWEEP:  leg(im, hipx, hipy, cx - 3, base - 4, cx - 7, base, L, true, true); break;
+    case L_KNEEL:  leg(im, hipx, hipy, cx - 3, base, cx - 9, base, L, true, true); break;
+    default:       leg(im, hipx, hipy, 0, 0, cx - 3, base, L, false, true); break;
     }
     int bax, bay;
     pt((float)shx, (float)shy, P->arm_b, 7, &bax, &bay);
     ge_draw_line(im, shx, shy, bax, bay, 2, mix(L->tunic, GE_RGB(20, 14, 30), 0.4f));
 
     ge_draw_line(im, hipx, hipy, shx, shy, 5, L->tunic);
+    ge_draw_line(im, hipx + 2, hipy - 2, shx + 2, shy + 1, 1, mix(L->tunic, GE_RGB(255, 255, 255), 0.28f));   /* lit chest, front side */
+    ge_draw_line(im, hipx - 2, hipy - 2, shx - 2, shy + 1, 1, mix(L->tunic, GE_RGB(20, 14, 30), 0.45f));      /* shaded back */
     ge_fill_rect(im, hipx - 2, hipy - 1, 5, 2, GE_RGB(20, 14, 30), 0);
+    ge_fill_rect(im, hipx + 1, hipy - 1, 2, 2, GE_RGB(240, 200, 90), 0);                                      /* buckle faces front */
 
     switch (P->legs) {   /* front leg */
-    case L_WALK:   leg(im, hipx, hipy, 0, 0, cx + (int)(s * 6), base - (int)(fmaxf(0, c) * 3), L, false); break;
-    case L_TUCK:   leg(im, hipx, hipy, 0, 0, cx + 4, base - 6, L, false); break;
-    case L_SPREAD: leg(im, hipx, hipy, 0, 0, cx + 5, base - 2, L, false); break;
-    case L_CROUCH: leg(im, hipx, hipy, cx + 6, base - 5, cx + 5, base, L, true); break;
-    case L_KICK:   leg(im, hipx, hipy, 0, 0, cx + 13, base - 6, L, false); break;
-    case L_SWEEP:  leg(im, hipx, hipy, 0, 0, cx + 14, base - 1, L, false); break;
-    case L_KNEEL:  leg(im, hipx, hipy, cx + 5, base - 6, cx + 6, base, L, true); break;
-    default:       leg(im, hipx, hipy, 0, 0, cx + 3, base, L, false); break;
+    case L_WALK:   leg(im, hipx, hipy, 0, 0, cx + (int)(s * 6), base - (int)(fmaxf(0, c) * 3), L, false, false); break;
+    case L_TUCK:   leg(im, hipx, hipy, 0, 0, cx + 4, base - 6, L, false, false); break;
+    case L_SPREAD: leg(im, hipx, hipy, 0, 0, cx + 5, base - 2, L, false, false); break;
+    case L_CROUCH: leg(im, hipx, hipy, cx + 6, base - 5, cx + 5, base, L, true, false); break;
+    case L_KICK:   leg(im, hipx, hipy, 0, 0, cx + 13, base - 6, L, false, false); break;
+    case L_SWEEP:  leg(im, hipx, hipy, 0, 0, cx + 14, base - 1, L, false, false); break;
+    case L_KNEEL:  leg(im, hipx, hipy, cx + 5, base - 6, cx + 6, base, L, true, false); break;
+    default:       leg(im, hipx, hipy, 0, 0, cx + 3, base, L, false, false); break;
     }
 
     draw_head(im, hx, hy, L);

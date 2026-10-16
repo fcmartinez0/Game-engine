@@ -153,7 +153,8 @@ typedef struct {
     bool opaque;              /* no transparent pixels: drawn with a fast row copy */
     bool optional;            /* skipped when the world is in low_detail mode */
     bool borrowed;            /* image owned by someone else: not freed with this world */
-    uint8_t alpha;
+    uint8_t alpha;            /* baked into the image when the layer is added, then reads as 255 */
+    GeSpans spans;            /* built by ge_world_add_layer */
 } GeParallaxLayer;
 
 /* ---- particles ---- */
@@ -200,6 +201,8 @@ typedef struct GeWorld {
     GeTilemap map;
     GeImage tileset;          /* GE_TILE x GE_TILE cells in one row */
     bool tileset_borrowed;
+    uint8_t tile_opaque[256];     /* per tileset cell: fully opaque, so it can be copied as plain memory */
+    bool tile_opaque_ready;
     GeParallaxLayer layers[GE_MAX_LAYERS];
     int nlayers;
     GeEntity ents[GE_MAX_ENTS];

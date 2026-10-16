@@ -144,6 +144,7 @@ static GeImage make_mist(int w, int h, int peak_alpha) {
             float t = (float)y / (float)(h - 1);
             float prof = sinf(t * 3.14159f);
             int a = (int)((float)peak_alpha * prof * prof * wob);
+            if (a < 6) a = 0;   /* invisible at this alpha, but each one would still cost a blend */
             im.px[y * w + x] = GE_ARGB(a, 214, 170, 200);
         }
     }

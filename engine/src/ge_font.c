@@ -1,5 +1,7 @@
 #include "ge/ge_font.h"
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 static const char GLYPHS[] = " !?.,:-+/'%()0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ<>=";
@@ -60,28 +62,32 @@ static const uint8_t FONT[][7] = {
     { 0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00 }, /* = */
 };
 
+static int8_t g_index[128];       /* char -> glyph row in FONT (built on first use) */
+static bool g_index_ready;
+
 static const uint8_t *glyph(char c) {
-    if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-    const char *p = strchr(GLYPHS, c);
-    return (p && c) ? FONT[p - GLYPHS] : FONT[2]; /* unknown -> '?' */
+    if (!g_index_ready) {
+        for (int i = 0; i < 128; i++) g_index[i] = 2;                 /* unknown -> '?' */
+        for (int i = 0; GLYPHS[i]; i++) {
+            g_index[(int)GLYPHS[i]] = (int8_t)i;
+            if (GLYPHS[i] >= 'A' && GLYPHS[i] <= 'Z') g_index[GLYPHS[i] - 'A' + 'a'] = (int8_t)i;
+        }
+        g_index_ready = true;
+    }
+    return FONT[g_index[(unsigned char)c & 127]];
 }
 
 void ge_text(GeImage *dst, int x, int y, const char *s, uint32_t color, int scale) {
     if (scale < 1) scale = 1;
-    for (; *s; s++, x += 6 * scale) {
-        const uint8_t *g = glyph(*s);
-        for (int row = 0; row < 7; row++)
-            for (int col = 0; col < 5; col++)
-                if (g[row] & (0x10 >> col)) ge_fill_rect(dst, x + col * scale, y + row * scale, scale, scale, color, 0);
-    }
+    for (; *s; s++, x += 6 * scale) ge_draw_bits(dst, x, y, glyph(*s), scale, color);
 }
 
 void ge_text_outlined(GeImage *dst, int x, int y, const char *s, uint32_t color, uint32_t outline, int scale) {
     if (scale < 1) scale = 1;
-    for (int oy = -1; oy <= 1; oy++)
-        for (int ox = -1; ox <= 1; ox++)
-            if (ox || oy) ge_text(dst, x + ox * scale, y + oy * scale, s, outline, scale);
-    ge_text(dst, x, y, s, color, scale);
+    int x0 = x;
+    for (const char *p = s; *p; p++, x += 6 * scale) ge_draw_bits_outline(dst, x, y, glyph(*p), scale, outline);
+    x = x0;
+    for (; *s; s++, x += 6 * scale) ge_draw_bits(dst, x, y, glyph(*s), scale, color);
 }
 
 int ge_text_width(const char *s, int scale) {

@@ -120,7 +120,8 @@ static void test_layers_file(void) {
     const GeParallaxLayer *a = &w.layers[0], *b = &w.layers[1];
     CHECK(a->img.w == 8 && a->img.h == 4 && a->opaque && !a->foreground && a->alpha == 255);
     CHECK_NEAR(a->factor_x, 0.5f);
-    CHECK(b->img.w == 4 && !b->opaque && b->foreground && b->additive && b->optional && b->alpha == 128 && b->y == 3);
+    CHECK(b->img.w == 4 && !b->opaque && b->foreground && b->additive && b->optional && b->y == 3);
+    CHECK(b->alpha == 255 && (b->img.px[2] >> 24) == 128 && b->img.px[0] == 0);   /* alpha=128 was baked into the pixels */
     CHECK_NEAR(b->factor_x, 1.5f);
     CHECK_NEAR(b->auto_x, 0.25f);
 
@@ -436,7 +437,54 @@ static void test_3ds_rotate(void) {
             o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
         }
     CHECK(memcmp(fast, slow, sizeof fast) == 0);
+    /* odd sizes take the byte-wise leftovers path; the result must still match */
+    GeImage odd = ge_image_create(37, 21);
+    for (int i = 0; i < 37 * 21; i++) odd.px[i] = ge_rng_next(&r) | 0xFF000000u;
+    static uint8_t f2[37 * 21 * 3], s2[37 * 21 * 3];
+    ge_3ds_rotate_bgr8(odd.px, 37, 21, f2);
+    for (int x = 0; x < 37; x++)
+        for (int y = 0; y < 21; y++) {
+            uint32_t p = odd.px[y * 37 + x];
+            uint8_t *o = s2 + ((size_t)x * 21 + (20 - y)) * 3;
+            o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
+        }
+    CHECK(memcmp(f2, s2, sizeof f2) == 0);
+    ge_image_free(&odd);
     ge_image_free(&img);
+}
+
+/* Fast paths must draw exactly what the plain blit draws -- including when clipped or off-screen. */
+static void test_blit_fast_paths(void) {
+    puts("blit fast paths");
+    GeImage ts = ge_image_create(GE_TILE * 2, GE_TILE), a = ge_image_create(64, 48), b = ge_image_create(64, 48);
+    for (int i = 0; i < ts.w * ts.h; i++) ts.px[i] = GE_RGB(i % 251, (i * 7) % 253, (i * 13) % 255);
+    int bad = 0;
+    for (int cell = 0; cell < 2; cell++)
+        for (int scale = 1; scale <= 2; scale++)
+            for (int dx = -40; dx < 80; dx += 3)
+                for (int dy = -40; dy < 70; dy += 5) {
+                    GeIRect sr = { cell * GE_TILE, 0, GE_TILE, GE_TILE };
+                    ge_clear(&a, 0xFF000000); ge_clear(&b, 0xFF000000);
+                    ge_blit_scaled(&a, &ts, sr, dx, dy, scale, 0, GE_WHITE);
+                    ge_blit_scaled(&b, &ts, sr, dx, dy, scale, GE_OPAQUE, GE_WHITE);
+                    bad += memcmp(a.px, b.px, 64 * 48 * 4) != 0;
+                }
+    CHECK(bad == 0);
+    /* spans reproduce the plain wrap blit for hard-edged and half-transparent art alike */
+    GeImage art = ge_image_create(37, 9);
+    for (int i = 0; i < art.w * art.h; i++) art.px[i] = (i % 5 == 0) ? 0 : (i % 7 == 0) ? GE_ARGB(90, 200, 100, 50) : GE_RGB(i, 255 - i, 40);
+    GeSpans sp;
+    CHECK(ge_spans_build(&sp, &art) == 0);
+    for (int scroll = -90; scroll < 90; scroll += 13)
+        for (int add = 0; add <= 1; add++) {
+            ge_clear(&a, GE_RGB(10, 20, 30)); ge_clear(&b, GE_RGB(10, 20, 30));
+            ge_blit_wrap_x(&a, &art, scroll, 7, add ? GE_ADDITIVE : 0, GE_WHITE);
+            ge_spans_draw_wrap_x(&b, &art, &sp, scroll, 7, add ? GE_ADDITIVE : 0);
+            bad += memcmp(a.px, b.px, 64 * 48 * 4) != 0;
+        }
+    CHECK(bad == 0);
+    ge_spans_free(&sp);
+    ge_image_free(&art); ge_image_free(&ts); ge_image_free(&a); ge_image_free(&b);
 }
 
 static void test_gfx(void) {
@@ -678,6 +726,7 @@ int main(void) {
     test_contact_shots_meter();
     test_armor_grounded_zoom_font();
     test_3ds_rotate();
+    test_blit_fast_paths();
     test_gfx();
     test_tilemap();
     test_physics();
