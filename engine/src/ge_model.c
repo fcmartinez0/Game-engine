@@ -158,7 +158,7 @@ void ge_model_tick(GePlayerModel *m, const GeFight *f, int side) {
 
     if (P->state == GE_FS_MOVE && (w->prev_state != GE_FS_MOVE || P->move != w->prev_move)) ge_model_on_move_start(m, f, side);
 
-    bool back = P->in.x * pe->facing < 0;
+    bool back = P->in.x * pe->facing < 0 || (P->in.held & GE_FB_BLOCK);
     bool opp_attacking = O->state == GE_FS_MOVE;
     int cls = -1;                                                                    /* neutral behaviour this tick */
     switch (P->state) {

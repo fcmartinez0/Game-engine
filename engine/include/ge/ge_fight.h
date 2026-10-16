@@ -24,12 +24,16 @@
  *   "6M"   forward + medium (command normal, list it before 5M)
  *   "236L" special               "623H" special              "S"   super button
  *   "LM"   two buttons together = throw (needs to be close)
+ *   "HK"   any chord works the same way (the demo uses H+K for the super)
  *
  * Moves are tried in list order, so put supers and specials first, command
  * normals before plain ones.
  * ------------------------------------------------------------------------- */
 
-enum { GE_FB_L = 1, GE_FB_M = 2, GE_FB_H = 4, GE_FB_S = 8 }; /* light, medium, heavy, special/super */
+/* Attack buttons: light, medium, heavy, special (S), and K, a fourth normal (the long sword thrusts).
+ * Two more bits carry the shoulder buttons: BLOCK (held) guards without holding back, DASH (pressed) dashes
+ * the way you are holding, or forward from neutral. They go in the same fields as the attack buttons. */
+enum { GE_FB_L = 1, GE_FB_M = 2, GE_FB_H = 4, GE_FB_S = 8, GE_FB_K = 16, GE_FB_BLOCK = 32, GE_FB_DASH = 64 };
 
 typedef struct GePlayerModel GePlayerModel;   /* see ge_model.h */
 

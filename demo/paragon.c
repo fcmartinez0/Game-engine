@@ -6,6 +6,7 @@
 #include "ge/ge_font.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- the def ------------------------------------------------------------- */
@@ -94,4 +95,71 @@ void paragon_draw_report(GeImage *fb, const char facts[][72], int nfacts, const 
         const char *go = "PRESS A TO WAKE AT THE BENCH";
         ge_text_outlined(fb, (fb->w - ge_text_width(go, 1)) / 2, 214, go, GE_WHITE, ink, 1);
     }
+}
+
+/* ---- the hall -------------------------------------------------------------
+ * "The Still Hall": the last room of the demo, built for the Paragon. Long, low and symmetrical, cold stone,
+ * pillars with gold capitals, narrow windows that look out onto its own pattern (the field of eyes), and
+ * behind the place where it waits, one great almond-shaped window: an eye, watching the door you came in by.
+ * Everything here is placeholder art; the layout and the motif are the design. */
+
+static void almond(GeImage *fb, GePattern *pat, int cx, int cy, int w, int h, uint32_t frame, uint32_t tick) {
+    for (int dy = -h - 2; dy <= h + 2; dy++) {
+        float t = 1.0f - (float)abs(dy) / (float)(h + 2);
+        if (t <= 0.0f) continue;
+        int fw = (int)((float)(w + 3) * sqrtf(t));
+        ge_fill_rect(fb, cx - fw, cy + dy, fw * 2, 1, frame, 0);
+        float ti = 1.0f - (float)abs(dy) / (float)h;
+        if (ti <= 0.0f) continue;
+        int iw = (int)((float)w * sqrtf(ti));
+        if (pat) ge_pattern_draw_rect(pat, fb, cx - iw, cy + dy, iw * 2, 1, (int)tick);
+    }
+}
+
+void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick) {
+    int x0 = HALL_COL0 * GE_TILE - camx, x1 = (LEVEL_W - 2) * GE_TILE - camx;
+    if (x1 < 0 || x0 > fb->w) return;
+    int top = 6 * GE_TILE - camy, floor = GROUND_ROW * GE_TILE - camy, h = floor - top;
+    const uint32_t stone = GE_RGB(30, 26, 42), joint = GE_RGB(20, 17, 30), pillar = GE_RGB(62, 56, 80), gold = GE_RGB(200, 160, 80);
+    GePattern *pat = encounter_pattern("PARAGON");
+    ge_fill_rect(fb, x0, top, x1 - x0, h, stone, 0);
+    for (int y = top + 11; y < floor; y += 12) ge_fill_rect(fb, x0, y, x1 - x0, 1, joint, 0);         /* courses */
+    for (int row = 0, y = top; y < floor; row++, y += 12)
+        for (int x = x0 + (row & 1) * 12; x < x1; x += 24) ge_fill_rect(fb, x, y, 1, 11, joint, 0);  /* staggered joints */
+    /* narrow windows onto the field of eyes */
+    static const int windows[] = { 184, 192, 208 };
+    for (int i = 0; i < 3; i++) {
+        int wx = windows[i] * GE_TILE + 8 - camx;
+        if (wx < -20 || wx > fb->w + 20) continue;
+        ge_fill_rect(fb, wx - 9, top + 14, 18, 52, gold, 0);
+        ge_pattern_draw_rect(pat, fb, wx - 7, top + 18, 14, 46, (int)tick);
+        for (int k = 0; k < 7; k++) ge_fill_rect(fb, wx - 7 + k, top + 14 + (k < 4 ? 4 - k : k - 3), 14 - 2 * k, 1, gold, 0);  /* pointed arch */
+        ge_fill_rect(fb, wx - 1, top + 18, 2, 46, gold, 0);                                              /* mullion */
+    }
+    /* the great eye behind its place */
+    int ex = 200 * GE_TILE + 8 - camx;
+    if (ex > -60 && ex < fb->w + 60) {
+        almond(fb, pat, ex, top + 40, 40, 22, gold, tick);
+        ge_fill_rect(fb, ex - 2, top + 22, 4, 37, GE_RGB(8, 4, 12), 0);   /* the slit, like its own mask */
+        ge_fill_rect(fb, ex - 1, top + 26, 2, 29, GE_RGB(255, 210, 80), 0);
+    }
+    /* pillars, with candles at their feet */
+    static const int pillars[] = { 180, 188, 196, 204, 211 };
+    for (int i = 0; i < 5; i++) {
+        int px = pillars[i] * GE_TILE + 8 - camx;
+        if (px < -12 || px > fb->w + 12) continue;
+        ge_fill_rect(fb, px - 6, top, 12, h, pillar, 0);
+        ge_fill_rect(fb, px - 6, top, 2, h, GE_RGB(84, 76, 104), 0);
+        ge_fill_rect(fb, px + 4, top, 2, h, GE_RGB(44, 40, 60), 0);
+        ge_fill_rect(fb, px - 8, top, 16, 4, gold, 0);
+        ge_fill_rect(fb, px - 8, floor - 5, 16, 5, GE_RGB(52, 46, 70), 0);
+        ge_fill_rect(fb, px - 8, floor - 6, 16, 1, gold, 0);
+        int flick = (int)((tick / 5 + (uint32_t)i * 3) % 3);
+        ge_fill_rect(fb, px + 10, floor - 9, 2, 6, GE_RGB(230, 225, 210), 0);
+        ge_fill_rect(fb, px + 10, floor - 12 - flick, 2, 3 + flick, flick ? GE_RGB(255, 200, 90) : GE_RGB(255, 240, 170), 0);
+    }
+    /* a gold threshold set in the floor where it stands */
+    int tx = 196 * GE_TILE - camx;
+    ge_fill_rect(fb, tx, floor + 1, 9 * GE_TILE, 2, gold, 0);
+    for (int k = 0; k <= 9; k++) ge_fill_rect(fb, tx + k * GE_TILE, floor + 1, 1, 5, gold, 0);
 }

@@ -54,7 +54,7 @@ int ge_plat_poll(uint32_t *buttons) {
     if (k[SDL_SCANCODE_DOWN] || k[SDL_SCANCODE_S]) b |= GE_BTN_DOWN;
     if (k[SDL_SCANCODE_Z] || k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_K]) b |= GE_BTN_B;
     if (k[SDL_SCANCODE_X] || k[SDL_SCANCODE_J]) b |= GE_BTN_Y;
-    if (k[SDL_SCANCODE_C] || k[SDL_SCANCODE_L]) b |= GE_BTN_A;
+    if (k[SDL_SCANCODE_C] || k[SDL_SCANCODE_L]) b |= GE_BTN_A;   /* heavy / silk spin */
     if (k[SDL_SCANCODE_V] || k[SDL_SCANCODE_I]) b |= GE_BTN_X;
     if (k[SDL_SCANCODE_Q] || k[SDL_SCANCODE_U]) b |= GE_BTN_L;
     if (k[SDL_SCANCODE_E] || k[SDL_SCANCODE_O]) b |= GE_BTN_R;

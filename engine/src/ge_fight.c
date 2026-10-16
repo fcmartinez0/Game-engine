@@ -46,7 +46,7 @@ int ge_fighter_def_finish(GeFighterDef *d, const GeSprite *spr) {
         int nb = 0;
         m->buttons = 0;
         for (; *p; p++) {
-            uint8_t b = *p == 'L' ? GE_FB_L : *p == 'M' ? GE_FB_M : *p == 'H' ? GE_FB_H : *p == 'S' ? GE_FB_S : 0;
+            uint8_t b = *p == 'L' ? GE_FB_L : *p == 'M' ? GE_FB_M : *p == 'H' ? GE_FB_H : *p == 'S' ? GE_FB_S : *p == 'K' ? GE_FB_K : 0;
             if (!b) return -(1 + i);
             m->buttons |= b;
             nb++;
@@ -301,8 +301,9 @@ static void fighter_step(GeFight *f, int s) {
         F->combo = 0; F->juggle = 0; F->air_hit = false;
         if (try_moves(f, s, false, 0)) break;
         int dir = F->hist_dir[F->hist_head];
-        if (d->dash_ticks > 0 && (dash_input(F, 6) || dash_input(F, 4))) {
-            int sgn = dir == 6 ? e->facing : -e->facing;
+        bool dash_btn = (F->in.pressed & GE_FB_DASH) != 0;
+        if (d->dash_ticks > 0 && (dash_btn || dash_input(F, 6) || dash_input(F, 4))) {
+            int sgn = dash_btn ? (F->in.x * e->facing < 0 ? -e->facing : e->facing) : (dir == 6 ? e->facing : -e->facing);
             F->state = GE_FS_DASH;
             F->timer = d->dash_ticks;
             e->state_timer = sgn;
@@ -322,9 +323,9 @@ static void fighter_step(GeFight *f, int s) {
             play(e, d->clip_crouch, false);
         } else {
             F->state = GE_FS_STAND;
-            int rx = F->in.x * e->facing;
+            int rx = (F->in.held & GE_FB_BLOCK) ? 0 : F->in.x * e->facing;     /* blocking roots you */
             e->vel.x = rx > 0 ? (float)e->facing * d->body.run_speed : rx < 0 ? -(float)e->facing * d->walk_back : 0.0f;
-            play(e, rx > 0 ? d->clip_walk_f : rx < 0 ? d->clip_walk_b : d->clip_idle, false);
+            play(e, rx > 0 ? d->clip_walk_f : rx < 0 ? d->clip_walk_b : (F->in.held & GE_FB_BLOCK) ? d->clip_block : d->clip_idle, false);
         }
         gravity(F, e);
         ge_entity_physics(w, F->ent);
@@ -468,7 +469,7 @@ static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, flo
     GeFighter *A = &f->f[s], *D = &f->f[1 - s];
     GeEntity *ae = ent(f, s), *de = ent(f, 1 - s);
     GeWorld *w = &f->world;
-    bool hold_back = D->in.x == dir;            /* away from the attack */
+    bool hold_back = D->in.x == dir || (D->in.held & GE_FB_BLOCK);   /* away from the attack, or the block button */
     bool low = D->in.y > 0;
     bool can_block = (D->state == GE_FS_STAND || D->state == GE_FS_CROUCH || D->state == GE_FS_BLOCKSTUN) && de->on_ground && hold_back;
     bool guard_ok = st->guard == GE_GUARD_MID || (st->guard == GE_GUARD_LOW && low) || (st->guard == GE_GUARD_HIGH && !low);

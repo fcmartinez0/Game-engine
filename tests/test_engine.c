@@ -487,6 +487,64 @@ static void test_blit_fast_paths(void) {
     ge_image_free(&art); ge_image_free(&ts); ge_image_free(&a); ge_image_free(&b);
 }
 
+static void test_patterns(void) {
+    puts("pattern backgrounds");
+    const uint32_t pal[6] = { GE_RGB(1, 0, 0), GE_RGB(2, 0, 0), GE_RGB(3, 0, 0), GE_RGB(4, 0, 0), GE_RGB(5, 0, 0), GE_RGB(6, 0, 0) };
+    GeImage a = ge_image_create(400, 240), b = ge_image_create(400, 240);
+    static GePattern p;
+    for (int kind = 0; kind < GE_PAT_COUNT; kind++) {
+        ge_pattern_make(&p, kind, pal, 6);
+        bool in_range = true;
+        for (int i = 0; i < GE_PAT_SIZE * GE_PAT_SIZE; i++) in_range = in_range && p.idx[i] < 6;
+        CHECK(in_range);
+        ge_pattern_draw(&p, &a, 100);
+        ge_pattern_draw(&p, &b, 100);
+        CHECK(memcmp(a.px, b.px, 400 * 240 * 4) == 0);             /* same tick, same picture */
+        bool opaque = true;
+        for (int i = 0; i < 400 * 240; i++) opaque = opaque && (a.px[i] >> 24) == 255;
+        CHECK(opaque);
+    }
+    ge_pattern_make(&p, GE_PAT_RINGS, pal, 6);
+    p.wave_amp = 0; p.cycle_ticks = 4;
+    ge_pattern_draw(&p, &a, 0);
+    ge_pattern_draw(&p, &b, 4);
+    CHECK(memcmp(a.px, b.px, 400 * 240 * 4) != 0);                  /* the palette moved on */
+    ge_pattern_draw(&p, &b, 4 * 6);
+    CHECK(memcmp(a.px, b.px, 400 * 240 * 4) == 0);                  /* ...and came round again */
+    /* the tile repeats every 128 pixels at scale 2, so with no motion row y equals row y + 128 */
+    CHECK(memcmp(a.px + 10 * 400, a.px + 138 * 400, 400 * 4) == 0);
+    CHECK(memcmp(a.px + 10 * 400, a.px + 10 * 400 + 128, 200 * 4) == 0);
+    /* a clipped rect only touches its pixels, even when it hangs off the screen */
+    ge_clear(&b, 0);
+    ge_pattern_draw_rect(&p, &b, -20, 230, 50, 40, 0);
+    int touched = 0;
+    bool outside_clean = true;
+    for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 400; x++) {
+            bool in = x < 30 && y >= 230;
+            if (b.px[y * 400 + x]) { touched += in; outside_clean = outside_clean && in; }
+        }
+    CHECK(outside_clean && touched == 30 * 10);
+    /* two cycling groups stay apart: the pupil (index 0) never changes */
+    const uint32_t eye[7] = { GE_RGB(9, 9, 9), GE_RGB(1, 1, 0), GE_RGB(2, 2, 0), GE_RGB(3, 3, 0), GE_RGB(0, 0, 1), GE_RGB(0, 0, 2), GE_RGB(0, 0, 3) };
+    ge_pattern_make(&p, GE_PAT_EYES, eye, 7);
+    p.cycle_from = 1; p.cycle_split = 4; p.cycle_ticks = 1; p.wave_amp = 0;
+    bool groups_ok = true;
+    for (int t = 0; t < 6; t++) {
+        ge_pattern_draw(&p, &a, t);
+        for (int i = 0; i < GE_PAT_SIZE * GE_PAT_SIZE; i++) {
+            int x = i % GE_PAT_SIZE, y = i / GE_PAT_SIZE, v = p.idx[i];
+            uint32_t c = a.px[(y * 2) * 400 + x * 2];
+            bool blue = (c & 0xff) != 0 && ((c >> 16) & 0xff) == 0, pupil = c == eye[0];
+            if (v == 0 && !pupil) groups_ok = false;
+            if (v >= 1 && v < 4 && (blue || pupil)) groups_ok = false;
+            if (v >= 4 && !blue) groups_ok = false;
+        }
+    }
+    CHECK(groups_ok);
+    ge_image_free(&a); ge_image_free(&b);
+}
+
 static void test_gfx(void) {
     puts("gfx");
     GeImage a = ge_image_create(4, 2), b = ge_image_create(4, 2);
@@ -728,6 +786,7 @@ int main(void) {
     test_3ds_rotate();
     test_blit_fast_paths();
     test_gfx();
+    test_patterns();
     test_tilemap();
     test_physics();
     test_combat();

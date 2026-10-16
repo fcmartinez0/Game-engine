@@ -320,10 +320,14 @@ void ge_world_draw(GeWorld *w, GeImage *fb) {
     const GeParallaxLayer *l0 = w->nlayers > 0 ? &w->layers[0] : NULL;
     bool covers = l0 && l0->opaque && !l0->additive && l0->img.w >= fb->w && l0->y <= 0 && l0->y + l0->img.h >= fb->h &&
                   l0->factor_y == 0.0f && !(w->low_detail && l0->optional);
-    if (!covers) ge_clear(fb, GE_RGB(8, 6, 16));
-    for (int i = 0; i < w->nlayers; i++)
-        if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
-            draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
+    if (w->backdrop_pattern) {
+        ge_pattern_draw(w->backdrop_pattern, fb, (int)w->tick);
+    } else {
+        if (!covers) ge_clear(fb, GE_RGB(8, 6, 16));
+        for (int i = 0; i < w->nlayers; i++)
+            if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
+                draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
+    }
 
     draw_tiles(w, fb, camx, camy, z);
     if (w->draw_props) w->draw_props(w->user, fb, camx, camy);
@@ -338,7 +342,7 @@ void ge_world_draw(GeWorld *w, GeImage *fb) {
     draw_shots(w, fb, camx, camy, z);
     draw_particles(w, fb, camx, camy, z);
 
-    for (int i = 0; i < w->nlayers; i++)
+    for (int i = 0; i < w->nlayers && !w->backdrop_pattern && !w->foreground_off; i++)
         if (w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
             draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
 

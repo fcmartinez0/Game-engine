@@ -26,17 +26,20 @@ Buttons are named by position on a 3DS (A right, B bottom, X top, Y left). On a 
 | Move · aim up / down | D-pad / stick | arrows or WASD |
 | Jump (again in the air = double jump; jump off walls) | B | Z or Space |
 | Needle slash · **up** + slash · **down** + slash in the air = pogo bounce | Y | X or J |
-| Dash (also in the air, invulnerable) | A | C or L |
+| Dash (also in the air, invulnerable) | R | E or O |
 | Throw needle (3 charges, they refill) | X | V or I |
-| Silk spin (costs 1 silk segment) | R | E or O |
+| Silk spin (costs 1 silk segment) | A | C or L |
 | Heal 2 masks (hold, costs 1 silk segment) | L | Q or U |
 | Rest at a bench: full health + respawn point | Up | Up |
 
 | Duel (fighting game) | 3DS / pad | Keyboard |
 |---|---|---|
-| Walk · jump (up) · crouch (down) · **hold back to block** | D-pad | arrows |
+| Walk · jump (up) · crouch (down) · holding back also blocks | D-pad | arrows |
+| **Block** (hold; add down to block low) | L | Q or U |
+| **Dash** (hold back for a backdash) | R | E or O |
 | Light · Medium · Heavy | Y · X · A | X · V · C |
-| Super (full meter) | B | Z |
+| Sword thrust: slow, longest reach (down = low, also in the air) | B | Z |
+| Super (full meter) | A + B together | C + Z |
 | Throw: Light + Medium together, up close | Y + X | X + V |
 | Specials: ↓↘→ + attack (projectile), →↓↘ + attack (rising anti-air), ↓↙← + M/H (rush), →→ dash, ←← backdash | | |
 
@@ -44,7 +47,7 @@ Buttons are named by position on a 3DS (A right, B bottom, X top, Y left). On a 
 
 **Overworld.** Masks for health, a silk spool filled by landing hits, and needle tools. Slash in three directions, pogo off enemies, spikes and enemy shots, wall-slide and wall-jump up a shaft, double-jump, air-dash. Crawlers, swooping bats, spitting plants and club-wielding grunts all hurt on contact and can be cut down. Spikes cost a mask and drop you back on safe ground. Benches heal you and set your respawn point.
 
-**Duelists** (purple wisps around them) stand guard and turn to look around. If one sees you, a "!" pops up, the screen flashes three times and shutters, and a duel starts. Slashing one first gets you a first-strike bonus: it starts the duel at 85% health. Win, and your masks and silk refill. Lose, and you wake up at the last bench. There are four duelists, and the last one is best-of-three.
+**Duelists** (purple wisps around them) stand guard and turn to look around. If one sees you, a "!" pops up, the screen flashes three times, and the duelist's own animated pattern floods out from where they stand in a wave of diamonds (EarthBound-style: palette cycling plus rippling rows); the pattern stays as the duel's background. Slashing one first gets you a first-strike bonus: it starts the duel at 85% health. Win, and your masks and silk refill. Lose, and you wake up at the last bench. There are four duelists, and the last one is best-of-three.
 
 **Duels** are a full fighting game. Each fighter has standing, crouching and jumping light/medium/heavy attacks, an overhead, a low sweep that knocks down, a projectile, a rising anti-air with invulnerability, a rush, a throw (which can be teched) and a super. Blocking follows the classic rules: lows must be blocked crouching, overheads standing. There's chip damage, light → medium → heavy → special cancels, damage scaling, juggles with a limit, knockdowns, rounds and a 99-second clock. The goblin hits hard and slow; the moth fencer is quick with long reach. Both come from one move list with different tuning.
 
@@ -160,8 +163,8 @@ To skip the SD card shuffle while iterating, start the launcher, press Y for net
 ## Testing
 
 * `paragon_tests` (55 checks): the player model learns a repeated habit and predicts it, saves and loads, describes the player in words; an undying fighter bottoms out at 1 health and the finisher always ends the round (by hit and by clock); frame-data helpers match real recovery; the Paragon beats the level-3 CPU, takes less damage once it has been taught a player's habit, wins 24 of 24 matches under the boss rules, and is deterministic. `paragon_demo` walks into the hall headlessly and loses to it as designed.
-* `engine_tests` (122 checks): the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, the 3DS screen rotation, the fast blit paths against the plain ones (including off-screen and clipped), and the `.layers` and asset-tool round trips.
-* `fight_tests` (39 checks): motion inputs (including too-slow ones, and left-facing fighters), command normals, dashes, high/low/mid blocking, chip damage, throws in and out of range, cancels only on contact, the L→M→H combo, the juggle limit, supers, invulnerable anti-airs, K.O., time over, best-of-three, and a deterministic CPU-vs-CPU match.
+* `engine_tests` (146 checks): the pattern backgrounds (every picture, palette cycling, tiling, clipping, separate cycling groups), the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, the 3DS screen rotation, the fast blit paths against the plain ones (including off-screen and clipped), and the `.layers` and asset-tool round trips.
+* `fight_tests` (46 checks): the K button, the block button (including a low beating it while standing) and the dash button, motion inputs (including too-slow ones, and left-facing fighters), command normals, dashes, high/low/mid blocking, chip damage, throws in and out of range, cancels only on contact, the L→M→H combo, the juggle limit, supers, invulnerable anti-airs, K.O., time over, best-of-three, and a deterministic CPU-vs-CPU match.
 * **Full run:** `--autoplay` plays the whole demo. In a 45,000-tick run (12.5 minutes of game time) the bot climbed the shaft, won all four duels (one after a retry; the champion 2-0) and reached the boss. Its best attempt got the boss down to 78 of 180 health; the boss won every time. With `--god` (a dev flag) it beats the boss and the victory screen plays. Set `GLOAM_LOG=1` to print duels, deaths and boss events.
 
 ## Not there yet

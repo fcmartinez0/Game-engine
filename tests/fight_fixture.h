@@ -63,6 +63,7 @@ static void make_def(GeFighterDef *d) {
         MV("5L", "l", 0, 0, NULL, GE_AI_POKE),
         MV("5M", "m", 1, 0, NULL, GE_AI_COMBO),
         MV("5H", "h", 2, 0, NULL, GE_AI_COMBO),
+        MV("5K", "m", 2, 0, NULL, GE_AI_POKE),
     };
     d->nmoves = (int)(sizeof moves / sizeof moves[0]);
     memcpy(d->moves, moves, sizeof moves);

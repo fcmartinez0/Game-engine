@@ -3,6 +3,7 @@
 
 #include "ge_anim.h"
 #include "ge_gfx.h"
+#include "ge_pattern.h"
 
 /* ---------------------------------------------------------------------------
  * The platformer world: tilemap, actors, projectiles, particles, parallax,
@@ -215,6 +216,8 @@ typedef struct GeWorld {
     GeRng rng;
     int vignette;
     bool low_detail;          /* drop optional layers + vignette (original 3DS) */
+    bool foreground_off;      /* skip the foreground layers (e.g. indoors) */
+    GePattern *backdrop_pattern;  /* when set, drawn instead of the background layers (fight screens) */
     bool custom_combat;       /* another module resolves hits (ge_fight) */
     int zoom;                 /* draw tiles/entities/effects magnified (parallax stays native); 0 or 1 = none.
                                  cam.vw/vh are then in world units (e.g. 200x120 for a 2x view of 400x240) */

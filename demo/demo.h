@@ -11,8 +11,12 @@
  * The demo ships no image files: every sheet is drawn in code at start-up.
  * Swap any of them for ge_sprite_load("x.pam", "x.anim") to use real art. */
 
-/* Humanoid sheet layout (32x32 cells, 8 per row), shared by the hero, the
- * duelists and the boss, so their clip texts can use the same cell numbers. */
+/* Humanoid sheet layout (56x32 cells, 8 per row), shared by the hero, the
+ * duelists and the boss, so their clip texts can use the same cell numbers.
+ * The body stands at x = 20 so the sword has 35 pixels of room in front. */
+#define HUM_CELL_W 56
+#define HUM_CELL_H 32
+#define HUM_BODY_X 20
 enum {
     H_IDLE0, H_IDLE1, H_RUN0, H_RUN1, H_RUN2, H_RUN3, H_JUMP, H_FALL,
     H_S1A, H_S1B, H_S1C, H_S2A, H_S2B, H_S2C, H_UPA, H_UPB,
@@ -20,7 +24,7 @@ enum {
     H_THA, H_THB, H_THC, H_SP0, H_SP1, H_SP2, H_SP3, H_HEAL0,
     H_HEAL1, H_CROUCH, H_BLOCK, H_BLOCKLO, H_JABA, H_JABB, H_HVA, H_HVB,
     H_HVC, H_HVD, H_KICK, H_CSA, H_CSB, H_SWA, H_SWB, H_RISE,
-    H_GRAB, H_WIN, H_HURTAIR, H_JH,
+    H_GRAB, H_WIN, H_HURTAIR, H_JH, H_TRA, H_TRB, H_TRC, H_JK,
     H_COUNT
 };
 
@@ -66,7 +70,13 @@ void paragon_set_profile_path(const char *path);
 const char *paragon_profile_path(void);
 void paragon_profile_load(GePlayerModel *m);
 void paragon_profile_save(const GePlayerModel *m);
+void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick);   /* the final room's back wall */
 void paragon_draw_report(GeImage *fb, const char facts[][72], int nfacts, const GePlayerModel *m, int learn, unsigned gifts, int t);
+
+/* ---- encounters (encounter.c): each duelist's EarthBound-style pattern ---- */
+GePattern *encounter_pattern(const char *duelist_name);   /* a default one for unknown names */
+void encounter_draw_transition(GeImage *fb, GePattern *p, int t, int cx, int cy, uint32_t tick);
+void encounter_free(void);
 
 /* ---- level (level.c) ---------------------------------------------------- */
 #define LEVEL_W 214

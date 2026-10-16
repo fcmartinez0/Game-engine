@@ -30,7 +30,7 @@ static int parse(GeSprite *s, const char *who) {
 /* ---- overworld clips ---------------------------------------------------- */
 
 static void hero_overworld(void) {
-    emit("cell 32 32\norigin 16 31\n");
+    emit("cell %d %d\norigin %d %d\n", HUM_CELL_W, HUM_CELL_H, HUM_BODY_X, HUM_CELL_H - 1);
     emit("clip idle loop\n frame %d 28\n frame %d 28\n", H_IDLE0, H_IDLE1);
     emit("clip run loop\n frame %d 5\n frame %d 5\n frame %d 5\n frame %d 5\n", H_RUN0, H_RUN1, H_RUN2, H_RUN3);
     emit("clip jump once\n frame %d 8\nclip fall once\n frame %d 8\n", H_JUMP, H_FALL);
@@ -38,10 +38,10 @@ static void hero_overworld(void) {
          H_WALL, H_HURT, H_DEAD, H_DASH);
     /* needle slashes: 2-hit chain on the ground, single swing in the air */
     emit("clip slash1 once dmg=5 kb=2.5,-1 stop=3 stun=14 cancel=1 next=slash2 recoil=1.2\n"
-         " frame %d 2\n frame %d 3 hit=0,-30,30,24\n frame %d 6\n", H_S1A, H_S1B, H_S1C);
+         " frame %d 2\n frame %d 3 hit=0,-30,40,24\n frame %d 6\n", H_S1A, H_S1B, H_S1C);
     emit("clip slash2 once dmg=5 kb=3,-1.5 stop=3 stun=14 recoil=1.2\n"
-         " frame %d 2\n frame %d 3 hit=0,-30,30,24\n frame %d 7\n", H_S2A, H_S2B, H_S2C);
-    emit("clip aslash once dmg=5 kb=2.5,-1 stop=3 stun=14\n frame %d 2\n frame %d 3 hit=0,-30,30,24\n frame %d 5\n", H_S1A, H_S1B, H_S1C);
+         " frame %d 2\n frame %d 3 hit=0,-30,40,24\n frame %d 7\n", H_S2A, H_S2B, H_S2C);
+    emit("clip aslash once dmg=5 kb=2.5,-1 stop=3 stun=14\n frame %d 2\n frame %d 3 hit=0,-30,40,24\n frame %d 5\n", H_S1A, H_S1B, H_S1C);
     emit("clip upslash once dmg=5 kb=0.5,-3 stop=3 stun=14\n frame %d 2\n frame %d 3 hit=-14,-52,28,28\n frame %d 6\n", H_UPA, H_UPB, H_UPC);
     /* down-slash: bounce off enemies, enemy shots and spikes */
     emit("clip downslash once dmg=5 kb=0.5,2 stop=2 stun=12 pogo=6.4\n frame %d 1\n frame %d 7 hit=-11,-6,22,20\n frame %d 4\n", H_DNA, H_DNB, H_DNC);
@@ -52,7 +52,7 @@ static void hero_overworld(void) {
 }
 
 static void humanoid_overworld_enemy(int windup) {
-    emit("cell 32 32\norigin 16 31\n");
+    emit("cell %d %d\norigin %d %d\n", HUM_CELL_W, HUM_CELL_H, HUM_BODY_X, HUM_CELL_H - 1);
     emit("clip idle loop\n frame %d 30\n frame %d 30\n", H_IDLE0, H_IDLE1);
     emit("clip run loop\n frame %d 7\n frame %d 7\n frame %d 7\n frame %d 7\n", H_RUN0, H_RUN1, H_RUN2, H_RUN3);
     emit("clip hurt once\n frame %d 99\nclip dead once\n frame %d 999\n", H_HURT, H_DEAD);
@@ -83,33 +83,40 @@ static void fight_clips(const Style *s) {
     emit("clip f_dash once\n frame %d 99\nclip f_backdash once\n frame %d 99\n", H_DASH, H_BLOCK);
     /* standing normals: light / medium / heavy */
     emit("clip f_5l once dmg=%d kb=%.1f,0 stop=6 stun=13 bstun=9 cancel=1\n frame %d %d\n frame %d 3 hit=4,-26,%d,10\n frame %d 6\n",
-         D(s, 5), 1.2f * s->kb, H_JABA, 3 + s->slow / 2, H_JABB, 30 + s->reach, H_JABA);
+         D(s, 5), 1.2f * s->kb, H_JABA, 3 + s->slow / 2, H_JABB, 36 + s->reach, H_JABA);
     emit("clip f_5m once dmg=%d kb=%.1f,0 stop=8 stun=17 bstun=12 cancel=1\n frame %d %d\n frame %d 3 hit=0,-30,%d,22\n frame %d 10\n",
-         D(s, 8), 1.8f * s->kb, H_S1A, 5 + s->slow, H_S1B, 34 + s->reach, H_S1C);
+         D(s, 8), 1.8f * s->kb, H_S1A, 5 + s->slow, H_S1B, 44 + s->reach, H_S1C);
     emit("clip f_5h once dmg=%d kb=%.1f,-3 stop=10 stun=24 bstun=15 cancel=2\n frame %d %d\n frame %d 3 hit=0,-34,%d,30\n frame %d 3 hit=0,-30,%d,28\n frame %d 14\n",
-         D(s, 13), 3.2f * s->kb, H_HVA, 8 + s->slow, H_HVB, 40 + s->reach, H_HVC, 40 + s->reach, H_HVD);
+         D(s, 13), 3.2f * s->kb, H_HVA, 8 + s->slow, H_HVB, 52 + s->reach, H_HVC, 52 + s->reach, H_HVD);
     /* crouching: all hit low, the heavy sweeps */
     emit("clip f_2l once dmg=%d kb=1,0 stop=6 stun=12 bstun=8 guard=low cancel=1\n frame %d 3\n frame %d 3 hit=2,-12,%d,10\n frame %d 6\n",
-         D(s, 4), H_CROUCH, H_KICK, 28 + s->reach / 2, H_CROUCH);
+         D(s, 4), H_CROUCH, H_KICK, 32 + s->reach / 2, H_CROUCH);
     emit("clip f_2m once dmg=%d kb=1.5,0 stop=8 stun=16 bstun=11 guard=low cancel=1\n frame %d %d\n frame %d 3 hit=0,-16,%d,14\n frame %d 10\n",
-         D(s, 7), H_CSA, 5 + s->slow, H_CSB, 36 + s->reach, H_CROUCH);
+         D(s, 7), H_CSA, 5 + s->slow, H_CSB, 44 + s->reach, H_CROUCH);
     emit("clip f_2h once dmg=%d kb=2,-2.5 stop=9 stun=20 bstun=14 guard=low kd=1\n frame %d %d\n frame %d 4 hit=0,-8,%d,10\n frame %d 16\n",
-         D(s, 11), H_SWA, 8 + s->slow, H_SWB, 42 + s->reach, H_CROUCH);
+         D(s, 11), H_SWA, 8 + s->slow, H_SWB, 50 + s->reach, H_CROUCH);
     /* forward + medium: an overhead that beats crouch-blocking */
     emit("clip f_6m once dmg=%d kb=1.5,0 stop=8 stun=18 bstun=12 guard=high lunge=1.5\n frame %d %d\n frame %d 3 hit=0,-34,%d,30\n frame %d 12\n",
-         D(s, 9), H_HVA, 14 + s->slow, H_HVB, 36 + s->reach, H_HVD);
+         D(s, 9), H_HVA, 14 + s->slow, H_HVB, 44 + s->reach, H_HVD);
     /* jumping attacks hit high */
-    emit("clip f_jl once dmg=%d kb=1,0 stop=6 stun=14 guard=high\n frame %d 2\n frame %d 6 hit=0,-28,%d,22\n frame %d 4\n", D(s, 5), H_S1A, H_S1B, 28 + s->reach, H_S1C);
-    emit("clip f_jm once dmg=%d kb=1.2,0 stop=7 stun=17 guard=high\n frame %d 3\n frame %d 6 hit=0,-26,%d,26\n frame %d 5\n", D(s, 7), H_S2A, H_S2B, 30 + s->reach, H_S2C);
-    emit("clip f_jh once dmg=%d kb=1.5,0 stop=8 stun=20 guard=high\n frame %d 4\n frame %d 6 hit=-4,-14,%d,24\n frame %d 6\n", D(s, 10), H_DNA, H_JH, 32 + s->reach, H_DNC);
+    emit("clip f_jl once dmg=%d kb=1,0 stop=6 stun=14 guard=high\n frame %d 2\n frame %d 6 hit=0,-28,%d,22\n frame %d 4\n", D(s, 5), H_S1A, H_S1B, 34 + s->reach, H_S1C);
+    emit("clip f_jm once dmg=%d kb=1.2,0 stop=7 stun=17 guard=high\n frame %d 3\n frame %d 6 hit=0,-26,%d,26\n frame %d 5\n", D(s, 7), H_S2A, H_S2B, 36 + s->reach, H_S2C);
+    emit("clip f_jh once dmg=%d kb=1.5,0 stop=8 stun=20 guard=high\n frame %d 4\n frame %d 6 hit=-4,-14,%d,24\n frame %d 6\n", D(s, 10), H_DNA, H_JH, 36 + s->reach, H_DNC);
+    /* K: the sword at full stretch. A slow thrust that out-ranges everything, a low one, and an air cut */
+    emit("clip f_5k once dmg=%d kb=%.1f,0 stop=8 stun=18 bstun=12 cancel=2\n frame %d %d\n frame %d 4 hit=8,-24,%d,8\n frame %d 14\n",
+         D(s, 9), 2.0f * s->kb, H_TRA, 7 + s->slow, H_TRB, 54 + s->reach, H_TRC);
+    emit("clip f_2k once dmg=%d kb=1.5,0 stop=8 stun=16 bstun=11 guard=low cancel=2\n frame %d %d\n frame %d 4 hit=4,-10,%d,8\n frame %d 14\n",
+         D(s, 8), H_CROUCH, 8 + s->slow, H_CSB, 50 + s->reach, H_CROUCH);
+    emit("clip f_jk once dmg=%d kb=1.5,-1 stop=8 stun=20 guard=high\n frame %d 3\n frame %d 6 hit=0,-28,%d,30\n frame %d 6\n",
+         D(s, 9), H_S1A, H_JK, 42 + s->reach, H_S1C);
     /* specials */
     emit("clip f_shoot once shoot=1\n frame %d %d\n frame %d 4\n frame %d 14\n", H_THA, 6 + s->slow, H_THB, H_THC);
     emit("clip f_rise once dmg=%d kb=2,-6 stop=10 stun=30 bstun=16 inv=7 rise=6.5\n frame %d 2\n frame %d 10 hit=-6,-46,%d,44\n frame %d 14\n",
          D(s, 12), H_UPA, H_RISE, 30 + s->reach / 2, H_FALL);
     emit("clip f_rush once dmg=%d kb=3,-2 stop=8 stun=22 bstun=14 lunge=5\n frame %d %d\n frame %d 4 hit=0,-30,%d,24\n frame %d 14\n",
-         D(s, 10), H_DASH, 6 + s->slow, H_S1B, 36 + s->reach, H_S1C);
+         D(s, 10), H_DASH, 6 + s->slow, H_S1B, 44 + s->reach, H_S1C);
     emit("clip f_super once dmg=%d kb=4.5,-5.5 stop=14 stun=50 inv=24 lunge=3\n frame %d 4\n", D(s, 32), H_SP0);
-    for (int i = 0; i < 5; i++) emit(" frame %d 4 hit=-30,-40,%d,44\n", H_SP1 + (i % 3), 60 + s->reach);
+    for (int i = 0; i < 5; i++) emit(" frame %d 4 hit=-30,-40,%d,44\n", H_SP1 + (i % 3), 68 + s->reach);
     emit(" frame %d 10\n", H_IDLE0);
 }
 
@@ -129,7 +136,7 @@ static void fighter_def(GeFighterDef *d, const GeSprite *spr, const GeShotDef *s
     d->clip_backdash = C("f_backdash");
 #undef C
     GeMove moves[] = {
-        MV("S", "f_super", 4, GE_FIGHT_METER, NULL, GE_AI_SUPER),
+        MV("HK", "f_super", 4, GE_FIGHT_METER, NULL, GE_AI_SUPER),   /* A+B together on a 3DS */
         MV("623H", "f_rise", 3, 0, NULL, GE_AI_ANTIAIR),
         MV("623M", "f_rise", 3, 0, NULL, GE_AI_ANTIAIR),
         MV("236H", "f_shoot", 3, 0, shot, GE_AI_ZONE),
@@ -139,6 +146,9 @@ static void fighter_def(GeFighterDef *d, const GeSprite *spr, const GeShotDef *s
         MV("214M", "f_rush", 3, 0, NULL, GE_AI_RUSH),
         MV("LM", "f_throw", 0, 0, NULL, GE_AI_THROW),
         MV("6M", "f_6m", 1, 0, NULL, GE_AI_OVERHEAD),
+        MV("j.K", "f_jk", 2, 0, NULL, GE_AI_AIR),
+        MV("2K", "f_2k", 2, 0, NULL, GE_AI_LOW),
+        MV("5K", "f_5k", 2, 0, NULL, GE_AI_POKE),
         MV("j.H", "f_jh", 2, 0, NULL, GE_AI_AIR),
         MV("j.M", "f_jm", 1, 0, NULL, GE_AI_AIR),
         MV("j.L", "f_jl", 0, 0, NULL, GE_AI_AIR),
@@ -176,17 +186,18 @@ int chars_init(Chars *c, Sprites *s) {
     fight_clips(&fencer_style);
     rc |= parse(&s->fencer, "fencer");
 
-    /* the Paragon: the hero's own clips (it fights exactly as the player can), plus a finisher pose and a
-     * gift from the last duelist: an invulnerable-startup charge */
+    /* the Paragon: the hero's move list with its own frame data (longer reach, one tick quicker), plus a
+     * finisher pose and a gift from the last duelist: an invulnerable-startup charge */
+    const Style paragon_style = { 10, 1.0f, -1, 1.1f };
     hero_overworld();
-    fight_clips(&hero_style);
+    fight_clips(&paragon_style);
     emit("clip f_finisher once\n frame %d 40\n frame %d 8\n frame %d 12\n frame %d 99\n", H_HVA, H_HVB, H_HVC, H_HVD);
     emit("clip f_charge once dmg=14 kb=4,-3 stop=10 stun=28 bstun=16 inv=18 lunge=6\n frame %d 6\n frame %d 5 hit=0,-32,44,28\n frame %d 12\n",
          H_DASH, H_S1B, H_S1C);
     rc |= parse(&s->paragon, "paragon");
 
     /* the boss: the same puppet at double size, so double-size boxes */
-    emit("cell 64 64\norigin 32 63\n");
+    emit("cell %d %d\norigin %d %d\n", HUM_CELL_W * 2, HUM_CELL_H * 2, HUM_BODY_X * 2, HUM_CELL_H * 2 - 1);
     emit("clip idle loop\n frame %d 30\n frame %d 30\n", H_IDLE0, H_IDLE1);
     emit("clip run loop\n frame %d 6\n frame %d 6\n frame %d 6\n frame %d 6\n", H_RUN0, H_RUN1, H_RUN2, H_RUN3);
     emit("clip jump once\n frame %d 99\nclip fall once\n frame %d 99\nclip hurt once\n frame %d 99\nclip dead once\n frame %d 999\n",

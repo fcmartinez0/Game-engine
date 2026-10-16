@@ -93,4 +93,9 @@ void level_build(GeWorld *w) {
             if (m->vis[i] == AUTO) m->vis[i] = open_above ? TV_GRASS : ((x * 7 + y * 13) % 5 == 0 ? TV_DIRT2 : TV_DIRT);
             else if (m->vis[i] == TV_STONE && open_above) m->vis[i] = TV_STONE_TOP;
         }
+    /* the hall's floor is dressed stone, not grass */
+    for (int x = HALL_COL0; x < LEVEL_W; x++) {
+        m->vis[GROUND_ROW * m->w + x] = TV_STONE_TOP;
+        for (int y = GROUND_ROW + 1; y < m->h; y++) m->vis[y * m->w + x] = TV_STONE;
+    }
 }

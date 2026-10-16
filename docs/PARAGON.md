@@ -73,6 +73,44 @@ So the best possible player outcome is to take it to 1 HP and watch the finisher
 2. An **end-of-demo screen** lists what the Paragon learned about this player: the six most distinctive habits, in plain words (for example, "YOU BLOCK HIGH 94% OF THE TIME. YOU BLOCK LOW 11%").
 3. The player wakes at the last bench. The Paragon is still waiting, and now it has learned from this loss too. A rematch is harder than the first fight, but still cannot be won.
 
+## 6b. What it looks like (placeholder art, real design)
+
+All art in the demo is drawn by code and will be replaced by artists. The *design* below is what the art should keep.
+
+* **Silhouette first.** Same height and build as Wren, the player's hero, on purpose: it is what you could be. Everything else differs.
+* **Head:** a smooth porcelain mask with no mouth or nose. One vertical gold slit for an eye, at the front. Three thin spines sweep back like a crown. A gold ring (a halo) hangs behind the head. Nothing else in the game has a halo, so it reads at any size.
+* **Body:** the colour of the space between stars (deep indigo), with a cloak that trails to the floor. It is outlined in dim gold where everyone else has a black outline, so it stays readable on any background.
+* **Weapon:** the longest blade in the game, thin and gold, held in the same grip as Wren's needle-sword.
+* **Moves:** Wren's move list, with its own frame data (more reach, one tick quicker). The demo's duelists each give it one more technique when you beat them (section 4).
+* **Motif: the eye.** Its slit eye, the great window behind it, and its duel pattern (a field of eyes) all say one thing: *it has been watching.*
+
+## 6c. The Still Hall (the final area)
+
+Past Thornwarden's far door: a long, low, symmetrical stone hall, the only indoor room in the demo.
+
+| Element | Why |
+|---|---|
+| A bench just inside the door | The rematch is a few steps away after each loss, so losing never costs a long walk back |
+| Five pillars with gold capitals, candles at their feet | Rhythm and stillness. After the forest, nothing moves except candle flames and slow gold dust |
+| Narrow pointed windows | They look out onto its pattern, the field of eyes, before the fight starts |
+| One great almond-shaped window behind the place where it waits, with a gold slit in the middle | An eye, watching the door you came in by. You walk toward it the whole length of the room |
+| A gold threshold set in the floor in front of it | The line you cross to start the fight |
+| Dressed-stone floor (also in its arena) | The fight happens *here*, not in a generic arena |
+
+**The duel itself** uses the eye pattern as its background. Its irises breathe outward (one palette group) while the dark tide around them flows separately (a second group), so the eyes never wash out. **[story hook: what the hall was before the Paragon took it.]**
+
+## 6d. Encounter patterns (all duels)
+
+Every duel opens with an EarthBound-style pattern of the duelist's own: three white flashes, then their pattern floods the screen in a wave of diamonds starting from where they stand (the Pokemon wipe), and it stays as the duel's background. The engine side is `ge_pattern`: a 64x64 picture of palette indices, shown with palette cycling, a per-row sideways ripple (optionally alternating rows, the classic EarthBound shimmer), a vertical ripple and a scroll. Each row is a straight copy from a cached tile, so it costs about the same as one opaque background layer on the 3DS.
+
+| Duelist | Pattern |
+|---|---|
+| Grobb | earthy checkerboard, alternating-row shimmer |
+| Silke | cold blue plasma, slow vertical swell |
+| Mosshide | green rings flowing outward fast |
+| The Champion | red and gold diamonds, scrolling |
+| The Paragon | a field of gold eyes on a dark tide |
+
 ## 7. Tuning knobs
 
 | Knob | Where | Effect |

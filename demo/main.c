@@ -56,7 +56,7 @@ typedef struct {
     int duel_offset;                      /* dev menu: -1 easy, 0 normal, +1 hard (ordinary duelists only) */
     char facts[6][72];
     int nfacts, learn_shown;
-    bool fresh_profile, paragon_report, beat_all;
+    bool fresh_profile, paragon_report, beat_all, hall_named;
 
     int boss_spawn, boss_state, boss_timer, boss_combo;
     bool boss_engaged, boss_was_air;
@@ -182,6 +182,7 @@ static void start_duel_alert(int spawn, bool first_strike) {
     g.mode_timer = 0;
     g.duel = spawn;
     g.first_strike = first_strike;
+    g.msg_timer = 0;                       /* the alert line takes the message slot */
     memset(&g.world.intents[g.player], 0, sizeof(GeIntent));
     LOG("duel alert: %s%s", level_spawns[spawn].name, first_strike ? " (first strike)" : "");
 }
@@ -317,7 +318,7 @@ static void enemy_ai(int idx) {
         if (p && fabsf(dx) < 60.0f) e->facing = dx > 0 ? 1 : -1;
         if ((w->tick + idx * 5) % 7 == 0)
             ge_world_emit(w, e->pos.x + ge_rng_range(&w->rng, -8, 8), e->pos.y - ge_rng_range(&w->rng, 0, 20), 0, -0.4f, 0, 40,
-                          GE_ARGB(200, 190, 120, 255), 2, GE_P_ADD);
+                          spawn_of(idx) == g.paragon_spawn ? GE_ARGB(220, 255, 210, 110) : GE_ARGB(200, 190, 120, 255), 2, GE_P_ADD);
         break;
     default: break;
     }
@@ -407,9 +408,9 @@ static void hero_intent(const GeInput *in) {
     it->jump_pressed = (in->pressed & GE_BTN_B) != 0;
     it->jump_held = (in->down & GE_BTN_B) != 0;
     it->attack_pressed = (in->pressed & GE_BTN_Y) != 0;
-    it->dash_pressed = (in->pressed & GE_BTN_A) != 0;
+    it->dash_pressed = (in->pressed & GE_BTN_R) != 0;
     it->tool_pressed = (in->pressed & GE_BTN_X) != 0;
-    it->skill_pressed = (in->pressed & GE_BTN_R) != 0;
+    it->skill_pressed = (in->pressed & GE_BTN_A) != 0;
     it->channel_held = (in->down & GE_BTN_L) && p->hp < p->max_hp;
     g.model.ow[GE_OW_SLASH] += it->attack_pressed;
     g.model.ow[GE_OW_NEEDLE] += it->tool_pressed;
@@ -453,12 +454,12 @@ static uint32_t bot_buttons(void) {
         b = 0;
         bool telegraph = bs->state == GE_ST_ATTACK && bs->anim.frame == 0;
         if (p->hp <= 2 && p->meter >= 33 && fabsf(dx) > 120.0f) return GE_BTN_L;             /* heal */
-        if (telegraph && fabsf(dx) < 90.0f && (g.tick & 1)) b |= GE_BTN_A | (toward > 0 ? GE_BTN_RIGHT : GE_BTN_LEFT); /* dash through */
+        if (telegraph && fabsf(dx) < 90.0f && (g.tick & 1)) b |= GE_BTN_R | (toward > 0 ? GE_BTN_RIGHT : GE_BTN_LEFT); /* dash through */
         else if (fabsf(dx) > 46.0f) b |= toward > 0 ? GE_BTN_RIGHT : GE_BTN_LEFT;
         else if (fabsf(dx) < 26.0f) b |= toward > 0 ? GE_BTN_LEFT : GE_BTN_RIGHT;
         if (fabsf(dx) < 52.0f && (g.tick % 6) < 2) b |= GE_BTN_Y;
         if (p->ammo > 0 && fabsf(dx) < 150.0f && (g.tick % 40) == 0) b |= GE_BTN_X | (toward > 0 ? GE_BTN_RIGHT : GE_BTN_LEFT);
-        if (p->meter >= 66 && fabsf(dx) < 40.0f) b |= GE_BTN_R;
+        if (p->meter >= 66 && fabsf(dx) < 40.0f) b |= GE_BTN_A;
         return b;
     }
     if (tgt >= 0 && best >= 44.0f && best < 130.0f && p->ammo > 0 && p->on_ground && (g.tick % 30) == 0 &&
@@ -511,7 +512,7 @@ static uint32_t bot_buttons(void) {
         bool danger = below < 0 || ge_world_touches_tile(w, (GeRect){ p->pos.x - 4, p->pos.y, 32, 64 }, GE_TILE_SPIKE);
         if (danger && p->vel.y > 0.5f) {
             if (p->air_jumps_left > 0) want_jump = true;
-            else if (!p->air_dashed && p->dash_cd == 0) b |= GE_BTN_A;
+            else if (!p->air_dashed && p->dash_cd == 0) b |= GE_BTN_R;
         }
         if (p->vel.y < 0) b |= GE_BTN_B;   /* hold for full height */
     }
@@ -593,6 +594,7 @@ static void begin_battle(void) {
     ge_fight_init(&g.fight, &g.ch.f_hero, &g.spr.hero, opp, duel_sprite(s->variant), &g.world, 1000 + g.tick);
     g.fight.names[0] = "WREN";
     g.fight.names[1] = s->name;
+    g.fight.world.backdrop_pattern = encounter_pattern(s->name);
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
     if (final) {
@@ -604,6 +606,10 @@ static void begin_battle(void) {
         g.fight.finisher_tick = PARAGON_CLOCK_TICKS;
         if (g.gifts & GIFT_CHAMPION) g.fight.f[1].meter = GE_FIGHT_METER;
         g.learn_shown = learn;
+        GeTilemap *am = &g.fight.world.map;            /* its arena floor is the hall's dressed stone */
+        for (int x = 0; x < am->w; x++)
+            for (int y = 0; y < am->h; y++)
+                if (am->type[y * am->w + x] == GE_TILE_SOLID) am->vis[y * am->w + x] = (y > 0 && am->type[(y - 1) * am->w + x] == GE_TILE_SOLID) ? TV_STONE : TV_STONE_TOP;
         LOG("PARAGON fight begins: learn %d, react %d ticks, gifts 0x%x, model confidence %.2f, duels seen %u",
             learn, g.brain.react, g.gifts, ge_model_confidence(&g.model), (unsigned)g.model.duels);
     } else if (g.first_strike) {
@@ -617,9 +623,10 @@ static GeFightInput fight_input(const GeInput *in) {
     GeFightInput f = { 0, 0, 0, 0, -1 };
     f.x = ((in->down & GE_BTN_RIGHT) ? 1 : 0) - ((in->down & GE_BTN_LEFT) ? 1 : 0);
     f.y = ((in->down & GE_BTN_DOWN) ? 1 : 0) - ((in->down & GE_BTN_UP) ? 1 : 0);
-    /* fighting layout: Y light, X medium, A heavy, B super */
-    static const uint32_t map[4][2] = { { GE_BTN_Y, GE_FB_L }, { GE_BTN_X, GE_FB_M }, { GE_BTN_A, GE_FB_H }, { GE_BTN_B, GE_FB_S } };
-    for (int i = 0; i < 4; i++) {
+    /* fighting layout: Y light, X medium, A heavy, B sword thrust; L blocks (held), R dashes; H+K together = super */
+    static const uint32_t map[6][2] = { { GE_BTN_Y, GE_FB_L }, { GE_BTN_X, GE_FB_M }, { GE_BTN_A, GE_FB_H }, { GE_BTN_B, GE_FB_K },
+                                        { GE_BTN_L, GE_FB_BLOCK }, { GE_BTN_R, GE_FB_DASH } };
+    for (int i = 0; i < 6; i++) {
         if (in->pressed & map[i][0]) f.pressed |= (uint8_t)map[i][1];
         if (in->down & map[i][0]) f.held |= (uint8_t)map[i][1];
     }
@@ -676,6 +683,7 @@ static void end_battle(void) {
 
 static void draw_props(void *user, GeImage *fb, int camx, int camy) {
     (void)user;
+    paragon_draw_hall(fb, camx, camy, g.tick);
     for (int i = 0; i < level_nbenches; i++)
         art_draw_bench(fb, level_benches[i] * GE_TILE + 8 - camx, GROUND_ROW * GE_TILE - camy);
 }
@@ -721,7 +729,7 @@ static int demo_init(void *user) {
     if (g.warp_col >= HALL_COL0 || g.beat_all) level_set_exit(w, false);
     g.bench_col = level_benches[0];
     spawn_hero((g.warp_col > 0 ? g.warp_col : level_benches[0] + 1) * GE_TILE + 8.0f);
-    say("THE GLOAMWOOD", 120);
+    if (g.warp_col < HALL_COL0) say("THE GLOAMWOOD", 120);
     return 0;
 }
 
@@ -871,9 +879,13 @@ static void demo_update_inner(const GeInput *in) {
             if (w->ents[i].kind == EN_BOSS) boss_ai(i);
             else enemy_ai(i);
         }
-        if (w->tick % 9 == 0 && ge_world_particle_count(w) < 90)   /* fireflies */
-            ge_world_emit(w, w->cam.x + ge_rng_range(&w->rng, 0, SCREEN_W), w->cam.y + ge_rng_range(&w->rng, 70, 200), 0, 0, 0,
-                          260 + (int)ge_rng_range(&w->rng, 0, 160), GE_ARGB(255, 190, 255, 140), 2, GE_P_ADD | GE_P_WANDER | GE_P_TWINKLE);
+        bool in_hall = p->pos.x >= (HALL_COL0 - 2) * GE_TILE;
+        w->foreground_off = p->pos.x >= (HALL_COL0 - 12) * GE_TILE;      /* indoors: no forest grass in front */
+        if (in_hall && !g.hall_named) { g.hall_named = true; say("THE STILL HALL", 150); }
+        if (w->tick % 9 == 0 && ge_world_particle_count(w) < 90)   /* fireflies; in the hall, slow gold dust */
+            ge_world_emit(w, w->cam.x + ge_rng_range(&w->rng, 0, SCREEN_W), w->cam.y + ge_rng_range(&w->rng, in_hall ? 100 : 70, 200), 0,
+                          in_hall ? 0.05f : 0.0f, 0, 260 + (int)ge_rng_range(&w->rng, 0, 160),
+                          in_hall ? GE_ARGB(255, 255, 214, 120) : GE_ARGB(255, 190, 255, 140), in_hall ? 1 : 2, GE_P_ADD | GE_P_WANDER | GE_P_TWINKLE);
         ge_world_update(w);
         hero_bookkeeping();
         if (g.mode == M_OVERWORLD) check_duelists();
@@ -958,8 +970,8 @@ static void draw_hud(GeImage *fb) {
             ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST",
                              GE_WHITE, GE_RGB(20, 14, 30), 1);
     if (g.tick < 420 && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
-        const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   A DASH";
-        const char *l2 = "X THROW NEEDLE   R SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
+        const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   R DASH";
+        const char *l2 = "X THROW NEEDLE   A SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
         int a = g.tick > 360 ? (420 - (int)g.tick) * 255 / 60 : 255;
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l1, 1)) / 2, 44, l1, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l2, 1)) / 2, 55, l2, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
@@ -986,20 +998,15 @@ static void draw_alert(GeImage *fb) {
     ge_text_outlined(fb, (SCREEN_W - ge_text_width(buf, 1)) / 2, 186, buf, GE_RGB(255, 220, 160), GE_RGB(20, 14, 30), 1);
 }
 
-/* Pokemon-style: flash, flash, flash, then the screen is shuttered by bars. */
+/* Pokemon-style: flash, flash, flash, then the duelist's own pattern floods out from where they stand. */
 static void draw_trans_in(GeImage *fb, int t) {
-    if (t < 24) {
-        if ((t / 4) & 1) ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(220, 255, 255, 255), 0);
-        else ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(170, 10, 0, 20), 0);
-        return;
+    int ent = g.ent_of[g.duel];
+    int cx = SCREEN_W / 2, cy = SCREEN_H / 2;
+    if (ent >= 0) {
+        const GeEntity *e = &g.world.ents[ent];
+        cx = (int)(e->pos.x - g.world.cam.x); cy = (int)(e->pos.y - g.world.cam.y) - 16;
     }
-    float p = (float)(t - 24) / 30.0f;
-    int bands = 12, bh = fb->h / bands + 1;
-    for (int i = 0; i < bands; i++) {
-        float q = ge_clampf(p * 1.6f - (float)i * 0.05f, 0.0f, 1.0f);
-        int wpx = (int)(q * (float)fb->w);
-        ge_fill_rect(fb, (i & 1) ? fb->w - wpx : 0, i * bh, wpx, bh, GE_RGB(10, 4, 18), 0);
-    }
+    encounter_draw_transition(fb, encounter_pattern(level_spawns[g.duel].name), t, cx, cy, g.tick);
 }
 
 static void demo_draw_inner(GeImage *fb);
@@ -1062,16 +1069,10 @@ static void demo_draw(void *user, GeImage *fb) {
 static void demo_draw_inner(GeImage *fb) {
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
-        if (g.mode == M_BATTLE && g.mode_timer < 30) {   /* the shutters open again */
-            float p = (float)g.mode_timer / 30.0f;
-            int bands = 12, bh = fb->h / bands + 1;
-            for (int i = 0; i < bands; i++) {
-                int wpx = (int)((1.0f - p) * (float)fb->w);
-                ge_fill_rect(fb, (i & 1) ? fb->w - wpx : 0, i * bh, wpx, bh, GE_RGB(10, 4, 18), 0);
-            }
-        }
+        if (g.mode == M_BATTLE && g.mode_timer < 24)     /* the fighters step out of the pattern */
+            ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB((24 - g.mode_timer) * 10, 255, 255, 255), 0);
         if (g.mode == M_BATTLE) {
-            const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B SUPER  HOLD BACK TO BLOCK";
+            const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B THRUST  L BLOCK  R DASH  A+B SUPER";
             if (g.fight.phase == GE_FP_INTRO) ge_text_outlined(fb, (SCREEN_W - ge_text_width(hint, 1)) / 2, 200, hint, GE_RGB(220, 210, 240), GE_RGB(20, 14, 30), 1);
         }
     } else {
@@ -1117,6 +1118,7 @@ static void demo_shutdown(void *user) {
            g.beaten[g.boss_spawn] ? "defeated" : (g.boss_engaged ? "fighting" : "waiting"), ge_null_last_checksum());
 #endif
     paragon_profile_save(&g.model);
+    encounter_free();
     if (g.fight_live) ge_fight_free(&g.fight);
     ge_world_free(&g.world);
     art_free(&g.spr);

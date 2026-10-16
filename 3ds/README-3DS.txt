@@ -11,16 +11,19 @@ CONTROLS - exploring
   D-pad / Circle Pad   move, aim up/down
   B                    jump (again in the air = double jump, off walls = wall jump)
   Y                    slash   (hold UP = up-slash, DOWN in the air = pogo down-slash)
-  A                    dash (works in the air too)
+  R                    dash (works in the air too, you can't be hurt mid-dash)
   X                    throw a needle (3 charges, they refill)
-  R                    silk spin (uses 1 silk segment)
+  A                    silk spin (uses 1 silk segment)
   hold L               heal 2 masks (uses 1 silk segment)
   UP at a bench        rest: full health, respawn point
 
 CONTROLS - duels (when a duelist spots you)
-  D-pad                walk, UP jump, DOWN crouch, HOLD BACK TO BLOCK
+  D-pad                walk, UP jump, DOWN crouch (holding back also blocks)
+  hold L               block (hold DOWN too to block low; you stand still)
+  R                    dash (hold back + R = backdash)
   Y / X / A            light / medium / heavy
-  B                    super (when the meter is full)
+  B                    sword thrust: slow but the longest reach (DOWN + B low, in the air too)
+  A + B together       super (when the meter is full)
   Y + X together       throw (up close)
   down, down-forward, forward + attack      projectile
   forward, down, down-forward + attack      rising anti-air

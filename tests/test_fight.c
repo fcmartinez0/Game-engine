@@ -55,6 +55,39 @@ static void attack_vs(GeFightInput atk, GeFightInput def, int ticks) {
     for (int i = 0; i < ticks; i++) step(NONE, def);
 }
 
+static void test_shoulder_buttons(void) {
+    puts("K button, block button, dash button");
+    CHECK(D0.moves[10].buttons == GE_FB_K && D0.moves[10].stance == 1);
+    fresh(); close_in(30);
+    step(btn(0, 0, GE_FB_K), NONE);
+    CHECK(move_named(0, "m") && F.f[0].move == 10);
+    /* block button: guards a mid without holding back, even while pressing forward */
+    GeFightInput guard = NONE; guard.held = GE_FB_BLOCK;
+    fresh(); close_in(30);
+    attack_vs(btn(0, 0, GE_FB_L), guard, 8);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->hp == 100);
+    GeFightInput guard_fwd = dirs(-1, 0); guard_fwd.held = GE_FB_BLOCK;
+    fresh(); close_in(30);
+    float x0 = E(1)->pos.x;
+    attack_vs(btn(0, 0, GE_FB_L), guard_fwd, 8);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->pos.x >= x0 - 0.01f);   /* blocking roots you */
+    /* it still has to be the right height: a low beats a standing block-button guard */
+    fresh(); close_in(30);
+    attack_vs(btn(0, 1, GE_FB_L), guard, 8);
+    CHECK(F.f[1].state == GE_FS_HITSTUN);
+    /* dash button: forward from neutral, backwards while holding back */
+    GeFightInput dash = NONE; dash.pressed = GE_FB_DASH;
+    fresh(); close_in(120);
+    x0 = E(0)->pos.x;
+    step(dash, NONE); step(NONE, NONE); step(NONE, NONE);
+    CHECK(F.f[0].state == GE_FS_DASH && E(0)->pos.x > x0 + 4.0f);
+    GeFightInput back_dash = dirs(-1, 0); back_dash.pressed = GE_FB_DASH;
+    fresh(); close_in(120);
+    x0 = E(0)->pos.x;
+    step(back_dash, NONE); step(dirs(-1, 0), NONE); step(dirs(-1, 0), NONE);
+    CHECK(F.f[0].state == GE_FS_DASH && E(0)->pos.x < x0 - 4.0f);
+}
+
 static void test_blocking(void) {
     puts("blocking high / low / mid, chip");
     /* mid: blocked standing; P2 is to the right, so "back" is +1 */
@@ -205,6 +238,7 @@ int main(void) {
     test_notation();
     test_motions();
     test_blocking();
+    test_shoulder_buttons();
     test_throws_cancels_juggles();
     test_rounds();
     test_cpu();
