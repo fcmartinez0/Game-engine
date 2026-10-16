@@ -16,6 +16,10 @@ TARGET  := gloamwood
 ROOT    := ..
 CC      := $(DEVKITARM)/bin/arm-none-eabi-gcc
 3DSXTOOL:= $(DEVKITPRO)/tools/bin/3dsxtool
+SMDHTOOL:= $(DEVKITPRO)/tools/bin/smdhtool
+APP_TITLE  := Gloamwood
+APP_DESC   := A platformer with fighting-game duels
+APP_AUTHOR := ge engine
 CTRULIB := $(DEVKITPRO)/libctru
 
 SRC := $(wildcard $(ROOT)/engine/src/*.c) $(ROOT)/platform/n3ds.c $(wildcard $(ROOT)/demo/*.c)
@@ -29,8 +33,13 @@ LIBS    := -L$(CTRULIB)/lib -lctru -lm
 
 all: $(TARGET).3dsx
 
-$(TARGET).3dsx: build/$(TARGET).elf
-	$(3DSXTOOL) $< $@
+# the .smdh carries the title and icon the Homebrew Launcher shows
+build/$(TARGET).smdh: icon.png
+	@mkdir -p build
+	$(SMDHTOOL) --create "$(APP_TITLE)" "$(APP_DESC)" "$(APP_AUTHOR)" $< $@
+
+$(TARGET).3dsx: build/$(TARGET).elf build/$(TARGET).smdh
+	$(3DSXTOOL) $< $@ --smdh=build/$(TARGET).smdh
 
 build/$(TARGET).elf: $(OBJ)
 	$(CC) $(LDFLAGS) $(OBJ) $(LIBS) -o $@

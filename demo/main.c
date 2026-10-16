@@ -64,7 +64,7 @@ typedef struct {
 
 static Demo g;
 static bool g_log;
-#define LOG(...) do { if (g_log) { fprintf(stderr, "[%6u] ", g.tick); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
+#define LOG(...) do { if (g_log) { fprintf(stderr, "[%6u] ", (unsigned)g.tick); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
 static GeEntity *hero(void) { return &g.world.ents[g.player]; }
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
@@ -833,7 +833,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--dump-dir") && i + 1 < argc) dump_dir = argv[++i];
     }
 #ifdef __3DS__
-    g.low_detail = !APT_CheckNew3DS(); /* original 3DS: 268 MHz, drop the decorative layers */
+    bool is_new3ds = false;
+    APT_CheckNew3DS(&is_new3ds);
+    g.low_detail = !is_new3ds; /* original 3DS: 268 MHz, drop the decorative layers */
 #endif
 #ifdef DEMO_HEADLESS
     ge_null_configure(frames, dump_every, dump_dir, NULL, NULL);

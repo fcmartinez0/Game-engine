@@ -126,12 +126,26 @@ ge_world_load_layers(&world, "forest.layers", &line);   // or: ./build/demo --la
 
 ## Nintendo 3DS
 
+You need a 3DS with custom firmware (Luma3DS) and the Homebrew Launcher.
+
+**Build.** Either install devkitPro (`dkp-pacman -S 3ds-dev`) and run:
+
 ```sh
 export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
-cd 3ds && make          # → gloamwood.3dsx
+cd 3ds && make                    # → 3ds/gloamwood.3dsx
 ```
 
-**Status:** the 3DS backend (`platform/n3ds.c`) and `3ds/Makefile` **have not been built against devkitPro or run on hardware or an emulator**. devkitPro couldn't be installed where this was developed. The backend and the demo type-check against a stub of the libctru calls they use, nothing more, so expect small fixes on the first real build. Performance on the console is also unmeasured. The renderer is software. The demo turns off its decorative layers on the original 3DS (`low_detail`), and a GPU path (citro2d) is the next step if that isn't enough. Start + Select quits.
+or use devkitPro's official Docker image, with nothing to install:
+
+```sh
+docker run --rm -v "$PWD":/src -w /src/3ds devkitpro/devkitarm make
+```
+
+**Install.** Copy `gloamwood.3dsx` to the `/3ds/` folder on the SD card, either by moving the card to your PC or wirelessly with FTPD. Launch the Homebrew Launcher (through the Homebrew Launcher app, or Rosalina's menu: L + ↓ + Select → Miscellaneous → Switch the hb. title to the current app) and pick **Gloamwood**. Start + Select quits.
+
+To skip the SD card shuffle while iterating, start the launcher, press Y for netloader, then run `3dslink 3ds/gloamwood.3dsx` from the PC (it ships with devkitPro).
+
+**Status:** the build uses the real devkitARM toolchain and libctru, and compiles with no warnings. It **has not been run on hardware or an emulator yet**, and performance on the console is unmeasured. The renderer is software. The demo turns off its decorative layers on the original 3DS (`low_detail`). If it isn't fast enough, the next step is a GPU path (citro2d).
 
 ## Testing
 
