@@ -59,6 +59,7 @@ typedef struct {
     bool fresh_profile, paragon_report, beat_all, hall_named;
     bool bottom_dirty;                    /* the bottom screen needs redrawing */
     int tap_flash, bottom_frames;
+    int confirm_item, confirm_timer;      /* a pending "tap again to confirm" */
 
     int boss_spawn, boss_state, boss_timer, boss_combo;
     bool boss_engaged, boss_was_air;
@@ -95,7 +96,7 @@ static Demo g;
 static bool g_log;
 /* events go to stderr with GLOAM_LOG=1, and to the play log file when it's on */
 #define LOG(...) do { if (g_log) { fprintf(stderr, "[%6u] ", (unsigned)g.tick); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } \
-                      devlog(__VA_ARGS__); } while (0)
+                      devlog(__VA_ARGS__); devlog_flush(); } while (0)   /* flushed at once: a crash or a power-off keeps it */
 
 static GeEntity *hero(void) { return &g.world.ents[g.player]; }
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
@@ -599,6 +600,7 @@ static void begin_battle(void) {
     if (final) g.fight.world.backdrop_pattern = encounter_pattern(s->name);   /* only the Paragon fights inside its pattern */
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
+    g.fight.hints = 1;                                 /* teaching aids for the player's side */
     if (final) {
         int learn = paragon_learn_level(&g.model, g.gifts);
         ge_paragon_init(&g.brain, &g.model);
@@ -641,6 +643,8 @@ static void end_battle(void) {
     LOG("duel over: %s vs WREN -> %s (rounds %d-%d), duel ran at %.1f fps avg, worst frame %.1f ms",
         level_spawns[g.duel].name, g.duel_result == 0 ? "WON" : "LOST", g.fight.f[0].wins, g.fight.f[1].wins,
         g.duel_perf.dt_sum > 0 ? g.duel_perf.frames / (g.duel_perf.dt_sum / 1000.0) : 0.0, g.duel_perf.dt_max);
+    LOG("  your defence: blocked %d, hit at the wrong height while blocking %d, hit while not blocking %d, thrown %d",
+        g.fight.stat_blocked[0], g.fight.stat_wrong_height[0], g.fight.stat_hit[0], g.fight.stat_thrown[0]);
     g.model.duels++;
     g.model.rounds += g.fight.f[0].wins + g.fight.f[1].wins;
     if (g.duel_result == 0) g.model.wins++; else g.model.losses++;
@@ -781,6 +785,15 @@ static void warp_to(int col) {
     LOG("dev: warped to column %d", col);
 }
 
+/* Things that are hard to undo (switching the log off, wiping the Paragon's memory) need a second tap or A
+ * press within two seconds: a stray touch on the bottom screen should never cost a play log. */
+static bool confirmed(int item) {
+    if (g.confirm_item == item && g.confirm_timer > 0) { g.confirm_item = -1; g.confirm_timer = 0; return true; }
+    g.confirm_item = item;
+    g.confirm_timer = 120;
+    return false;
+}
+
 /* One place that changes a menu item, for the D-pad (menu open, SELECT) and for taps on the bottom screen alike.
  * dir: -1 / +1 to step a value, act: the A button or a tap on the middle of the row. */
 static void menu_apply(int item, int dir, bool act) {
@@ -788,14 +801,18 @@ static void menu_apply(int item, int dir, bool act) {
     switch (item) {
     case MI_PERF:   if (act || dir) g.show_perf = !g.show_perf; break;
     case MI_DETAIL: if (act || dir) { g.detail_mode = (g.detail_mode + (dir < 0 ? 2 : 1)) % 3; apply_detail(); LOG("dev: detail now %s", g.low_detail ? "low" : "full"); } break;
-    case MI_LOG:    if (act || dir) set_logging(!g.log_wanted); break;
+    case MI_LOG:
+        if (!(act || dir)) break;
+        if (g.log_wanted && !confirmed(MI_LOG)) break;                     /* turning it off takes a second tap */
+        set_logging(!g.log_wanted);
+        break;
     case MI_GOD:    if (act || dir) { g.god = !g.god; LOG("dev: god mode %s", g.god ? "on" : "off"); } break;
     case MI_DUEL:
         if (act && !dir) dir = g.duel_offset >= 1 ? -2 : 1;                  /* a tap cycles EASY > NORMAL > HARD */
         if (dir) { g.duel_offset = ge_clampi(g.duel_offset + dir, -1, 1); LOG("dev: duelist strength offset now %d", g.duel_offset); }
         break;
     case MI_RESET:
-        if (act) { ge_model_init(&g.model); paragon_profile_save(&g.model); LOG("dev: the Paragon's memory was wiped"); say("PARAGON MEMORY WIPED", 90); g.menu_open = false; }
+        if (act && confirmed(MI_RESET)) { ge_model_init(&g.model); paragon_profile_save(&g.model); LOG("dev: the Paragon's memory was wiped"); say("PARAGON MEMORY WIPED", 90); g.menu_open = false; }
         break;
     case MI_WARP:
         if (dir) g.warp_sel = (g.warp_sel + NWARPS + dir) % NWARPS;
@@ -843,6 +860,7 @@ static void bottom_touch(const GeInput *in) {
 static bool draw_bottom(void *user, GeImage *fb) {
     (void)user;
     if (g.tap_flash > 0 && --g.tap_flash == 0) g.bottom_dirty = true;
+    if (g.confirm_timer > 0 && --g.confirm_timer == 0) { g.confirm_item = -1; g.bottom_dirty = true; }
     /* only send it when something changed, plus a refresh twice a second for the live numbers */
     if (!g.bottom_dirty && (g.bottom_frames++ % 30) != 0) return false;
     g.bottom_dirty = false;
@@ -858,7 +876,9 @@ static bool draw_bottom(void *user, GeImage *fb) {
     const char *detail = g.detail_mode == 0 ? (g.auto_low ? "AUTO (LOW)" : "AUTO (FULL)") : g.detail_mode == 1 ? "LOW" : "FULL";
     const char *val[MI_COUNT] = { g.show_perf ? "ON" : "OFF", detail, devlog_is_open() ? "ON" : (g.log_wanted ? "NO SD?" : "OFF"),
                                   g.god ? "ON" : "OFF", g.duel_offset < 0 ? "EASY" : g.duel_offset > 0 ? "HARD" : "NORMAL",
-                                  WARPS[g.warp_sel].name, "TAP", "TAP", g.menu_open ? "RESUME" : "PAUSE" };
+                                  WARPS[g.warp_sel].name, "TAP", g.confirm_item == MI_RESET ? "TAP AGAIN TO WIPE" : "TAP",
+                                  g.menu_open ? "RESUME" : "PAUSE" };
+    if (g.confirm_item == MI_LOG) val[MI_LOG] = "TAP AGAIN: OFF";
     const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DUEL LEVEL", "WARP (TAP TO GO)", "MARK THIS MOMENT",
                                     "WIPE PARAGON MEMORY", "GAME" };
     for (int i = 0; i < MI_COUNT; i++) {
@@ -888,8 +908,9 @@ static bool draw_bottom(void *user, GeImage *fb) {
     snprintf(buf, sizeof buf, "AVG %.0f FPS, %d%% OF FRAMES BELOW 60", g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0,
              g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
     ge_text(fb, 6, y + 22, buf, dim, 1);
-    snprintf(buf, sizeof buf, "LOG %s", devlog_is_open() ? devlog_path() : "OFF");
-    ge_text(fb, 6, y + 33, buf, dim, 1);
+    if (devlog_is_open()) snprintf(buf, sizeof buf, "LOG WRITING TO %s", devlog_path());
+    else snprintf(buf, sizeof buf, g.log_wanted ? "LOG NOT WRITING: CAN'T OPEN THE FILE" : "LOG OFF");
+    ge_text(fb, 6, y + 33, buf, devlog_is_open() ? GE_RGB(160, 230, 170) : GE_RGB(255, 130, 110), 1);
     snprintf(buf, sizeof buf, "PARAGON KNOWS %d%% OF YOU (%u DUELS)", (int)(ge_model_confidence(&g.model) * 100.0f), (unsigned)g.model.duels);
     ge_text(fb, 6, y + 44, buf, GE_RGB(255, 214, 120), 1);
     return true;

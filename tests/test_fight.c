@@ -71,10 +71,29 @@ static void test_shoulder_buttons(void) {
     float x0 = E(1)->pos.x;
     attack_vs(btn(0, 0, GE_FB_L), guard_fwd, 8);
     CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->pos.x >= x0 - 0.01f);   /* blocking roots you */
-    /* it still has to be the right height: a low beats a standing block-button guard */
+    /* the guard button stops every height: a low and an overhead too (holding back still needs the right one) */
     fresh(); close_in(30);
     attack_vs(btn(0, 1, GE_FB_L), guard, 8);
-    CHECK(F.f[1].state == GE_FS_HITSTUN);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && F.f[1].crouch_block && E(1)->hp == 100);
+    fresh(); close_in(18);
+    attack_vs(btn(1, 0, GE_FB_M), guard, 18);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->hp == 100);
+    fresh(); close_in(30);
+    attack_vs(btn(0, 1, GE_FB_L), dirs(1, 0), 8);
+    CHECK(F.f[1].state == GE_FS_HITSTUN);                          /* holding back, standing: the low gets in */
+    /* ...but a guard is thrown */
+    fresh(); close_in(20);
+    step(btn(0, 0, GE_FB_L | GE_FB_M), guard);
+    CHECK(F.f[1].state == GE_FS_THROWN);
+    /* holding back while an attack is coming shows the guard pose and stops the walk-back */
+    fresh(); close_in(60);
+    float gx = E(1)->pos.x;
+    step(btn(0, 0, GE_FB_H), dirs(1, 0)); step(NONE, dirs(1, 0)); step(NONE, dirs(1, 0));
+    CHECK(F.f[1].guarding && E(1)->pos.x <= gx + 0.01f);
+    fresh(); close_in(160);
+    gx = E(1)->pos.x;
+    step(NONE, dirs(1, 0)); step(NONE, dirs(1, 0));
+    CHECK(!F.f[1].guarding && E(1)->pos.x > gx);                  /* nothing coming: it walks back as usual */
     /* dash button: forward from neutral, backwards while holding back */
     GeFightInput dash = NONE; dash.pressed = GE_FB_DASH;
     fresh(); close_in(120);
@@ -86,6 +105,32 @@ static void test_shoulder_buttons(void) {
     x0 = E(0)->pos.x;
     step(back_dash, NONE); step(dirs(-1, 0), NONE); step(dirs(-1, 0), NONE);
     CHECK(F.f[0].state == GE_FS_DASH && E(0)->pos.x < x0 - 4.0f);
+}
+
+static void test_buffer_and_tech(void) {
+    puts("input buffer, throw break window");
+    /* a light pressed during the last ticks of a move comes out the moment the move ends */
+    fresh(); close_in(120);
+    step(btn(0, 0, GE_FB_M), NONE);
+    int n = 0;
+    while (F.f[0].state == GE_FS_MOVE && ge_fight_frames_until_free(&F, 0) > 4 && n++ < 100) step(NONE, NONE);
+    step(btn(0, 0, GE_FB_L), NONE);                                 /* too early, by the old rules */
+    for (int i = 0; i < 8 && !move_named(0, "l"); i++) step(NONE, NONE);
+    CHECK(move_named(0, "l"));
+    /* but not forever: a press long before the end is dropped */
+    fresh(); close_in(120);
+    step(btn(0, 0, GE_FB_H), NONE);
+    step(NONE, NONE);
+    step(btn(0, 0, GE_FB_L), NONE);                                 /* 20+ ticks before 5H ends */
+    for (int i = 0; i < 40; i++) step(NONE, NONE);
+    CHECK(!move_named(0, "l"));
+    /* the throw can be broken up to 15 ticks after it starts (human reaction time) */
+    fresh(); close_in(20);
+    step(btn(0, 0, GE_FB_L | GE_FB_M), NONE);
+    CHECK(F.f[1].state == GE_FS_THROWN);
+    for (int i = 0; i < 12; i++) step(NONE, NONE);
+    step(NONE, btn(0, 0, GE_FB_L | GE_FB_M));
+    CHECK(F.f[1].state != GE_FS_THROWN && E(1)->hp == 100);
 }
 
 static void test_blocking(void) {
@@ -239,6 +284,7 @@ int main(void) {
     test_motions();
     test_blocking();
     test_shoulder_buttons();
+    test_buffer_and_tech();
     test_throws_cancels_juggles();
     test_rounds();
     test_cpu();

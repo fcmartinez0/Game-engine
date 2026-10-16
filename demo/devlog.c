@@ -3,6 +3,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef __3DS__
+#include <sys/stat.h>
+#endif
 
 static FILE *g_file;
 static const char *g_path = "";
@@ -17,13 +20,25 @@ static const char *const PATHS[] = { "gloamwood_log.txt" };
 
 bool devlog_open(void) {
     if (g_file) return true;
+#ifdef __3DS__
+    mkdir("sdmc:/3ds", 0777);              /* in case the game was copied somewhere else: make its folder */
+    mkdir("sdmc:/3ds/gloamwood", 0777);
+#endif
+    /* Each session gets a fresh log.txt, so the file to send is always the newest one; the session before
+     * is kept as log_previous.txt. (Appending everything to one file buried the newest session at the end.) */
     for (unsigned i = 0; i < sizeof PATHS / sizeof PATHS[0]; i++) {
-        g_file = fopen(PATHS[i], "a");
+        char prev[96];
+        size_t n = strlen(PATHS[i]);
+        if (n > 4 && n + 10 < sizeof prev) {
+            memcpy(prev, PATHS[i], n - 4);
+            strcpy(prev + n - 4, "_previous.txt");
+            FILE *probe = fopen(PATHS[i], "r");
+            if (probe) { fclose(probe); remove(prev); rename(PATHS[i], prev); }
+        }
+        g_file = fopen(PATHS[i], "w");
         if (g_file) { g_path = PATHS[i]; break; }
     }
-    if (!g_file) return false;
-    fputs("\n==================================================================\n", g_file);
-    return true;
+    return g_file != NULL;
 }
 
 bool devlog_is_open(void) { return g_file != NULL; }

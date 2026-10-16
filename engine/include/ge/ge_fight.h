@@ -28,6 +28,11 @@
  *
  * Moves are tried in list order, so put supers and specials first, command
  * normals before plain ones.
+ *
+ * Blocking has two forms. HOLDING BACK is the classic one: it lets you walk, but lows must be blocked
+ * crouching and overheads / jump-ins standing. The BLOCK button (GE_FB_BLOCK, a shoulder button) is a
+ * guard: you stand still, and it stops every height. Only throws beat it, so a fighter who guards too
+ * much gets grabbed (which can be broken by pressing L+M as it starts).
  * ------------------------------------------------------------------------- */
 
 /* Attack buttons: light, medium, heavy, special (S), and K, a fourth normal (the long sword thrusts).
@@ -117,6 +122,10 @@ typedef struct {
     GeFightInput in;
     float shown_hp;          /* for the draining health-bar effect */
     int ai_timer, ai_cd, ai_hold_x, ai_hold_y, ai_block_for; /* CPU state */
+    uint8_t buf_btn; int buf_timer;   /* attack buttons pressed while busy, tried again for a few ticks (input buffer) */
+    bool guarding;                    /* holding a guard right now (drawn as the guard pose) */
+    int pop_timer; const char *pop;   /* a short word over the fighter: BLOCK, LOW!, ... */
+    uint32_t pop_color;
 } GeFighter;
 
 typedef enum { GE_FP_INTRO, GE_FP_FIGHT, GE_FP_KO, GE_FP_TIME, GE_FP_ROUND_END, GE_FP_MATCH_END, GE_FP_FINISHER } GeFightPhase;
@@ -147,6 +156,11 @@ typedef struct {
     int finisher_side;       /* who performs it */
     bool finisher_pending;   /* an undying fighter hit its floor: the finisher fires at the next chance */
     bool finisher_seen;      /* it has happened at least once this fight (for the game to react to) */
+    /* teaching aids, per side (bit 0 = side 0): name what got through ("LOW: CROUCH TO BLOCK"), show which
+     * attacks hit low or high, and prompt the throw break. The demo turns them on for the player. */
+    unsigned hints;
+    /* per side, for play logs: attacks blocked, hits taken while trying to block at the wrong height, other hits, throws */
+    int stat_blocked[2], stat_wrong_height[2], stat_hit[2], stat_thrown[2];
 } GeFight;
 
 /* Set up a match. `backdrop` (may be NULL) lends its parallax layers and tileset. */

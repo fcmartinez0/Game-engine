@@ -8,7 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-bool devlog_open(void);                 /* picks the path, appends a session separator */
+bool devlog_open(void);                 /* picks the path; starts a fresh file, the last one becomes *_previous.txt */
 bool devlog_is_open(void);
 const char *devlog_path(void);
 void devlog_set_clock(uint64_t start_us, uint64_t now_us);

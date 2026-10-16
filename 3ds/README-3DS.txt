@@ -18,8 +18,15 @@ CONTROLS - exploring
   UP at a bench        rest: full health, respawn point
 
 CONTROLS - duels (when a duelist spots you)
-  D-pad                walk, UP jump, DOWN crouch (holding back also blocks)
-  hold L               block (hold DOWN too to block low; you stand still)
+  hold L               GUARD: blocks everything (low, high, jump-ins) except
+                       throws. You stand still while you hold it.
+  D-pad                walk, UP jump, DOWN crouch. Holding BACK also blocks,
+                       but only at the right height: back = high and middle,
+                       down-back = low and middle. Words over your fighter
+                       say what got through (LOW! / HIGH!), arrows on an
+                       attack show if it hits low or high, and a blue shield
+                       shows when you are blocking.
+  Y + X when grabbed   break the throw (you have about a quarter second)
   R                    dash (hold back + R = backdash)
   Y / X / A            light / medium / heavy
   B                    sword thrust: slow but the longest reach (DOWN + B low, in the air too)
@@ -45,7 +52,9 @@ DEV MENU - always on the BOTTOM (touch) screen
   UP/DOWN to choose, A or LEFT/RIGHT to change, SELECT or B to close.
 
 THE PLAY LOG - please send this back
-  File:  SD:/3ds/gloamwood/log.txt   (every session is appended)
+  File:  SD:/3ds/gloamwood/log.txt   (always the latest session; the one
+         before it is log_previous.txt). The bottom screen says whether the
+         log is being written. Switching it off needs two taps.
   It records play time, a performance line every 10 seconds (fps, slow
   frames, CPU time), duels won/lost, deaths, benches, the boss, your
   markers, and a summary when you quit with START + SELECT.
