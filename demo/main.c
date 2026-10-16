@@ -5,6 +5,7 @@
 #include "demo.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
+#include "ge/ge_platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,6 +60,9 @@ typedef struct {
     int bot_climb;
 
     int kills, duels_won, duels_lost, deaths, heals;
+    bool show_perf;                       /* Select: frame-rate / CPU-time readout */
+    uint64_t last_draw_us;
+    float fps, update_ms, draw_ms;        /* smoothed */
     uint32_t tick;
 } Demo;
 
@@ -619,8 +623,17 @@ static int demo_init(void *user) {
     return 0;
 }
 
+static void demo_update_inner(const GeInput *in);
+
 static void demo_update(void *user, const GeInput *in) {
     (void)user;
+    uint64_t t0 = ge_plat_time_us();
+    if (in->pressed & GE_BTN_SELECT) g.show_perf = !g.show_perf;
+    demo_update_inner(in);
+    g.update_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.update_ms) * 0.1f;
+}
+
+static void demo_update_inner(const GeInput *in) {
     g.tick++;
     GeWorld *w = &g.world;
     GeInput bot;
@@ -768,8 +781,26 @@ static void draw_trans_in(GeImage *fb, int t) {
     }
 }
 
+static void demo_draw_inner(GeImage *fb);
+
 static void demo_draw(void *user, GeImage *fb) {
     (void)user;
+    uint64_t t0 = ge_plat_time_us();
+    if (g.last_draw_us && t0 > g.last_draw_us) g.fps += (1e6f / (float)(t0 - g.last_draw_us) - g.fps) * 0.1f;
+    g.last_draw_us = t0;
+    demo_draw_inner(fb);
+    g.draw_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.draw_ms) * 0.1f;
+    if (g.show_perf) {
+        char buf[80];
+        snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%dMS  DRAW %d.%dMS  %s", (int)(g.fps + 0.5f),
+                 (int)g.update_ms, (int)(g.update_ms * 10) % 10, (int)g.draw_ms, (int)(g.draw_ms * 10) % 10,
+                 g.low_detail ? "LOW DETAIL" : "FULL DETAIL");
+        ge_fill_rect(fb, 0, 230, fb->w, 10, GE_ARGB(200, 0, 0, 0), 0);
+        ge_text(fb, 3, 231, buf, GE_RGB(120, 255, 140), 1);
+    }
+}
+
+static void demo_draw_inner(GeImage *fb) {
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
         if (g.mode == M_BATTLE && g.mode_timer < 30) {   /* the shutters open again */

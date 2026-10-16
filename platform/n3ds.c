@@ -4,6 +4,7 @@
 
 #include "ge/ge_input.h"
 #include "ge/ge_platform.h"
+#include "n3ds_blit.h"
 
 #include <3ds.h>
 #include <stddef.h>
@@ -43,22 +44,15 @@ int ge_plat_poll(uint32_t *buttons) {
 }
 
 void ge_plat_present(const GeImage *fb) {
-    /* The top screen framebuffer is 240 columns x 400 rows of BGR, stored
-     * column-major with y flipped: pixel (x, y) lives at (x*240 + (239-y))*3. */
-    u16 fw, fh;
+    u16 fw, fh;   /* libctru reports the top screen as 240 wide, 400 tall: it's mounted sideways */
     u8 *dst = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &fw, &fh);
-    for (int x = 0; x < fb->w; x++) {
-        u8 *col = dst + (size_t)x * fb->h * 3;
-        for (int y = 0; y < fb->h; y++) {
-            u32 p = fb->px[(size_t)y * fb->w + x];
-            u8 *o = col + (size_t)(fb->h - 1 - y) * 3;
-            o[0] = (u8)p; o[1] = (u8)(p >> 8); o[2] = (u8)(p >> 16);
-        }
-    }
+    if (dst && fw == fb->h && fh == fb->w) ge_3ds_rotate_bgr8(fb->px, fb->w, fb->h, dst);
     gfxFlushBuffers();
     gfxSwapBuffers();
     gspWaitForVBlank();
 }
 
-uint64_t ge_plat_time_us(void) { return (uint64_t)osGetTime() * 1000ull; }
+/* The system tick runs at SYSCLOCK_ARM11 (~268 MHz) on every model: fine-grained
+ * enough to time a frame, unlike osGetTime's milliseconds. */
+uint64_t ge_plat_time_us(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000ull); }
 void ge_plat_sleep_us(uint32_t us) { svcSleepThread((s64)us * 1000); }

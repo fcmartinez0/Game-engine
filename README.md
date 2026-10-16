@@ -145,6 +145,8 @@ docker run --rm -v "$PWD":/src -w /src/3ds devkitpro/devkitarm make
 
 To skip the SD card shuffle while iterating, start the launcher, press Y for netloader, then run `3dslink 3ds/gloamwood.3dsx` from the PC (it ships with devkitPro).
 
+**Which 3DS:** the original 3DS / 3DS XL / 2DS (268 MHz) automatically gets `low_detail`, which drops the mist, light shafts, clouds and vignette. A New 3DS / New 3DS XL / New 2DS XL (804 MHz, recognisable by the C-stick nub and ZL/ZR) runs full detail. Press **Select** in-game for a readout of frames per second and milliseconds per frame.
+
 **Status:** the build uses the real devkitARM toolchain and libctru, and compiles with no warnings. It **has not been run on hardware or an emulator yet**, and performance on the console is unmeasured. The renderer is software. The demo turns off its decorative layers on the original 3DS (`low_detail`). If it isn't fast enough, the next step is a GPU path (citro2d).
 
 ## Testing

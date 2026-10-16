@@ -2,6 +2,7 @@
 
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
+#include "../platform/n3ds_blit.h"
 #include "ge/ge_world.h"
 
 #include <stdio.h>
@@ -418,6 +419,26 @@ static void test_armor_grounded_zoom_font(void) {
     ge_sprite_free(&s);
 }
 
+/* The 3DS screen copy is tiled for speed; it must match the plain per-pixel rule exactly. */
+static void test_3ds_rotate(void) {
+    puts("3DS screen rotation");
+    GeImage img = ge_image_create(400, 240);
+    GeRng r;
+    ge_rng_seed(&r, 3);
+    for (int i = 0; i < 400 * 240; i++) img.px[i] = ge_rng_next(&r) | 0xFF000000u;
+    static uint8_t fast[400 * 240 * 3], slow[400 * 240 * 3];
+    memset(fast, 0xAB, sizeof fast);
+    ge_3ds_rotate_bgr8(img.px, 400, 240, fast);
+    for (int x = 0; x < 400; x++)
+        for (int y = 0; y < 240; y++) {
+            uint32_t p = img.px[y * 400 + x];
+            uint8_t *o = slow + ((size_t)x * 240 + (239 - y)) * 3;
+            o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
+        }
+    CHECK(memcmp(fast, slow, sizeof fast) == 0);
+    ge_image_free(&img);
+}
+
 static void test_gfx(void) {
     puts("gfx");
     GeImage a = ge_image_create(4, 2), b = ge_image_create(4, 2);
@@ -656,6 +677,7 @@ int main(void) {
     test_moveset();
     test_contact_shots_meter();
     test_armor_grounded_zoom_font();
+    test_3ds_rotate();
     test_gfx();
     test_tilemap();
     test_physics();
