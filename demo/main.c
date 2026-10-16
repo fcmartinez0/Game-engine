@@ -57,6 +57,8 @@ typedef struct {
     char facts[6][72];
     int nfacts, learn_shown;
     bool fresh_profile, paragon_report, beat_all, hall_named;
+    bool bottom_dirty;                    /* the bottom screen needs redrawing */
+    int tap_flash, bottom_frames;
 
     int boss_spawn, boss_state, boss_timer, boss_combo;
     bool boss_engaged, boss_was_air;
@@ -594,7 +596,7 @@ static void begin_battle(void) {
     ge_fight_init(&g.fight, &g.ch.f_hero, &g.spr.hero, opp, duel_sprite(s->variant), &g.world, 1000 + g.tick);
     g.fight.names[0] = "WREN";
     g.fight.names[1] = s->name;
-    g.fight.world.backdrop_pattern = encounter_pattern(s->name);
+    if (final) g.fight.world.backdrop_pattern = encounter_pattern(s->name);   /* only the Paragon fights inside its pattern */
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
     if (final) {
@@ -779,18 +781,19 @@ static void warp_to(int col) {
     LOG("dev: warped to column %d", col);
 }
 
-static void menu_input(const GeInput *in) {
-    if (in->pressed & (GE_BTN_SELECT | GE_BTN_B)) { g.menu_open = false; return; }
-    if (in->pressed & GE_BTN_UP) g.menu_sel = (g.menu_sel + MI_COUNT - 1) % MI_COUNT;
-    if (in->pressed & GE_BTN_DOWN) g.menu_sel = (g.menu_sel + 1) % MI_COUNT;
-    int dir = (in->pressed & GE_BTN_RIGHT) ? 1 : (in->pressed & GE_BTN_LEFT) ? -1 : 0;
-    bool act = (in->pressed & GE_BTN_A) != 0;
-    switch (g.menu_sel) {
+/* One place that changes a menu item, for the D-pad (menu open, SELECT) and for taps on the bottom screen alike.
+ * dir: -1 / +1 to step a value, act: the A button or a tap on the middle of the row. */
+static void menu_apply(int item, int dir, bool act) {
+    g.bottom_dirty = true;
+    switch (item) {
     case MI_PERF:   if (act || dir) g.show_perf = !g.show_perf; break;
     case MI_DETAIL: if (act || dir) { g.detail_mode = (g.detail_mode + (dir < 0 ? 2 : 1)) % 3; apply_detail(); LOG("dev: detail now %s", g.low_detail ? "low" : "full"); } break;
     case MI_LOG:    if (act || dir) set_logging(!g.log_wanted); break;
     case MI_GOD:    if (act || dir) { g.god = !g.god; LOG("dev: god mode %s", g.god ? "on" : "off"); } break;
-    case MI_DUEL:   if (dir) { g.duel_offset = ge_clampi(g.duel_offset + dir, -1, 1); LOG("dev: duelist strength offset now %d", g.duel_offset); } break;
+    case MI_DUEL:
+        if (act && !dir) dir = g.duel_offset >= 1 ? -2 : 1;                  /* a tap cycles EASY > NORMAL > HARD */
+        if (dir) { g.duel_offset = ge_clampi(g.duel_offset + dir, -1, 1); LOG("dev: duelist strength offset now %d", g.duel_offset); }
+        break;
     case MI_RESET:
         if (act) { ge_model_init(&g.model); paragon_profile_save(&g.model); LOG("dev: the Paragon's memory was wiped"); say("PARAGON MEMORY WIPED", 90); g.menu_open = false; }
         break;
@@ -801,45 +804,103 @@ static void menu_input(const GeInput *in) {
     case MI_MARK:
         if (act) { LOG("--- marked by the player (something worth looking at happened here) ---"); devlog_flush(); say("LOG MARKED", 60); g.menu_open = false; }
         break;
-    case MI_CLOSE:  if (act) g.menu_open = false; break;
+    case MI_CLOSE:  if (act || dir) g.menu_open = !g.menu_open; break;
     }
 }
 
-static void draw_menu(GeImage *fb) {
+static void menu_input(const GeInput *in) {
+    if (in->pressed & (GE_BTN_SELECT | GE_BTN_B)) { g.menu_open = false; g.bottom_dirty = true; return; }
+    if (in->pressed & GE_BTN_UP) { g.menu_sel = (g.menu_sel + MI_COUNT - 1) % MI_COUNT; g.bottom_dirty = true; }
+    if (in->pressed & GE_BTN_DOWN) { g.menu_sel = (g.menu_sel + 1) % MI_COUNT; g.bottom_dirty = true; }
+    int dir = (in->pressed & GE_BTN_RIGHT) ? 1 : (in->pressed & GE_BTN_LEFT) ? -1 : 0;
+    bool act = (in->pressed & GE_BTN_A) != 0;
+    if (dir || act) menu_apply(g.menu_sel, dir, act);
+}
+
+/* ---- the bottom screen: the dev menu lives here --------------------------
+ * On a 3DS this is the touch screen; on a PC it is the panel under the game,
+ * and the mouse taps it. It is always showing and always tappable; SELECT also
+ * pauses the game and lets the D-pad drive it. */
+
+#define BM_ROW_Y 28
+#define BM_ROW_H 16
+#define BM_ARROW_W 30
+
+static bool item_steps(int i) { return i == MI_DETAIL || i == MI_DUEL || i == MI_WARP; }
+
+static void bottom_touch(const GeInput *in) {
+    if (!in->touch_pressed) return;
+    int row = (in->touch_y - BM_ROW_Y) / BM_ROW_H;
+    if (in->touch_y < BM_ROW_Y || row < 0 || row >= MI_COUNT) return;
+    int dir = 0;
+    if (item_steps(row) && in->touch_x < BM_ARROW_W) dir = -1;
+    else if (item_steps(row) && in->touch_x >= GE_BOTTOM_W - BM_ARROW_W) dir = 1;
+    g.menu_sel = row;
+    g.tap_flash = 8;
+    menu_apply(row, dir, dir == 0);
+}
+
+static bool draw_bottom(void *user, GeImage *fb) {
+    (void)user;
+    if (g.tap_flash > 0 && --g.tap_flash == 0) g.bottom_dirty = true;
+    /* only send it when something changed, plus a refresh twice a second for the live numbers */
+    if (!g.bottom_dirty && (g.bottom_frames++ % 30) != 0) return false;
+    g.bottom_dirty = false;
     char buf[96];
-    const uint32_t ink = GE_RGB(20, 14, 30);
-    ge_fill_rect(fb, 60, 22, 280, 206, GE_ARGB(225, 16, 10, 30), 0);
-    ge_fill_rect(fb, 60, 22, 280, 1, GE_RGB(190, 120, 255), 0);
-    ge_text_outlined(fb, 72, 30, "DEV MENU", GE_RGB(220, 190, 255), ink, 2);
-    ge_text(fb, 196, 36, "PAUSED - SELECT CLOSES", GE_RGB(150, 140, 180), 1);
+    const uint32_t ink = GE_RGB(20, 14, 30), dim = GE_RGB(150, 140, 180), hi = GE_RGB(255, 236, 160);
+    ge_clear(fb, GE_RGB(16, 10, 30));
+    ge_fill_rect(fb, 0, 0, fb->w, 22, GE_RGB(34, 22, 58), 0);
+    ge_fill_rect(fb, 0, 22, fb->w, 1, GE_RGB(190, 120, 255), 0);
+    ge_text_outlined(fb, 6, 4, "DEV MENU", GE_RGB(220, 190, 255), ink, 2);
+    const char *state = g.menu_open ? "PAUSED (SELECT)" : "TAP A ROW";
+    ge_text(fb, fb->w - 6 - ge_text_width(state, 1), 9, state, g.menu_open ? hi : dim, 1);
+
     const char *detail = g.detail_mode == 0 ? (g.auto_low ? "AUTO (LOW)" : "AUTO (FULL)") : g.detail_mode == 1 ? "LOW" : "FULL";
     const char *val[MI_COUNT] = { g.show_perf ? "ON" : "OFF", detail, devlog_is_open() ? "ON" : (g.log_wanted ? "NO SD?" : "OFF"),
-                                  g.god ? "ON" : "OFF", g.duel_offset < 0 ? "EASY" : g.duel_offset > 0 ? "HARD" : "NORMAL", WARPS[g.warp_sel].name, "A", "A", "A" };
-    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DUEL LEVEL  < >", "WARP  < >", "MARK THIS MOMENT", "WIPE PARAGON MEMORY", "BACK TO GAME" };
+                                  g.god ? "ON" : "OFF", g.duel_offset < 0 ? "EASY" : g.duel_offset > 0 ? "HARD" : "NORMAL",
+                                  WARPS[g.warp_sel].name, "TAP", "TAP", g.menu_open ? "RESUME" : "PAUSE" };
+    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DUEL LEVEL", "WARP (TAP TO GO)", "MARK THIS MOMENT",
+                                    "WIPE PARAGON MEMORY", "GAME" };
     for (int i = 0; i < MI_COUNT; i++) {
-        int y = 52 + i * 13;
-        uint32_t c = i == g.menu_sel ? GE_RGB(255, 236, 160) : GE_RGB(210, 205, 230);
-        if (i == g.menu_sel) ge_text(fb, 70, y, ">", c, 1);
-        ge_text(fb, 80, y, label[i], c, 1);
-        ge_text(fb, 330 - ge_text_width(val[i], 1), y, val[i], c, 1);
+        int y = BM_ROW_Y + i * BM_ROW_H;
+        bool sel = i == g.menu_sel && (g.menu_open || g.tap_flash > 0);
+        ge_fill_rect(fb, 2, y, fb->w - 4, BM_ROW_H - 2, sel ? GE_RGB(70, 46, 110) : (i & 1) ? GE_RGB(24, 16, 42) : GE_RGB(30, 20, 50), 0);
+        uint32_t c = sel ? hi : GE_RGB(220, 214, 236);
+        int tx = 10;
+        if (item_steps(i)) {
+            ge_fill_rect(fb, 2, y, BM_ARROW_W - 4, BM_ROW_H - 2, GE_RGB(46, 32, 76), 0);
+            ge_fill_rect(fb, fb->w - BM_ARROW_W + 2, y, BM_ARROW_W - 4, BM_ROW_H - 2, GE_RGB(46, 32, 76), 0);
+            ge_text(fb, 12, y + 4, "<", c, 1);
+            ge_text(fb, fb->w - 18, y + 4, ">", c, 1);
+            tx = BM_ARROW_W + 4;
+        }
+        ge_text(fb, tx, y + 4, label[i], c, 1);
+        int vx = (item_steps(i) ? fb->w - BM_ARROW_W - 4 : fb->w - 10) - ge_text_width(val[i], 1);
+        ge_text(fb, vx, y + 4, val[i], i == MI_GOD && g.god ? GE_RGB(255, 140, 120) : c, 1);
     }
+    int y = BM_ROW_Y + MI_COUNT * BM_ROW_H + 4;
     uint64_t secs = (g.now_us - g.start_us) / 1000000u;
     snprintf(buf, sizeof buf, "PLAY TIME %s   %s", devlog_hms(secs), g.console);
-    ge_text(fb, 72, 176, buf, GE_RGB(160, 230, 170), 1);
-    snprintf(buf, sizeof buf, "LOG: %s", devlog_is_open() ? devlog_path() : "OFF");
-    ge_text(fb, 72, 188, buf, GE_RGB(150, 140, 180), 1);
-    snprintf(buf, sizeof buf, "AVG %.0f FPS SO FAR, %d%% FRAMES BELOW 60", g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0,
+    ge_text(fb, 6, y, buf, GE_RGB(160, 230, 170), 1);
+    snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%dMS  DRAW %d.%dMS", (int)(g.fps + 0.5f), (int)g.update_ms, (int)(g.update_ms * 10) % 10,
+             (int)g.draw_ms, (int)(g.draw_ms * 10) % 10);
+    ge_text(fb, 6, y + 11, buf, GE_RGB(120, 255, 140), 1);
+    snprintf(buf, sizeof buf, "AVG %.0f FPS, %d%% OF FRAMES BELOW 60", g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0,
              g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
-    ge_text(fb, 72, 200, buf, GE_RGB(150, 140, 180), 1);
+    ge_text(fb, 6, y + 22, buf, dim, 1);
+    snprintf(buf, sizeof buf, "LOG %s", devlog_is_open() ? devlog_path() : "OFF");
+    ge_text(fb, 6, y + 33, buf, dim, 1);
     snprintf(buf, sizeof buf, "PARAGON KNOWS %d%% OF YOU (%u DUELS)", (int)(ge_model_confidence(&g.model) * 100.0f), (unsigned)g.model.duels);
-    ge_text(fb, 72, 212, buf, GE_RGB(255, 214, 120), 1);
+    ge_text(fb, 6, y + 44, buf, GE_RGB(255, 214, 120), 1);
+    return true;
 }
 
 static void demo_update(void *user, const GeInput *in) {
     (void)user;
     uint64_t t0 = ge_plat_time_us();
+    bottom_touch(in);                                      /* the bottom screen works paused or not */
     if (g.menu_open) menu_input(in);                       /* the game is paused underneath */
-    else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; }
+    else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; g.bottom_dirty = true; }
     else {
         demo_update_inner(in);
         if (g.mode == M_BATTLE) g.ticks_duel++; else g.ticks_world++;
@@ -1024,7 +1085,11 @@ static void demo_draw(void *user, GeImage *fb) {
     if (dt_ms > 0) g.fps += (1000.0f / (float)dt_ms - g.fps) * 0.1f;
     g.last_draw_us = t0;
     demo_draw_inner(fb);
-    if (g.menu_open) draw_menu(fb);
+    if (g.menu_open) {
+        const char *m = "PAUSED - DEV MENU ON THE BOTTOM SCREEN";
+        ge_fill_rect(fb, 0, 0, fb->w, 13, GE_ARGB(210, 16, 10, 30), 0);
+        ge_text(fb, (fb->w - ge_text_width(m, 1)) / 2, 3, m, GE_RGB(255, 236, 160), 1);
+    }
     double draw = (double)(ge_plat_time_us() - t0) / 1000.0;
     g.draw_ms += ((float)draw - g.draw_ms) * 0.1f;
 
@@ -1069,8 +1134,10 @@ static void demo_draw(void *user, GeImage *fb) {
 static void demo_draw_inner(GeImage *fb) {
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
-        if (g.mode == M_BATTLE && g.mode_timer < 24)     /* the fighters step out of the pattern */
-            ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB((24 - g.mode_timer) * 10, 255, 255, 255), 0);
+        if (g.mode == M_BATTLE && g.mode_timer < 24) {   /* the pattern breaks up and the duel shows through */
+            if (paragon_duel()) ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB((24 - g.mode_timer) * 10, 255, 255, 255), 0);
+            else encounter_draw_reveal(fb, encounter_pattern(level_spawns[g.duel].name), g.mode_timer, g.tick);
+        }
         if (g.mode == M_BATTLE) {
             const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B THRUST  L BLOCK  R DASH  A+B SUPER";
             if (g.fight.phase == GE_FP_INTRO) ge_text_outlined(fb, (SCREEN_W - ge_text_width(hint, 1)) / 2, 200, hint, GE_RGB(220, 210, 240), GE_RGB(20, 14, 30), 1);
@@ -1134,6 +1201,23 @@ static uint32_t tap_script(void *user, int frame) {
     for (int i = 0; i < g_ntaps; i++) if (g_taps[i].frame == frame) b |= g_taps[i].btn;
     return b;
 }
+/* --touch 160,100@300: a scripted tap on the bottom screen */
+static struct { int x, y, frame; } g_touches[16];
+static int g_ntouches;
+static int touch_script(void *user, int frame, int *x, int *y) {
+    (void)user;
+    for (int i = 0; i < g_ntouches; i++)
+        if (g_touches[i].frame == frame) { *x = g_touches[i].x; *y = g_touches[i].y; return 1; }
+    return 0;
+}
+static void parse_touches(const char *s) {
+    int x, y, frame, used;
+    while (g_ntouches < 16 && sscanf(s, "%d,%d@%d%n", &x, &y, &frame, &used) == 3) {
+        g_touches[g_ntouches].x = x; g_touches[g_ntouches].y = y; g_touches[g_ntouches++].frame = frame;
+        s += used;
+        if (*s == ';' || *s == ' ') s++;
+    }
+}
 static void parse_taps(const char *s) {
     static const struct { const char *n; uint32_t b; } names[] = {
         { "LEFT", GE_BTN_LEFT }, { "RIGHT", GE_BTN_RIGHT }, { "UP", GE_BTN_UP }, { "DOWN", GE_BTN_DOWN }, { "A", GE_BTN_A }, { "B", GE_BTN_B },
@@ -1160,6 +1244,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--log")) g.log_wanted = true; /* write gloamwood_log.txt */
 #ifdef DEMO_HEADLESS
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_taps(argv[++i]);
+        else if (!strcmp(argv[i], "--touch") && i + 1 < argc) parse_touches(argv[++i]);
 #endif
         else if (!strcmp(argv[i], "--beat-all")) g.beat_all = true;                               /* dev: Paragon starts with every technique */
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
@@ -1185,10 +1270,12 @@ int main(int argc, char **argv) {
     g.auto_low = g.low_detail;
 #ifdef DEMO_HEADLESS
     ge_null_configure(frames, dump_every, dump_dir, g_ntaps ? tap_script : NULL, NULL);
+    if (g_ntouches) ge_null_set_touch(touch_script);
 #else
     (void)frames; (void)dump_every; (void)dump_dir;
 #endif
-    GeGame game = { &g, demo_init, demo_update, demo_draw, demo_shutdown };
-    GePlatformConfig cfg = { "Gloamwood", SCREEN_W, SCREEN_H, 3 };
+    GeGame game = { .user = &g, .init = demo_init, .update = demo_update, .draw = demo_draw, .shutdown = demo_shutdown,
+                    .draw_bottom = draw_bottom };
+    GePlatformConfig cfg = { .title = "Gloamwood", .width = SCREEN_W, .height = SCREEN_H, .scale = 3 };
     return ge_run(&game, &cfg);
 }

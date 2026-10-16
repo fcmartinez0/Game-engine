@@ -769,8 +769,8 @@ static void loop_draw(void *u, GeImage *fb) { (void)u; (void)fb; g_draws++; }
 static void test_loop(void) {
     puts("engine loop");
     ge_null_configure(120, 0, NULL, NULL, NULL);
-    GeGame game = { NULL, loop_init, loop_update, loop_draw, NULL };
-    GePlatformConfig cfg = { "t", 400, 240, 1 };
+    GeGame game = { .user = NULL, .init = loop_init, .update = loop_update, .draw = loop_draw };
+    GePlatformConfig cfg = { .title = "t", .width = 400, .height = 240, .scale = 1 };
     CHECK(ge_run(&game, &cfg) == 0);
     CHECK(g_draws == 120);
     CHECK(g_updates == 120);                       /* exactly one 1/60 s step per presented frame */

@@ -1,6 +1,7 @@
 #ifndef GE_INPUT_H
 #define GE_INPUT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Physical buttons, named by *position* in the Nintendo layout (A right,
@@ -26,6 +27,8 @@ typedef struct {
     uint32_t down;     /* held this tick */
     uint32_t pressed;  /* went down this tick */
     uint32_t released;
+    bool touch, touch_pressed;   /* stylus (or mouse) on the bottom screen: held / went down this tick */
+    int touch_x, touch_y;        /* bottom-screen pixels, 0..319 x 0..239 */
 } GeInput;
 
 static inline void ge_input_update(GeInput *in, uint32_t now) {

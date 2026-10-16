@@ -49,7 +49,7 @@ static void build(void) {
         const PatDef *d = &DEFS[i];
         GePattern *p = &g_pats[i];
         uint32_t pal[12];
-        float dim = i == NDEFS - 1 ? 1.0f : 0.72f;    /* calm the duelists' colours so the fighters stay readable on top */
+        float dim = 1.0f;   /* lower it to calm a pattern that sits behind fighters */
         for (int k = 0; k < d->npal; k++) {
             uint32_t c = d->pal[k];
             pal[k] = GE_RGB((int)((float)((c >> 16) & 255) * dim), (int)((float)((c >> 8) & 255) * dim), (int)((float)(c & 255) * dim));
@@ -77,6 +77,8 @@ void encounter_free(void) {
     g_built = false;
 }
 
+static void diamonds(GeImage *fb, float front, bool reverse, int cx, int cy);
+
 /* t = ticks since the transition began (0..54). cx, cy: the duelist on screen, where the wipe opens. */
 void encounter_draw_transition(GeImage *fb, GePattern *p, int t, int cx, int cy, uint32_t tick) {
     if (!g_built) build();
@@ -85,15 +87,30 @@ void encounter_draw_transition(GeImage *fb, GePattern *p, int t, int cx, int cy,
         return;
     }
     ge_pattern_draw(p, &g_off, (int)tick);
+    diamonds(fb, (float)(t - 18) / 30.0f, false, cx, cy);
+}
+
+/* The other half: at the start of the duel the pattern breaks up again, from the middle out, uncovering the
+ * fight. t = 0..23. */
+void encounter_draw_reveal(GeImage *fb, GePattern *p, int t, uint32_t tick) {
+    if (!g_built) build();
+    ge_pattern_draw(p, &g_off, (int)tick);
+    diamonds(fb, (float)t / 22.0f, true, fb->w / 2, fb->h / 2);
+}
+
+/* progress 0..1. Forward: diamonds grow out from (cx, cy) until the pattern covers everything.
+ * Reverse: the pattern starts whole and the diamonds shrink away, nearest (cx, cy) first. */
+static void diamonds(GeImage *fb, float progress, bool reverse, int cx, int cy) {
     const int B = 20;
     int bx0 = cx / B, by0 = cy / B, cols = fb->w / B + 1, rows = fb->h / B + 1;
     int maxd = 0;
     for (int by = 0; by < rows; by++)
         for (int bx = 0; bx < cols; bx++) { int d = abs(bx - bx0) + abs(by - by0); if (d > maxd) maxd = d; }
-    float front = (float)(t - 18) / 30.0f * (float)(maxd + 3);   /* the wave of diamonds sweeps out */
+    float front = progress * (float)(maxd + 3);   /* the wave of diamonds sweeps out */
     for (int by = 0; by < rows; by++)
         for (int bx = 0; bx < cols; bx++) {
-            float r = (front - (float)(abs(bx - bx0) + abs(by - by0))) / 2.0f;
+            float d = (float)(abs(bx - bx0) + abs(by - by0));
+            float r = reverse ? (d + 2.0f - front) / 2.0f : (front - d) / 2.0f;
             if (r <= 0.0f) continue;
             int half = r >= 1.0f ? B : (int)(r * (float)B);
             int mx = bx * B + B / 2, my = by * B + B / 2;

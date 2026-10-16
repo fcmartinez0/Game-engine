@@ -29,7 +29,10 @@ CONTROLS - duels (when a duelist spots you)
   forward, down, down-forward + attack      rising anti-air
   down, down-back, back + X or A            rush
 
-DEV MENU - press SELECT any time (the game pauses)
+DEV MENU - always on the BOTTOM (touch) screen
+  Tap a row to use it; tap the < > ends of DETAIL, DUEL LEVEL and WARP to
+  change them (tap the middle of WARP to go). It works while you play.
+  SELECT also pauses the game and lets the D-pad + A drive the menu.
   SPEED READOUT    frames per second and milliseconds per frame, at the bottom
   DETAIL           AUTO / LOW / FULL background effects
   PLAY LOG         on by default

@@ -14,6 +14,9 @@ typedef struct {
     void (*update)(void *user, const GeInput *in);       /* fixed 60 Hz */
     void (*draw)(void *user, GeImage *fb);
     void (*shutdown)(void *user);
+    /* optional: draw the bottom screen (GE_BOTTOM_W x GE_BOTTOM_H). Return true when it changed; it is only
+     * sent to the screen then, so a mostly still panel costs nothing on frames it doesn't change. */
+    bool (*draw_bottom)(void *user, GeImage *fb);
 } GeGame;
 
 /* Fixed-timestep loop: game logic always advances in 1/60 s steps (so physics

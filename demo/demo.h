@@ -76,6 +76,7 @@ void paragon_draw_report(GeImage *fb, const char facts[][72], int nfacts, const 
 /* ---- encounters (encounter.c): each duelist's EarthBound-style pattern ---- */
 GePattern *encounter_pattern(const char *duelist_name);   /* a default one for unknown names */
 void encounter_draw_transition(GeImage *fb, GePattern *p, int t, int cx, int cy, uint32_t tick);
+void encounter_draw_reveal(GeImage *fb, GePattern *p, int t, uint32_t tick);
 void encounter_free(void);
 
 /* ---- level (level.c) ---------------------------------------------------- */

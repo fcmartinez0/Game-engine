@@ -101,7 +101,7 @@ Past Thornwarden's far door: a long, low, symmetrical stone hall, the only indoo
 
 ## 6d. Encounter patterns (all duels)
 
-Every duel opens with an EarthBound-style pattern of the duelist's own: three white flashes, then their pattern floods the screen in a wave of diamonds starting from where they stand (the Pokemon wipe), and it stays as the duel's background. The engine side is `ge_pattern`: a 64x64 picture of palette indices, shown with palette cycling, a per-row sideways ripple (optionally alternating rows, the classic EarthBound shimmer), a vertical ripple and a scroll. Each row is a straight copy from a cached tile, so it costs about the same as one opaque background layer on the 3DS.
+Every duel opens with an EarthBound-style pattern of the duelist's own: three white flashes, then their pattern floods the screen in a wave of diamonds starting from where they stand (the Pokemon wipe), then breaks up from the middle to show the duel, which keeps the forest backdrop. The Paragon is the exception: its duel takes place inside its pattern, the field of eyes. The engine side is `ge_pattern`: a 64x64 picture of palette indices, shown with palette cycling, a per-row sideways ripple (optionally alternating rows, the classic EarthBound shimmer), a vertical ripple and a scroll. Each row is a straight copy from a cached tile, so it costs about the same as one opaque background layer on the 3DS.
 
 | Duelist | Pattern |
 |---|---|
