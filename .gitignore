@@ -5,3 +5,8 @@ screenshot.png
 ge_test_out.png
 dist/
 build-*/
+# files the game writes when run from the source folder
+gloamwood_profile.txt
+gloamwood_settings.txt
+gloamwood_log*.txt
+mods/

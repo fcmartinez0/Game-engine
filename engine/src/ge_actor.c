@@ -436,7 +436,8 @@ void ge_shots_update(GeWorld *w) {
         int t = ge_tilemap_get(&w->map, (int)floorf(s->pos.x / GE_TILE), (int)floorf(s->pos.y / GE_TILE));
         if (s->def->solid_stops && t == GE_TILE_SOLID) {
             int tx = (int)floorf(s->pos.x / GE_TILE), ty = (int)floorf(s->pos.y / GE_TILE);
-            ge_world_event(w, GE_EV_SHOT_TILE, s->owner, ty * w->map.w + tx);   /* games may care what it hit (a crack, a crate) */
+            bool inside = tx >= 0 && ty >= 0 && tx < w->map.w && ty < w->map.h;   /* (off the edge counts as solid) */
+            ge_world_event(w, GE_EV_SHOT_TILE, s->owner, inside ? ty * w->map.w + tx : -1);   /* games may care what it hit */
             kill_shot(w, s);
             continue;
         }

@@ -37,6 +37,11 @@ typedef struct {
 
     World wd;                     /* every room, as data (the built-in world or mods/world.txt) */
     char world_problem[96];       /* why mods/world.txt wasn't used, if it wasn't */
+    bool world_broken;            /* it failed to load: never save over it */
+    bool to_paragon;              /* --paragon: start in the hall */
+    const char *start_room;       /* --room */
+    const char *export_world;     /* --export-world */
+    const char *world_file;       /* --world: play this file instead of mods/world.txt */
     Puzzle pz;                    /* the room's levers, gates, crates... while it is played */
     RoomProgress progress[WORLD_MAX_ROOMS];   /* what the session remembers about each room */
     int keys;                     /* carried */
@@ -192,20 +197,43 @@ static const char *world_path(void) {
     return p;
 }
 
-/* The world to play: mods/world.txt if there is one (the editor saves there), else the built-in one. */
+/* The world to play: the built-in one, with each room in mods/world.txt (the editor saves there) laid over
+ * it: a room of the same name is replaced, a new one is added. So later fixes to the built-in rooms still
+ * reach you, and the file only holds what you made or changed. */
 static void load_world(void) {
-    char err[120];
-    if (!g.no_mods) {
-        FILE *f = fopen(world_path(), "r");
-        if (f) {
-            fclose(f);
-            int rc = world_load(&g.wd, world_path(), err, sizeof err);
-            if (rc == 0) { LOG("world: %d rooms from %s", g.wd.nrooms, world_path()); return; }
-            LOG("world: %s line %d: %s (playing the built-in world)", world_path(), rc, err);
-            snprintf(g.world_problem, sizeof g.world_problem, "WORLD.TXT LINE %d: %.70s", rc, err);
-        }
-    }
     world_builtin(&g.wd);
+    const char *path = g.world_file ? g.world_file : world_path();
+    if (g.no_mods && !g.world_file) return;
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    fclose(f);
+    static World file;                     /* (far too big for the 3DS's stack) */
+    char err[120];
+    int rc = world_load(&file, path, err, sizeof err);
+    if (rc) {
+        LOG("world: %s line %d: %s (playing the built-in world)", path, rc, err);
+        snprintf(g.world_problem, sizeof g.world_problem, "WORLD.TXT LINE %d: %.70s", rc, err);
+        g.world_broken = true;             /* the editor won't save over it */
+        return;
+    }
+    int replaced = 0, added = 0;
+    for (int i = 0; i < file.nrooms; i++) {
+        Room *src = &file.rooms[i];
+        int at = world_find_room(&g.wd, src->name);
+        if (at < 0) {
+            if (g.wd.nrooms >= WORLD_MAX_ROOMS) continue;
+            at = g.wd.nrooms++;
+            added++;
+        } else {
+            free(g.wd.rooms[at].tiles);
+            replaced++;
+        }
+        g.wd.rooms[at] = *src;             /* takes over its tiles */
+        g.wd.rooms[at].custom = true;
+        src->tiles = NULL;
+    }
+    file.nrooms = 0;
+    LOG("world: %s: %d rooms replaced, %d added", path, replaced, added);
 }
 
 static const char *room_title(void) {
@@ -233,8 +261,8 @@ static void room_build(int r) {
 /* ---- spawning ---------------------------------------------------------- */
 
 static float ground_at(float x, float y) {
-    const Thing *h = find_thing(TH_HALL);
-    if (h && x >= h->col * GE_TILE) y = (float)(h->row - h->h + 2) * GE_TILE;   /* the hall has a ceiling: look for the floor below it */
+    const Thing *h = find_thing(TH_HALL);    /* the hall has a ceiling: from above it, look for the floor under it */
+    if (h && x >= h->col * GE_TILE && x < (h->col + h->w + 2) * GE_TILE && y < (h->row - h->h + 1) * GE_TILE) y = (float)(h->row - h->h + 2) * GE_TILE;
     float gy = ge_world_ground_y(&g.world, x, y);
     return gy < 0 ? (float)((room()->h - 3) * GE_TILE) : gy;
 }
@@ -313,8 +341,8 @@ static void arena_door(int col, bool closed) {
             m->vis[y * m->w + col] = TV_STONE;
         }
 }
-static void arena_set_gate(bool closed) { const Thing *a = find_thing(TH_ARENA); if (a) arena_door(a->a, closed); }
-static void arena_set_exit(bool closed) { const Thing *a = find_thing(TH_ARENA); if (a) arena_door(a->b, closed); }
+static void arena_set_gate(bool closed) { const Thing *a = find_thing(TH_ARENA); if (a) arena_door(arena_gate_col(a), closed); }
+static void arena_set_exit(bool closed) { const Thing *a = find_thing(TH_ARENA); if (a) arena_door(arena_exit_col(a), closed); }
 static bool boss_beaten(void) { return g.boss_spawn >= 0 && BEATEN(g.boss_spawn); }
 static bool boss_beaten_anywhere(void) {
     for (int r = 0; r < g.wd.nrooms; r++)
@@ -383,6 +411,7 @@ static void room_enter(int r, const char *door) {
     w->cam.x = x - SCREEN_W * 0.5f;
     w->cam.y = y - SCREEN_H * 0.65f;
     puzzle_enter(&g.pz, room(), &g.progress[r], w, g.player, &g.keys);
+    g.duel_cd = 90;                        /* a moment to look around before anyone challenges you */
     int relics = count_relics(r, false);
     char buf[64];
     if (relics) snprintf(buf, sizeof buf, "%s   RELICS %d/%d", room_title(), count_relics(r, true), relics);
@@ -683,6 +712,9 @@ static void hero_intent(const GeInput *in) {
             g.bench_row = t->row;
             g.bench_room = g.room;
             say("RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
+            for (int r = 0; r < g.wd.nrooms; r++)          /* every room's creatures, the way Hollow Knight does it */
+                for (int k = 0; k < g.wd.rooms[r].nthings; k++)
+                    if (ordinary_enemy(thing_entity_kind(g.wd.rooms[r].things[k].kind))) g.beaten[r][k] = false;
             respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
             calm_flush();
@@ -865,6 +897,11 @@ static void begin_battle(void) {
     g.fight.names[0] = "WREN";
     g.fight.names[1] = s->name;
     if (final) g.fight.world.backdrop_pattern = encounter_pattern(s->name);   /* only the Paragon fights inside its pattern */
+    if (!final && room()->backdrop == BD_CAVE) {     /* a cave's duels stand on stone, not grass */
+        GeTilemap *am = &g.fight.world.map;
+        for (int i = 0; i < am->w * am->h; i++)
+            if (am->type[i] == GE_TILE_SOLID) am->vis[i] = (i >= am->w && am->type[i - am->w] == GE_TILE_SOLID) ? TV_STONE : TV_STONE_TOP;
+    }
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
     if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); }
@@ -1068,6 +1105,7 @@ static int demo_init(void *user) {
         g.nbackdrop[bd] = scratch.nlayers;
     }
     load_world();
+    if (g.to_paragon) { int h = room_find(&g.wd.rooms[0], TH_HALL, 0); g.warp_col = h >= 0 ? g.wd.rooms[0].things[h].col + 10 : 1; }
     room_build(0);
     set_backdrop(room()->backdrop);
     if (g.beat_all)                                   /* dev: pretend every duelist and the boss are already beaten */
@@ -1083,6 +1121,11 @@ static int demo_init(void *user) {
     spawn_hero((g.warp_col > 0 ? g.warp_col : start ? start->col : 1) * GE_TILE + 8.0f);
     puzzle_enter(&g.pz, room(), &g.progress[0], w, g.player, &g.keys);
     if (!hall || g.warp_col < hall->col) say(room_title(), 120);
+    if (g.start_room) {
+        int r = world_find_room(&g.wd, g.start_room);
+        if (r < 0) { fprintf(stderr, "no room called %s\n", g.start_room); return 1; }
+        if (r != 0) room_enter(r, NULL);
+    }
     return 0;
 }
 
@@ -1107,11 +1150,14 @@ static void build_warps(void) {
         case TH_ARENA:   snprintf(wp->name, sizeof wp->name, "BOSS ARENA"); wp->col = t->col - 4; break;
         case TH_HALL:    snprintf(wp->name, sizeof wp->name, "THE HALL"); wp->col = t->col + 5; break;
         case TH_DOOR:    snprintf(wp->name, sizeof wp->name, "DOOR %s", t->name); wp->col = t->col; break;
+        case TH_MARK:    snprintf(wp->name, sizeof wp->name, "%s", t->name); wp->col = t->col; break;
         default: continue;
         }
         if (wp->col < 1) wp->col = 1;
         g_nwarps++;
     }
+    for (int i = 1; i < g_nwarps; i++)                 /* left to right */
+        for (int j = i; j > 0 && g_warps[j].col < g_warps[j - 1].col; j--) { Warp t = g_warps[j]; g_warps[j] = g_warps[j - 1]; g_warps[j - 1] = t; }
     if (g_nwarps == 0) { snprintf(g_warps[0].name, sizeof g_warps[0].name, "LEFT EDGE"); g_warps[0].col = 1; g_nwarps = 1; }
     if (g.warp_sel >= g_nwarps) g.warp_sel = 0;
 }
@@ -1516,10 +1562,13 @@ static void demo_update_inner(const GeInput *in) {
             else enemy_ai(i);
         }
         const Thing *hall = find_thing(TH_HALL);
-        bool in_hall = hall && p->pos.x >= (hall->col - 2) * GE_TILE;
-        w->foreground_off = hall && p->pos.x >= (hall->col - 12) * GE_TILE;   /* indoors: no forest grass in front */
-        /* inside the hall its walls, ceiling and floor cover the whole view: don't paint the forest behind them */
-        int open_x = hall ? hall->col * GE_TILE - (int)w->cam.x : SCREEN_W;   /* screen column where the hall's solid art begins */
+        bool near_hall = hall && p->pos.x < (hall->col + hall->w + 2) * GE_TILE && fabsf(p->pos.y - thing_feet(hall)) < 6 * GE_TILE;
+        bool in_hall = near_hall && p->pos.x >= (hall->col - 2) * GE_TILE;
+        w->foreground_off = near_hall && p->pos.x >= (hall->col - 12) * GE_TILE;   /* indoors: no forest grass in front */
+        /* inside the hall its walls, ceiling and floor cover the whole view: don't paint the forest behind them. (The
+         * hall runs to the room's right edge and fills the screen's height there; elsewhere this is off.) */
+        bool hall_fills = hall && hall->col + hall->w + 2 >= room()->w && room()->h <= ROOM_MIN_H;
+        int open_x = hall_fills ? hall->col * GE_TILE - (int)w->cam.x : SCREEN_W;   /* screen column where the hall's solid art begins */
         w->background_off = open_x <= 0;
         w->background_clip_x = open_x > 0 && open_x < SCREEN_W ? open_x : 0;
         if (in_hall && !g.hall_named) { g.hall_named = true; say("THE STILL HALL", 150); }
@@ -1894,7 +1943,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-hints")) g.no_hints = true;                                /* benchmarks: skip the opening controls text */
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc) paragon_set_profile_path(argv[++i]);
-        else if (!strcmp(argv[i], "--paragon")) g.warp_col = 188;                                 /* straight to its hall */
+        else if (!strcmp(argv[i], "--paragon")) g.to_paragon = true;                              /* straight to its hall */
+        else if (!strcmp(argv[i], "--world") && i + 1 < argc) g.world_file = argv[++i];           /* play this world file */
+        else if (!strcmp(argv[i], "--room") && i + 1 < argc) g.start_room = argv[++i];            /* start in this room */
+        else if (!strcmp(argv[i], "--export-world") && i + 1 < argc) g.export_world = argv[++i];  /* write the world out and stop */
         else if (!strcmp(argv[i], "--layers") && i + 1 < argc) g.layers_path = argv[++i];
         else if (!strcmp(argv[i], "--warp") && i + 1 < argc) g.warp_col = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
@@ -1919,6 +1971,12 @@ int main(int argc, char **argv) {
 #else
     (void)frames; (void)dump_every; (void)dump_dir;
 #endif
+    if (g.export_world) {                  /* the whole world as it would be played, as a file; no game */
+        load_world();
+        int rc = world_save(&g.wd, g.export_world, false);
+        fprintf(stderr, rc == 0 ? "world written to %s\n" : "can't write %s\n", g.export_world);
+        return rc == 0 ? 0 : 1;
+    }
     GeGame game = { .user = &g, .init = demo_init, .update = demo_update, .draw = demo_draw, .shutdown = demo_shutdown,
                     .draw_bottom = draw_bottom };
     GePlatformConfig cfg = { .title = "Gloamwood", .width = SCREEN_W, .height = SCREEN_H, .scale = 3 };

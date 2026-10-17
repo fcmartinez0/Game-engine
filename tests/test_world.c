@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#define GLOAMWOOD_TILEMAP_HASH 0xc53e6169u   /* the old level.c's, cell for cell */
 static int checks, failures;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; printf("  FAILED %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
@@ -25,14 +26,14 @@ static void test_round_trip(void) {
     static World a, b;
     world_builtin(&a);
     CHECK(a.nrooms >= 1 && !strcmp(a.rooms[0].name, "gloamwood") && a.rooms[0].w == 214 && a.rooms[0].h == 15);
-    CHECK(world_save(&a, tmp_path("rt")) == 0);
+    CHECK(world_save(&a, tmp_path("rt"), false) == 0);
     char err[128] = "";
     int rc = world_load(&b, tmp_path("rt"), err, sizeof err);
     if (rc) printf("  load failed at line %d: %s\n", rc, err);
     CHECK(rc == 0);
     CHECK(world_equal(&a, &b));
     /* and again: what it saves is what it read */
-    CHECK(world_save(&b, tmp_path("rt2")) == 0);
+    CHECK(world_save(&b, tmp_path("rt2"), false) == 0);
     FILE *f1 = fopen(tmp_path("rt"), "r"), *f2 = fopen(tmp_path("rt2"), "r");
     bool same = f1 && f2;
     for (int c1 = 0, c2 = 0; same && c1 != EOF; ) { c1 = fgetc(f1); c2 = fgetc(f2); same = c1 == c2; }
@@ -52,18 +53,75 @@ static void test_round_trip(void) {
     room_add_thing(r, lv);
     Thing rl = thing_default(TH_RELIC, 12, 10);
     rl.gives = GIVE_NEEDLE; snprintf(rl.name, sizeof rl.name, "SHARP THING");
-    room_add_thing(r, lv);
+    room_add_thing(r, rl);
+    Thing mk = thing_default(TH_MARK, 13, 10);
+    snprintf(mk.name, sizeof mk.name, "A PLACE");
+    room_add_thing(r, mk);
     Thing d = thing_default(TH_DOOR, 1, 10);
     snprintf(d.name, sizeof d.name, "west"); snprintf(d.target, sizeof d.target, "hollow:entry");
     room_add_thing(r, d);
     room_set_tile(r, 2, 2, 'C');
     room_set_tile(r, 3, 2, 'H');
-    CHECK(world_save(&b, tmp_path("rt3")) == 0);
+    CHECK(world_save(&b, tmp_path("rt3"), false) == 0);
     static World c;
     CHECK(world_load(&c, tmp_path("rt3"), err, sizeof err) == 0);
     CHECK(world_equal(&b, &c));
     CHECK(room_tile(&c.rooms[0], 2, 2) == 'C' && room_tile(&c.rooms[0], 3, 2) == 'H');
+    int li = room_find(&c.rooms[0], TH_LEVER, 0), ri = room_find(&c.rooms[0], TH_RELIC, 0);
+    CHECK(li >= 0 && c.rooms[0].things[li].time == 300 && c.rooms[0].things[li].mode == LEVER_TIMED);   /* 5.0 s */
+    CHECK(ri >= 0 && c.rooms[0].things[ri].gives == GIVE_NEEDLE && !strcmp(c.rooms[0].things[ri].name, "SHARP THING"));
+    /* only the rooms marked custom are written when asked */
+    static World d1, d2;
+    world_builtin(&d1);
+    Room *extra = world_add_room(&d1, "extra", 30, 16, BD_CAVE);
+    CHECK(extra != NULL);
+    extra->custom = true;
+    CHECK(world_save(&d1, tmp_path("part"), true) == 0);
+    CHECK(world_load(&d2, tmp_path("part"), err, sizeof err) == 0 && d2.nrooms == 1 && !strcmp(d2.rooms[0].name, "extra"));
+    world_free(&d1); world_free(&d2);
     world_free(&a); world_free(&b); world_free(&c);
+}
+
+/* The built-in Gloamwood's tilemap, pinned: FNV-1a over every cell's type, then every cell's picture. It must
+ * only change on purpose (and then the benchmark scenes' frames change too). */
+static void test_gloamwood_pinned(void) {
+    puts("the built-in Gloamwood is pinned");
+    static World w;
+    world_builtin(&w);
+    GeTilemap m;
+    memset(&m, 0, sizeof m);
+    room_build_tilemap(&w.rooms[0], &m);
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < m.w * m.h; i++) { h ^= m.type[i]; h *= 16777619u; }
+    for (int i = 0; i < m.w * m.h; i++) { h ^= m.type[i] ? m.vis[i] : 0; h *= 16777619u; }
+    printf("  tilemap hash %08x\n", h);
+    CHECK(h == GLOAMWOOD_TILEMAP_HASH);
+    ge_tilemap_free(&m);
+    world_free(&w);
+}
+
+static void test_friendly_values(void) {
+    puts("values written the way a person would");
+    static World w;
+    char err[128];
+    write_file(tmp_path("friendly"), "\xEF\xBB\xBFgloamwood-world 1\nroom r 25 15 cave\ntiles\n"
+                                     ".........................  \n.........................\t\n.........................\n.........................\n"
+                                     ".........................\n.........................\n.........................\n.........................\n"
+                                     ".........................\n.........................\n.........................\n.........................\n"
+                                     ".........................\n.........................\n#########################\nend\n"
+                                     "thing lever 3 13 mode=timed time=2.5\nthing gate 6 13 need=all\nthing gate 8 13 need=any\n"
+                                     "thing lock 10 13\nendroom\n");
+    int rc = world_load(&w, tmp_path("friendly"), err, sizeof err);
+    if (rc) printf("  %d: %s\n", rc, err);
+    CHECK(rc == 0 && w.nrooms == 1 && w.rooms[0].nthings == 4);         /* a BOM and trailing spaces are fine */
+    if (rc == 0) {
+        CHECK(w.rooms[0].things[0].time == 150 && w.rooms[0].things[0].mode == LEVER_TIMED);
+        CHECK(w.rooms[0].things[1].need == 0 && w.rooms[0].things[2].need == 1);
+        CHECK(w.rooms[0].things[3].kind == TH_GATE && w.rooms[0].things[3].lock && w.rooms[0].things[3].ch == 0);
+    }
+    write_file(tmp_path("badname"), "gloamwood-world 1\nroom Big_Room 25 15 cave\n");
+    CHECK(world_load(&w, tmp_path("badname"), err, sizeof err) == 2 && strstr(err, "a-z") != NULL);
+    world_free(&w);
 }
 
 static void test_bad_files(void) {
@@ -133,6 +191,8 @@ static void test_editing_helpers(void) {
 
 int main(void) {
     test_round_trip();
+    test_gloamwood_pinned();
+    test_friendly_values();
     test_bad_files();
     test_editing_helpers();
     printf("%d checks, %d failed\n", checks, failures);

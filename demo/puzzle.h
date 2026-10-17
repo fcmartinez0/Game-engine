@@ -49,6 +49,7 @@ typedef struct {
     int ncracks;
     int wire_on[10], wire_inputs[10];   /* per wire: inputs on, inputs in all */
     int sign_near, door_near;           /* the sign / door the hero is standing at, or -1 */
+    int shot_cells[8], nshot_cells;     /* needles stopped against cells this tick, handled in puzzle_update */
     PuzzleEvent ev[16];
     int nev;
 } Puzzle;

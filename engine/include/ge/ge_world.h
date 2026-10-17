@@ -187,7 +187,8 @@ typedef enum {
     GE_EV_CHANNEL,  /* a finished channelling (e.g. heal) */
     GE_EV_POGO,     /* a bounced off something with a down-slash */
     GE_EV_SHOOT,    /* a fired shot b */
-    GE_EV_SHOT_TILE /* a shot fired by entity a (-1: nobody) stopped against the solid cell b (row * map width + column) */
+    GE_EV_SHOT_TILE /* a shot fired by entity a (-1: nobody) stopped against the solid cell b (row * map width + column;
+                     * -1 past the map's edge) */
 } GeEventType;
 
 /* One hit, as applied to a victim. */

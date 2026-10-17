@@ -33,7 +33,7 @@ typedef enum {
     TH_CRAWLER, TH_BAT, TH_SPITTER, TH_GRUNT,
     TH_DUELIST,     /* challenges you to a duel: name, style (brawler/fencer/paragon), level, rounds */
     TH_BOSS,        /* Thornwarden; fought inside an arena */
-    TH_ARENA,       /* the boss room: w tiles wide from col; a = the gate's column, b = the far door's; h = door height */
+    TH_ARENA,       /* the boss room: w tiles wide from col; its gate is the column before it, its far door the one after */
     TH_HALL,        /* the Paragon's hall: indoors, w tiles wide from col, h tiles high above row */
     TH_LEVER,       /* input: hit it to switch its wire on (mode: once / toggle / timed) */
     TH_PLATE,       /* input: on while the hero's feet or a crate are on it */
@@ -43,6 +43,7 @@ typedef enum {
                      * down; it rests on spikes; it goes back to its place when you come back into the room */
     TH_KEY,         /* pick it up, then walk into a locked gate */
     TH_RELIC,       /* a collectible, found once: maybe a mask, a needle or a silk segment */
+    TH_MARK,        /* a bookmark for the dev menu's warps (name); not seen in play */
     TH_COUNT
 } ThingKind;
 
@@ -65,16 +66,16 @@ typedef struct {
     int16_t time;              /* lever: ticks a timed lever stays on */
     int8_t gives;              /* relic: GIVE_* */
     int8_t style, level, rounds;   /* duelist */
-    int16_t a, b;              /* arena: gate column, far-door column */
-    char name[24];             /* duelist / boss / relic name, door id */
-    char target[32];           /* door: "room:door" */
+    char name[24];             /* duelist / boss / relic / mark name, door id */
+    char target[48];           /* door: "room:door" */
     char text[64];             /* sign */
 } Thing;
 
 typedef struct {
-    char name[24];
+    char name[24];             /* a-z, 0-9, - and _ (doors name rooms in "room:door") */
     int w, h;
     uint8_t backdrop;          /* Backdrop */
+    bool custom;               /* from world.txt or changed in the editor: SAVE writes it (not saved itself) */
     char *tiles;               /* w * h characters, row by row */
     Thing things[ROOM_MAX_THINGS];
     int nthings;
@@ -101,13 +102,18 @@ void room_remove_thing(Room *r, int i);
 
 /* The tilemap the game plays: collision types plus a picture per cell (TV_* in demo.h). */
 void room_build_tilemap(const Room *r, GeTilemap *m);
+/* one cell as room_build_tilemap makes it (to restore a cell a gate or a crate leaves, or one just painted) */
+void room_cell(const Room *r, int col, int row, uint8_t *type, uint8_t *vis);
+bool world_name_ok(const char *s);                  /* a-z 0-9 - _, 1 to 23 characters */
+int  arena_gate_col(const Thing *arena);             /* the column before it */
+int  arena_exit_col(const Thing *arena);             /* the column after it */
 
 /* The world that ships in the game: the Gloamwood and the rest, made in code. */
 void world_builtin(World *w);
 
 /* The text format (see world.c for a full example). Load returns 0, or a line number > 0 with a message in
  * err; on failure *w is left empty. */
-int  world_save(const World *w, const char *path);
+int  world_save(const World *w, const char *path, bool only_custom);   /* 0, or < 0 if it couldn't be written */
 int  world_load(World *w, const char *path, char *err, int errlen);
 bool world_equal(const World *a, const World *b);   /* for tests: same rooms, tiles and things */
 

@@ -101,14 +101,23 @@ static bool needle_hits(const Puzzle *pz, GeRect target) {
 
 static int gate_top(const Thing *t) { return t->row - t->h + 1; }
 
+static void restore_cell(Puzzle *pz, int col, int row) {   /* back to the room as authored */
+    uint8_t type, vis;
+    room_cell(pz->room, col, row, &type, &vis);
+    set_cell(pz, col, row, type, vis);
+}
+
 static void gate_apply(Puzzle *pz, int i) {
     const Thing *t = &pz->room->things[i];
     const Piece *g = &pz->p[i];
     for (int r = 0; r < t->h; r++) {
         bool open = r >= t->h - g->open_rows;                 /* the bottom open_rows rows are up out of the way */
-        uint8_t type = open ? GE_TILE_EMPTY : t->plank ? GE_TILE_ONEWAY : GE_TILE_SOLID;
-        uint8_t vis = open ? 0 : t->plank ? TV_PLANK : (t->lock && !pz->prog->done[i]) ? TV_LOCK : TV_GATE;
-        for (int c = 0; c < t->w; c++) set_cell(pz, t->col + c, gate_top(t) + r, type, vis);
+        uint8_t type = t->plank ? GE_TILE_ONEWAY : GE_TILE_SOLID;
+        uint8_t vis = t->plank ? TV_PLANK : (t->lock && !pz->prog->done[i]) ? TV_LOCK : TV_GATE;
+        for (int c = 0; c < t->w; c++) {
+            if (open) restore_cell(pz, t->col + c, gate_top(t) + r);
+            else set_cell(pz, t->col + c, gate_top(t) + r, type, vis);
+        }
     }
 }
 
@@ -120,14 +129,31 @@ static bool wire_live(const Puzzle *pz, int ch, int need) {
 
 static bool gate_wants_open(const Puzzle *pz, int i) {
     const Thing *t = &pz->room->things[i];
-    if (t->lock) return pz->prog->done[i];
+    if (t->lock || pz->prog->done[i]) return t->lock ? pz->prog->done[i] : true;   /* unlocked, or latched open */
     bool on = wire_live(pz, t->ch, t->need);
     return t->invert ? !on : on;
+}
+
+/* Only plates on its wire: crates reset when you leave the room, so a gate held open by a crate stays open
+ * for good once you have walked through it (or you could be shut out of where you came from). */
+static bool plates_only(const Puzzle *pz, int ch) {
+    if (ch <= 0) return false;
+    int plates = 0;
+    for (int k = 0; k < pz->room->nthings; k++) {
+        const Thing *s = &pz->room->things[k];
+        if (s->ch != ch) continue;
+        if (s->kind == TH_LEVER) return false;
+        if (s->kind == TH_PLATE) plates++;
+    }
+    return plates > 0;
 }
 
 static void gate_update(Puzzle *pz, int i) {
     const Thing *t = &pz->room->things[i];
     Piece *g = &pz->p[i];
+    if (!t->lock && !t->invert && !pz->prog->done[i] && g->open_rows == t->h && hero_ok(pz) && plates_only(pz, t->ch) &&
+        ge_rect_overlap(body(hero(pz)), (GeRect){ (float)(t->col * T), (float)(gate_top(t) * T), (float)(t->w * T), (float)(t->h * T) }))
+        pz->prog->done[i] = true;
     bool want = gate_wants_open(pz, i);
     if (want && g->open_rows < t->h) {
         if (--g->step <= 0) { g->open_rows++; g->step = 2; gate_apply(pz, i); }       /* opens quickly */
@@ -160,7 +186,7 @@ static void crate_place(Puzzle *pz, int i, int col, int row) {
 
 static void crate_move(Puzzle *pz, int i, int dx, int dy, int speed) {
     Piece *c = &pz->p[i];
-    set_cell(pz, c->col, c->row, GE_TILE_EMPTY, 0);
+    restore_cell(pz, c->col, c->row);
     c->col = (int16_t)(c->col + dx); c->row = (int16_t)(c->row + dy);
     set_cell(pz, c->col, c->row, GE_TILE_SOLID, TV_BLANK);         /* solid at once, drawn sliding into place */
     c->dx = dx; c->dy = dy; c->px = 0; c->speed = speed;
@@ -279,8 +305,14 @@ static void cracks_update(Puzzle *pz) {
         }
 }
 
+/* (from inside the world update: noted now, acted on in puzzle_update, so the map only changes at one point) */
 void puzzle_shot_tile(Puzzle *pz, int owner, int cell) {
-    if (owner != pz->hero || pz->w->map.w <= 0) return;
+    if (owner != pz->hero || cell < 0 || pz->nshot_cells >= 8) return;
+    pz->shot_cells[pz->nshot_cells++] = cell;
+}
+
+static void shot_cell(Puzzle *pz, int cell) {
+    if (pz->w->map.w <= 0 || cell < 0 || cell >= pz->w->map.w * pz->w->map.h) return;
     int col = cell % pz->w->map.w, row = cell / pz->w->map.w;
     if (is_crack(pz, col, row)) { crack_hit(pz, col, row, false); return; }
     for (int i = 0; i < pz->room->nthings; i++) {                   /* a needle knocks a crate one cell on */
@@ -411,6 +443,8 @@ void puzzle_update(Puzzle *pz, const GeInput *in) {
         }
     }
     cracks_update(pz);
+    for (int k = 0; k < pz->nshot_cells; k++) shot_cell(pz, pz->shot_cells[k]);
+    pz->nshot_cells = 0;
 }
 
 bool puzzle_owns_cell(const Puzzle *pz, int col, int row) {

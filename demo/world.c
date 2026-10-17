@@ -11,14 +11,16 @@
  *   ########################################
  *   end
  *   thing door 2 14 id=in to=gloamwood:hollow
- *   thing lever 10 14 ch=1
- *   thing gate 14 12 w=1 h=3 ch=1
+ *   thing lever 10 14 ch=1 mode=timed time=2.5
+ *   thing gate 14 14 w=1 h=3 ch=1 need=any
  *   thing sign 5 14 text="HIT THE LEVER WITH A SLASH"
  *   thing duelist 30 14 name="GROBB" style=brawler level=0 rounds=1
  *   endroom
  *
  * Each thing is "thing <kind> <column> <row>" and then its settings as key=value (quotes for text with
- * spaces). Unknown keys are ignored, so a file from a newer build still loads. */
+ * spaces). The column and row are the cell a thing stands in; things bigger than a cell (gates, the arena,
+ * the hall) grow right and up from it. Unknown keys are ignored, so a file from a newer build still loads.
+ * A room in world.txt replaces the built-in room of the same name; other rooms are added. */
 
 #include "demo.h"
 
@@ -28,7 +30,7 @@
 
 static const char *const KIND_NAMES[TH_COUNT] = {
     "start", "bench", "door", "sign", "crawler", "bat", "spitter", "grunt", "duelist", "boss", "arena", "hall",
-    "lever", "plate", "gate", "crate", "key", "relic",
+    "lever", "plate", "gate", "crate", "key", "relic", "mark",
 };
 static const char *const LEVER_MODES[] = { "once", "toggle", "timed" };
 static const char *const GIVES[GIVE_COUNT] = { "none", "mask", "needle", "silk" };
@@ -55,16 +57,27 @@ Thing thing_default(int kind, int col, int row) {
     case TH_LEVER: t.ch = 1; t.time = 180; break;
     case TH_PLATE: t.ch = 1; break;
     case TH_GATE:  t.ch = 1; t.h = 3; break;
-    case TH_ARENA: t.w = 22; t.h = 3; t.a = (int16_t)(col - 1); t.b = (int16_t)(col + 22); break;
+    case TH_ARENA: t.w = 22; t.h = 3; break;
     case TH_HALL:  t.w = 34; t.h = 6; break;
     case TH_DUELIST: snprintf(t.name, sizeof t.name, "DUELIST"); t.level = 1; break;
     case TH_BOSS:  snprintf(t.name, sizeof t.name, "THORNWARDEN"); break;
     case TH_RELIC: snprintf(t.name, sizeof t.name, "RELIC"); break;
     case TH_DOOR:  snprintf(t.name, sizeof t.name, "door"); break;
+    case TH_MARK:  snprintf(t.name, sizeof t.name, "MARK"); break;
     case TH_SIGN:  snprintf(t.text, sizeof t.text, "..."); break;
     default: break;
     }
     return t;
+}
+
+int arena_gate_col(const Thing *a) { return a->col - 1; }
+int arena_exit_col(const Thing *a) { return a->col + a->w; }
+
+bool world_name_ok(const char *s) {
+    size_t n = strlen(s);
+    if (n == 0 || n > 23) return false;
+    for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || *s == '-' || *s == '_')) return false;
+    return true;
 }
 
 /* ---- rooms --------------------------------------------------------------- */
@@ -145,24 +158,35 @@ void room_remove_thing(Room *r, int i) {
 
 #define AUTO 255
 
+static void char_cell(char c, uint8_t *type, uint8_t *vis) {
+    *type = GE_TILE_EMPTY; *vis = 0;
+    switch (c) {
+    case '#': *type = GE_TILE_SOLID; *vis = AUTO; break;
+    case 'S': *type = GE_TILE_SOLID; *vis = TV_STONE; break;
+    case 'T': *type = GE_TILE_SOLID; *vis = TV_STONE_TOP; break;
+    case '=': *type = GE_TILE_ONEWAY; *vis = TV_PLANK; break;
+    case '^': *type = GE_TILE_SPIKE; *vis = TV_SPIKE; break;
+    case 'C': *type = GE_TILE_SOLID; *vis = TV_CRACK; break;
+    case 'H': *type = GE_TILE_SOLID; *vis = TV_STONE; break;   /* hidden: looks like stone (gets the top edge too) */
+    default: break;
+    }
+}
+
+void room_cell(const Room *r, int col, int row, uint8_t *type, uint8_t *vis) {
+    char_cell(room_tile(r, col, row), type, vis);
+    if (*type != GE_TILE_SOLID) return;
+    uint8_t above, av;
+    char_cell(room_tile(r, col, row - 1), &above, &av);
+    bool open_above = row == 0 || above != GE_TILE_SOLID;
+    char c = room_tile(r, col, row);
+    if (*vis == AUTO) *vis = open_above ? TV_GRASS : ((col * 7 + row * 13) % 5 == 0 ? TV_DIRT2 : TV_DIRT);
+    else if (*vis == TV_STONE && open_above && (c == 'S' || c == 'H')) *vis = TV_STONE_TOP;
+}
+
 void room_build_tilemap(const Room *r, GeTilemap *m) {
     ge_tilemap_free(m);
     ge_tilemap_create(m, r->w, r->h);
-    for (int i = 0; i < r->w * r->h; i++) {
-        uint8_t type = GE_TILE_EMPTY, vis = 0;
-        switch (r->tiles[i]) {
-        case '#': type = GE_TILE_SOLID; vis = AUTO; break;
-        case 'S': type = GE_TILE_SOLID; vis = TV_STONE; break;
-        case 'T': type = GE_TILE_SOLID; vis = TV_STONE_TOP; break;
-        case '=': type = GE_TILE_ONEWAY; vis = TV_PLANK; break;
-        case '^': type = GE_TILE_SPIKE; vis = TV_SPIKE; break;
-        case 'C': type = GE_TILE_SOLID; vis = TV_CRACK; break;
-        case 'H': type = GE_TILE_SOLID; vis = TV_STONE; break;   /* hidden: looks like stone (gets the top edge too) */
-        default: break;
-        }
-        m->type[i] = type;
-        m->vis[i] = vis;
-    }
+    for (int i = 0; i < r->w * r->h; i++) char_cell(r->tiles[i], &m->type[i], &m->vis[i]);
     /* ground: grass where it is open to the sky, earth below; stone gets its dressed top edge the same way */
     for (int y = 0; y < m->h; y++)
         for (int x = 0; x < m->w; x++) {
@@ -246,12 +270,15 @@ static void build_gloamwood(World *w) {
     add(r, TH_BENCH, 4, G - 1);
     add(r, TH_BENCH, 105, G - 1);
     add(r, TH_BENCH, 182, G - 1);
-    Thing arena = thing_default(TH_ARENA, 154, G - 1);
-    arena.w = 22; arena.h = 3; arena.a = 153; arena.b = 176;
+    Thing arena = thing_default(TH_ARENA, 154, G - 1);   /* its gate is column 153, its far door 176 */
+    arena.w = 22; arena.h = 3;
     room_add_thing(r, arena);
     Thing hall = thing_default(TH_HALL, 178, G - 1);
     hall.w = 34; hall.h = 6;
     room_add_thing(r, hall);
+    Thing mark = thing_default(TH_MARK, 49, G - 1);
+    snprintf(mark.name, sizeof mark.name, "WALL SHAFT");
+    room_add_thing(r, mark);
 }
 
 void world_builtin(World *w) {
@@ -267,7 +294,7 @@ static void put_str(FILE *f, const char *key, const char *s) {
     fputc('"', f);
 }
 
-int world_save(const World *w, const char *path) {
+int world_save(const World *w, const char *path, bool only_custom) {
     FILE *f = fopen(path, "w");
     if (!f) return -1;
     static char buf[32768];                      /* one write to the card, not hundreds */
@@ -276,8 +303,10 @@ int world_save(const World *w, const char *path) {
     fprintf(f, "# Made with the world editor (dev menu > EDIT WORLD). Tiles: . empty  # ground  S stone  T stone top\n");
     fprintf(f, "# = plank  ^ spikes  C cracked stone  H hidden stone. Things: thing <kind> <column> <row> settings...\n");
     fprintf(f, "# The game rewrites this whole file when you SAVE in the editor: notes you add by hand are not kept.\n");
+    fprintf(f, "# A room here replaces the built-in room of the same name; the built-in rooms not here stay as they are.\n");
     for (int i = 0; i < w->nrooms; i++) {
         const Room *r = &w->rooms[i];
+        if (only_custom && !r->custom) continue;
         fprintf(f, "\nroom %s %d %d %s\ntiles\n", r->name, r->w, r->h, BACKDROP_NAMES[r->backdrop % BD_COUNT]);
         for (int y = 0; y < r->h; y++) { fwrite(r->tiles + (size_t)y * r->w, 1, (size_t)r->w, f); fputc('\n', f); }
         fprintf(f, "end\n");
@@ -287,22 +316,23 @@ int world_save(const World *w, const char *path) {
             switch (t->kind) {
             case TH_LEVER:
                 fprintf(f, " ch=%d mode=%s", t->ch, LEVER_MODES[ge_clampi(t->mode, 0, 2)]);
-                if (t->mode == LEVER_TIMED) fprintf(f, " time=%d", t->time);
+                if (t->mode == LEVER_TIMED) fprintf(f, " time=%d.%d", t->time / 60, (t->time % 60) / 6);   /* seconds */
                 break;
             case TH_PLATE: fprintf(f, " ch=%d", t->ch); break;
             case TH_GATE:
-                fprintf(f, " w=%d h=%d ch=%d need=%d", t->w, t->h, t->ch, t->need);
+                fprintf(f, " w=%d h=%d ch=%d", t->w, t->h, t->ch);
+                if (t->need == 0) fprintf(f, " need=all"); else if (t->need == 1) fprintf(f, " need=any"); else fprintf(f, " need=%d", t->need);
                 if (t->invert) fprintf(f, " invert=1");
                 if (t->lock) fprintf(f, " lock=1");
                 if (t->plank) fprintf(f, " plank=1");
                 break;
-            case TH_ARENA: fprintf(f, " w=%d h=%d gate=%d exit=%d", t->w, t->h, t->a, t->b); break;
+            case TH_ARENA: fprintf(f, " w=%d h=%d", t->w, t->h); break;
             case TH_HALL:  fprintf(f, " w=%d h=%d", t->w, t->h); break;
             case TH_DUELIST:
                 put_str(f, "name", t->name);
                 fprintf(f, " style=%s level=%d rounds=%d", STYLE_NAMES[ge_clampi(t->style, 0, 2)], t->level, t->rounds);
                 break;
-            case TH_BOSS: put_str(f, "name", t->name); break;
+            case TH_BOSS: case TH_MARK: put_str(f, "name", t->name); break;
             case TH_RELIC: put_str(f, "name", t->name); if (t->gives) fprintf(f, " gives=%s", GIVES[ge_clampi(t->gives, 0, GIVE_COUNT - 1)]); break;
             case TH_DOOR: put_str(f, "id", t->name); put_str(f, "to", t->target); break;
             case TH_SIGN: put_str(f, "text", t->text); break;
@@ -365,12 +395,15 @@ int world_load(World *w, const char *path, char *err, int errlen) {
     Room *r = NULL;
     int tile_row = -1;                      /* >= 0 while reading a tiles block */
 #define FAIL(...) do { snprintf(err, (size_t)errlen, __VA_ARGS__); rc = ln > 0 ? ln : 1; goto done; } while (0)
-    if (!fgets(line, sizeof line, f) || strncmp(line, "gloamwood-world", 15) != 0) { ln = 1; FAIL("not a world file (the first line should be 'gloamwood-world 1')"); }
+    if (!fgets(line, sizeof line, f)) { ln = 1; FAIL("the file is empty"); }
+    char *first = line;
+    if ((unsigned char)first[0] == 0xEF && (unsigned char)first[1] == 0xBB && (unsigned char)first[2] == 0xBF) first += 3;   /* Notepad's BOM */
+    if (strncmp(first, "gloamwood-world", 15) != 0) { ln = 1; FAIL("not a world file (the first line should be 'gloamwood-world 1')"); }
     ln = 1;
     while (fgets(line, sizeof line, f)) {
         ln++;
         size_t n = strlen(line);
-        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' ' || line[n - 1] == '\t')) line[--n] = 0;
         if (tile_row >= 0) {
             if (!strcmp(line, "end")) {
                 if (tile_row != r->h) FAIL("room %s has %d tile rows, its size says %d", r->name, tile_row, r->h);
@@ -394,6 +427,7 @@ int world_load(World *w, const char *path, char *err, int errlen) {
                 FAIL("expected: room <name> <width> <height> [forest|cave]");
             next_token(&p, bd, sizeof bd, v, sizeof v);
             int width = atoi(sw), height = atoi(sh), backdrop = !strcmp(bd, "cave") ? BD_CAVE : BD_FOREST;
+            if (!world_name_ok(name)) FAIL("room name '%s': use a-z, 0-9, - and _ (no spaces), at most 23", name);
             if (width < ROOM_MIN_W || width > ROOM_MAX_W || height < ROOM_MIN_H || height > ROOM_MAX_H)
                 FAIL("room %s: size %dx%d (from %dx%d to %dx%d)", name, width, height, ROOM_MIN_W, ROOM_MIN_H, ROOM_MAX_W, ROOM_MAX_H);
             if (world_find_room(w, name) >= 0) FAIL("two rooms called %s", name);
@@ -421,22 +455,21 @@ int world_load(World *w, const char *path, char *err, int errlen) {
                 if (!strcmp(key, "w")) t.w = (int16_t)ge_clampi(iv, 1, ROOM_MAX_W);
                 else if (!strcmp(key, "h")) t.h = (int16_t)ge_clampi(iv, 1, ROOM_MAX_H);
                 else if (!strcmp(key, "ch")) t.ch = (int8_t)ge_clampi(iv, 0, 9);
-                else if (!strcmp(key, "need")) t.need = (int8_t)ge_clampi(iv, 0, 9);
+                else if (!strcmp(key, "need")) t.need = (int8_t)(!strcmp(val, "all") ? 0 : !strcmp(val, "any") ? 1 : ge_clampi(iv, 0, 9));
                 else if (!strcmp(key, "invert")) t.invert = iv != 0;
                 else if (!strcmp(key, "lock")) t.lock = iv != 0;
                 else if (!strcmp(key, "plank")) t.plank = iv != 0;
                 else if (!strcmp(key, "mode")) t.mode = (int8_t)ge_clampi(parse_named(val, LEVER_MODES, 3), 0, 2);
                 else if (!strcmp(key, "gives")) t.gives = (int8_t)ge_clampi(parse_named(val, GIVES, GIVE_COUNT), 0, GIVE_COUNT - 1);
-                else if (!strcmp(key, "time")) t.time = (int16_t)ge_clampi(iv, 0, 30000);
+                else if (!strcmp(key, "time")) t.time = (int16_t)ge_clampi((int)(atof(val) * 60.0 + 0.5), 6, 30000);   /* seconds */
                 else if (!strcmp(key, "style")) t.style = (int8_t)ge_clampi(parse_style(val), 0, 2);
                 else if (!strcmp(key, "level")) t.level = (int8_t)ge_clampi(iv, -1, 4);
                 else if (!strcmp(key, "rounds")) t.rounds = (int8_t)ge_clampi(iv, 1, 3);
-                else if (!strcmp(key, "gate")) t.a = (int16_t)iv;
-                else if (!strcmp(key, "exit")) t.b = (int16_t)iv;
                 else if (!strcmp(key, "name") || !strcmp(key, "id")) copy_str(t.name, sizeof t.name, val);
                 else if (!strcmp(key, "to")) copy_str(t.target, sizeof t.target, val);
                 else if (!strcmp(key, "text")) copy_str(t.text, sizeof t.text, val);
             }
+            if (t.kind == TH_DOOR && t.name[0] && !world_name_ok(t.name)) FAIL("door id '%s': use a-z, 0-9, - and _", t.name);
             if (room_add_thing(r, t) < 0) FAIL("room %s has too many things (at most %d)", r->name, ROOM_MAX_THINGS);
         } else if (strcmp(word, "gloamwood-world") != 0) {
             FAIL("'%s' is not something a world file says", word);
@@ -470,7 +503,7 @@ bool world_equal(const World *a, const World *b) {
                 break;
             case TH_RELIC: if (s->gives != t->gives) return false; break;
             case TH_HALL: if (s->w != t->w || s->h != t->h) return false; break;
-            case TH_ARENA: if (s->w != t->w || s->h != t->h || s->a != t->a || s->b != t->b) return false; break;
+            case TH_ARENA: if (s->w != t->w || s->h != t->h) return false; break;
             case TH_DUELIST: if (s->style != t->style || s->level != t->level || s->rounds != t->rounds) return false; break;
             default: break;
             }

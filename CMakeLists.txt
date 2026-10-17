@@ -51,6 +51,8 @@ add_executable(fight_tests tests/test_fight.c)
 target_link_libraries(fight_tests ge)
 add_test(NAME fight_tests COMMAND fight_tests)
 
+add_test(NAME scenes COMMAND sh ${CMAKE_SOURCE_DIR}/tests/scenes.sh $<TARGET_FILE:demo_headless>)
+add_test(NAME scenes_from_file COMMAND sh ${CMAKE_SOURCE_DIR}/tests/scenes.sh $<TARGET_FILE:demo_headless> --from-file)
 add_executable(world_tests tests/test_world.c demo/world.c)
 target_link_libraries(world_tests ge)
 add_test(NAME world_tests COMMAND world_tests)
@@ -59,5 +61,5 @@ target_link_libraries(paragon_tests ge)
 add_test(NAME paragon_tests COMMAND paragon_tests)
 
 # the whole story end to end: walk into the Paragon's hall, lose to it as designed, see the report
-add_test(NAME paragon_demo COMMAND demo_headless --autoplay --god --paragon --fresh --profile paragon_test_profile.txt --frames 9000)
+add_test(NAME paragon_demo COMMAND demo_headless --no-mods --autoplay --god --paragon --fresh --profile paragon_test_profile.txt --frames 9000)
 set_tests_properties(paragon_demo PROPERTIES PASS_REGULAR_EXPRESSION "duels_lost=[12] ")
