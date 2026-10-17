@@ -229,8 +229,59 @@ static void test_builtin_doors(void) {
     world_free(&w);
 }
 
+static void test_grow_shrink(void) {
+    puts("growing and shrinking a room: pieces move with their cells, gates stretch");
+    static World w;
+    world_free(&w);
+    Room *r = world_add_room(&w, "box", 30, 15, BD_CAVE);
+    for (int y = 0; y < r->h; y++)
+        for (int x = 0; x < r->w; x++) room_set_tile(r, x, y, (y <= 1 || y >= 12 || x == 0 || x >= 28) ? 'S' : '.');
+    CHECK(room_inner_col(r) == 27);
+    CHECK(room_inner_row(r) == 2);
+    int lever = room_add_thing(r, thing_default(TH_LEVER, 27, 11));
+    Thing gt = thing_default(TH_GATE, 20, 11);
+    gt.w = 3;
+    int gate = room_add_thing(r, gt);
+    int crate = room_add_thing(r, thing_default(TH_CRATE, 5, 11));
+    /* wider, just inside the right wall: the wall moves out, the lever stays (it is left of the new column) */
+    CHECK(room_insert_col(r, room_inner_col(r) + 1));
+    CHECK(r->w == 31 && room_tile(r, 28, 5) == '.' && room_tile(r, 29, 5) == 'S' && room_tile(r, 30, 5) == 'S');
+    CHECK(r->things[lever].col == 27);
+    /* a column through the gate makes it wider; one before it moves it */
+    CHECK(room_insert_col(r, 21));
+    CHECK(r->things[gate].col == 20 && r->things[gate].w == 4);
+    CHECK(room_insert_col(r, 10));
+    CHECK(r->things[gate].col == 21 && r->things[gate].w == 4 && r->things[crate].col == 5 && r->things[lever].col == 29);
+    /* taller: a row of the room's inside under its ceiling; everything moves down a row */
+    CHECK(room_insert_row(r, room_inner_row(r)));
+    CHECK(r->h == 16 && room_tile(r, 5, 2) == '.' && room_tile(r, 5, 1) == 'S' && room_tile(r, 5, 13) == 'S');
+    CHECK(r->things[lever].row == 12 && r->things[gate].row == 12 && r->things[gate].h == 3);
+    /* a row through the gate makes it taller */
+    CHECK(room_insert_row(r, 11));
+    CHECK(r->things[gate].row == 13 && r->things[gate].h == 4);
+    /* shrinking: the gate gets narrower and shorter, what stands in a deleted column goes */
+    CHECK(room_things_in_col(r, 5) == 1);
+    CHECK(room_delete_col(r, 5));
+    CHECK(r->nthings == 2);                  /* the crate went */
+    int g2 = room_find(r, TH_GATE, 0), l2 = room_find(r, TH_LEVER, 0);
+    CHECK(r->things[g2].col == 20 && r->things[l2].col == 28);
+    CHECK(room_delete_col(r, 21));
+    CHECK(r->things[g2].w == 3);
+    CHECK(room_delete_row(r, 11));
+    CHECK(r->things[g2].h == 3 && r->things[g2].row == 12);
+    CHECK(room_delete_row(r, r->things[g2].row));      /* its bottom row */
+    CHECK(r->things[g2].h == 2 && r->things[g2].row == 11);
+    /* never smaller than a screen */
+    while (r->w > ROOM_MIN_W) CHECK(room_delete_col(r, 3));
+    CHECK(!room_delete_col(r, 3) && r->w == ROOM_MIN_W);
+    while (r->h > ROOM_MIN_H) CHECK(room_delete_row(r, 3));
+    CHECK(!room_delete_row(r, 3) && r->h == ROOM_MIN_H);
+    world_free(&w);
+}
+
 int main(void) {
     test_round_trip();
+    test_grow_shrink();
     test_builtin_doors();
     test_gloamwood_pinned();
     test_friendly_values();

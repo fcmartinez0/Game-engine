@@ -94,6 +94,17 @@ void world_free(World *w);
 Room *world_add_room(World *w, const char *name, int width, int height, int backdrop);   /* empty: just a floor */
 int  world_find_room(const World *w, const char *name);                                 /* -1 if none */
 void room_resize(Room *r, int width, int height);   /* keeps what fits, new cells empty (the bottom row ground) */
+/* Grow or shrink a room's space, the editor's WIDER/NARROWER/TALLER/SHORTER: a column (or row) is added as a copy
+ * of the one beside it, or taken out, and the pieces beyond it move with their cells (those in a column or row that
+ * goes are removed). False if the room would be too big or too small. */
+bool room_insert_col(Room *r, int at);              /* a copy of column at-1 goes in at `at` */
+bool room_delete_col(Room *r, int at);
+bool room_insert_row(Room *r, int at);              /* a copy of row `at` goes in at `at`: things at or below move down */
+bool room_delete_row(Room *r, int at);
+int  room_inner_col(const Room *r);                 /* the rightmost column that isn't rock from top to bottom */
+int  room_inner_row(const Room *r);                 /* the top row that isn't rock from side to side */
+int  room_things_in_col(const Room *r, int col);    /* pieces that a deleted column would take with it */
+int  room_things_in_row(const Room *r, int row);
 char room_tile(const Room *r, int col, int row);    /* '.' outside */
 void room_set_tile(Room *r, int col, int row, char t);
 int  room_find(const Room *r, int kind, int from);  /* index of the next thing of a kind at or after `from`, -1 if none */
@@ -114,6 +125,9 @@ void world_builtin(World *w);
 /* The text format (see world.c for a full example). Load returns 0, or a line number > 0 with a message in
  * err; on failure *w is left empty. */
 int  world_save(const World *w, const char *path, bool only_custom);   /* 0, or < 0 if it couldn't be written */
+/* Lay the rooms of src over dst: a room of the same name is replaced, a new one added (marked custom). src's rooms
+ * are moved, not copied (src is left empty). Returns how many were replaced; *added gets how many were added. */
+int  world_overlay(World *dst, World *src, int *added);
 int  world_load(World *w, const char *path, char *err, int errlen);
 bool world_equal(const World *a, const World *b);   /* for tests: same rooms, tiles and things */
 

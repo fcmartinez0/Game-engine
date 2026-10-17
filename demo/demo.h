@@ -91,6 +91,7 @@ void encounter_free(void);
 #define MOD_REPORT_LINES 10
 typedef struct { char lines[MOD_REPORT_LINES][72]; int nlines, loaded, errors; } ModReport;
 const char *mods_dir(void);
+void mods_make_dir(void);                              /* (it may not exist yet: before writing into it) */
 void mods_apply_sprites(Sprites *s, ModReport *r);     /* after chars_parse, before chars_build */
 void mods_apply_moves(Chars *c, Sprites *s, ModReport *r); /* after chars_build */
 int  mods_export(Sprites *s, Chars *c);                /* built-in files into mods/_export/; returns files written */

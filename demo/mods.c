@@ -29,6 +29,7 @@
 #endif
 
 const char *mods_dir(void) { return MODS_DIR; }
+void mods_make_dir(void) { mkdir_one(MODS_DIR); }
 
 typedef struct { const char *name; GeSprite *spr; GeFighterDef *fighter; } Target;
 

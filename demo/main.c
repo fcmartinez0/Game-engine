@@ -216,23 +216,7 @@ static void load_world(void) {
         g.world_broken = true;             /* the editor won't save over it */
         return;
     }
-    int replaced = 0, added = 0;
-    for (int i = 0; i < file.nrooms; i++) {
-        Room *src = &file.rooms[i];
-        int at = world_find_room(&g.wd, src->name);
-        if (at < 0) {
-            if (g.wd.nrooms >= WORLD_MAX_ROOMS) continue;
-            at = g.wd.nrooms++;
-            added++;
-        } else {
-            free(g.wd.rooms[at].tiles);
-            replaced++;
-        }
-        g.wd.rooms[at] = *src;             /* takes over its tiles */
-        g.wd.rooms[at].custom = true;
-        src->tiles = NULL;
-    }
-    file.nrooms = 0;
+    int added = 0, replaced = world_overlay(&g.wd, &file, &added);
     LOG("world: %s: %d rooms replaced, %d added", path, replaced, added);
 }
 

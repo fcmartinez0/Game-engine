@@ -127,6 +127,113 @@ void room_resize(Room *r, int width, int height) {
         if (r->things[i].col >= width || r->things[i].row >= height) room_remove_thing(r, i);
 }
 
+static bool sized(int kind) { return kind == TH_GATE || kind == TH_ARENA || kind == TH_HALL; }
+
+/* Pieces move with their cells when a column or row goes in at `at`. A piece is known by its anchor cell (a
+ * gate's is its bottom-left one); a gate the new column or row splits gets wider or taller. */
+static void shift_for_insert(Room *r, int at, bool col) {
+    for (int i = 0; i < r->nthings; i++) {
+        Thing *t = &r->things[i];
+        if (col) {
+            if (sized(t->kind) && t->col < at && at < t->col + t->w) t->w++;
+            else if (t->col >= at) t->col++;
+        } else {
+            if (sized(t->kind) && t->row - t->h + 1 < at && at <= t->row) { t->h++; t->row++; }
+            else if (t->row >= at) t->row++;
+        }
+    }
+}
+/* ...and when one goes out: what stood in it goes too, a gate it passed through gets narrower or shorter */
+static void shift_for_delete(Room *r, int at, bool col) {
+    for (int i = r->nthings - 1; i >= 0; i--) {
+        Thing *t = &r->things[i];
+        int lo = col ? t->col : t->row - t->h + 1, hi = col ? t->col + t->w - 1 : t->row;
+        if (sized(t->kind) && lo <= at && at <= hi) {
+            if (hi == lo) { room_remove_thing(r, i); continue; }
+            if (col) t->w--; else { t->h--; t->row--; }
+        } else if ((col ? t->col : t->row) == at) {
+            room_remove_thing(r, i);
+        } else if ((col ? t->col : t->row) > at) {
+            if (col) t->col--; else t->row--;
+        }
+    }
+}
+
+bool room_insert_col(Room *r, int at) {
+    if (r->w >= ROOM_MAX_W || at < 1 || at > r->w) return false;
+    char *t = (char *)malloc((size_t)(r->w + 1) * (size_t)r->h);
+    if (!t) return false;
+    for (int y = 0; y < r->h; y++)
+        for (int x = 0; x <= r->w; x++) t[y * (r->w + 1) + x] = r->tiles[y * r->w + (x < at ? x : x == at ? at - 1 : x - 1)];
+    free(r->tiles);
+    r->tiles = t;
+    r->w++;
+    shift_for_insert(r, at, true);
+    return true;
+}
+
+bool room_delete_col(Room *r, int at) {
+    if (r->w <= ROOM_MIN_W || at < 0 || at >= r->w) return false;
+    char *t = (char *)malloc((size_t)(r->w - 1) * (size_t)r->h);
+    if (!t) return false;
+    for (int y = 0; y < r->h; y++)
+        for (int x = 0; x < r->w - 1; x++) t[y * (r->w - 1) + x] = r->tiles[y * r->w + (x < at ? x : x + 1)];
+    free(r->tiles);
+    r->tiles = t;
+    r->w--;
+    shift_for_delete(r, at, true);
+    return true;
+}
+
+bool room_insert_row(Room *r, int at) {
+    if (r->h >= ROOM_MAX_H || at < 0 || at >= r->h) return false;
+    char *t = (char *)malloc((size_t)r->w * (size_t)(r->h + 1));
+    if (!t) return false;
+    for (int y = 0; y <= r->h; y++) memcpy(t + (size_t)y * r->w, r->tiles + (size_t)(y <= at ? y : y - 1) * r->w, (size_t)r->w);
+    free(r->tiles);
+    r->tiles = t;
+    r->h++;
+    shift_for_insert(r, at, false);
+    return true;
+}
+
+bool room_delete_row(Room *r, int at) {
+    if (r->h <= ROOM_MIN_H || at < 0 || at >= r->h) return false;
+    char *t = (char *)malloc((size_t)r->w * (size_t)(r->h - 1));
+    if (!t) return false;
+    for (int y = 0; y < r->h - 1; y++) memcpy(t + (size_t)y * r->w, r->tiles + (size_t)(y < at ? y : y + 1) * r->w, (size_t)r->w);
+    free(r->tiles);
+    r->tiles = t;
+    r->h--;
+    shift_for_delete(r, at, false);
+    return true;
+}
+
+static bool rock(char c) { return c == '#' || c == 'S' || c == 'T' || c == 'C' || c == 'H'; }
+
+int room_inner_col(const Room *r) {
+    for (int x = r->w - 1; x > 0; x--)
+        for (int y = 0; y < r->h; y++) if (!rock(r->tiles[y * r->w + x])) return x;
+    return r->w - 1;
+}
+
+int room_inner_row(const Room *r) {
+    for (int y = 0; y < r->h - 1; y++)
+        for (int x = 0; x < r->w; x++) if (!rock(r->tiles[y * r->w + x])) return y;
+    return 0;
+}
+
+int room_things_in_col(const Room *r, int col) {
+    int n = 0;
+    for (int i = 0; i < r->nthings; i++) n += sized(r->things[i].kind) ? (r->things[i].w == 1 && r->things[i].col == col) : r->things[i].col == col;
+    return n;
+}
+int room_things_in_row(const Room *r, int row) {
+    int n = 0;
+    for (int i = 0; i < r->nthings; i++) n += sized(r->things[i].kind) ? (r->things[i].h == 1 && r->things[i].row == row) : r->things[i].row == row;
+    return n;
+}
+
 char room_tile(const Room *r, int col, int row) {
     if (col < 0 || row < 0 || col >= r->w || row >= r->h) return '.';
     return r->tiles[row * r->w + col];
@@ -459,6 +566,28 @@ int world_save(const World *w, const char *path, bool only_custom) {
         fprintf(f, "endroom\n");
     }
     return fclose(f) == 0 ? 0 : -2;
+}
+
+int world_overlay(World *dst, World *src, int *added) {
+    int replaced = 0, add = 0;
+    for (int i = 0; i < src->nrooms; i++) {
+        Room *from = &src->rooms[i];
+        int at = world_find_room(dst, from->name);
+        if (at < 0) {
+            if (dst->nrooms >= WORLD_MAX_ROOMS) { free(from->tiles); from->tiles = NULL; continue; }
+            at = dst->nrooms++;
+            add++;
+        } else {
+            free(dst->rooms[at].tiles);
+            replaced++;
+        }
+        dst->rooms[at] = *from;             /* takes over its tiles */
+        dst->rooms[at].custom = true;
+        from->tiles = NULL;
+    }
+    src->nrooms = 0;
+    if (added) *added = add;
+    return replaced;
 }
 
 /* next token: a word, a key=value, or key="quoted text"; returns false at the end of the line */
