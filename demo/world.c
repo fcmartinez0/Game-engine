@@ -214,6 +214,34 @@ static void add_duelist(Room *r, int col, int row, int style, int level, int rou
     room_add_thing(r, t);
 }
 
+static void add_lever(Room *r, int col, int row, int ch, int mode, int ticks) {
+    Thing t = thing_default(TH_LEVER, col, row);
+    t.ch = (int8_t)ch; t.mode = (int8_t)mode; t.time = (int16_t)ticks;
+    room_add_thing(r, t);
+}
+static void add_gate(Room *r, int col, int row, int w, int h, int ch, bool invert, bool plank, bool lock) {
+    Thing t = thing_default(TH_GATE, col, row);
+    t.w = (int16_t)w; t.h = (int16_t)h; t.ch = (int8_t)(lock ? 0 : ch); t.invert = invert; t.plank = plank; t.lock = lock;
+    room_add_thing(r, t);
+}
+static void add_door(Room *r, int col, int row, const char *id, const char *to) {
+    Thing t = thing_default(TH_DOOR, col, row);
+    snprintf(t.name, sizeof t.name, "%s", id);
+    snprintf(t.target, sizeof t.target, "%s", to);
+    room_add_thing(r, t);
+}
+static void add_sign(Room *r, int col, int row, const char *text) {
+    Thing t = thing_default(TH_SIGN, col, row);
+    snprintf(t.text, sizeof t.text, "%s", text);
+    room_add_thing(r, t);
+}
+static void add_relic(Room *r, int col, int row, const char *name, int gives) {
+    Thing t = thing_default(TH_RELIC, col, row);
+    snprintf(t.name, sizeof t.name, "%s", name);
+    t.gives = (int8_t)gives;
+    room_add_thing(r, t);
+}
+
 /* "Gloamwood": one Silksong-style slice, left to right.
  *   0  bench, crawlers        26 spike pit (pogo the bat)    44 spitter on a ledge
  *   51 wall-jump shaft up to a plateau -- duelist 1 waits on top
@@ -279,11 +307,99 @@ static void build_gloamwood(World *w) {
     Thing mark = thing_default(TH_MARK, 49, G - 1);
     snprintf(mark.name, sizeof mark.name, "WALL SHAFT");
     room_add_thing(r, mark);
+    add_door(r, 2, G - 1, "hollow", "hollow:in");   /* the way down to the caves (last: things keep their order) */
+}
+
+/* "The Hollow": the caves under the Gloamwood, one puzzle idea at a time, left to right. Things stand in row 11.
+ *   2  the way in        6  a lever beside a gate (slash it)      12 a lever in a low corridor (slash upward)
+ *   19-25 a spike pit under a low roof: the needle hits the lever across it, and a plank bridge appears
+ *   31 a timed lever: its gate is 10 tiles on      43 the way down     46 a bench     48 cracked stone, a mask behind */
+static void build_hollow(World *w) {
+    const int W = 54, H = 15;
+    Room *r = world_add_room(w, "hollow", W, H, BD_CAVE);
+    if (!r) return;
+    fill(r, 0, W - 1, 0, H - 1, '.');
+    fill(r, 0, W - 1, 0, 1, 'S');           /* the roof */
+    fill(r, 0, W - 1, 12, H - 1, 'S');      /* the floor */
+    fill(r, 0, 0, 0, H - 1, 'S');
+    fill(r, W - 2, W - 1, 0, H - 1, 'S');
+    fill(r, 8, 8, 2, 8, 'S');               /* above gate 1 */
+    fill(r, 9, 15, 2, 7, 'S');              /* the low corridor's ceiling */
+    fill(r, 16, 16, 2, 8, 'S');             /* above gate 2 */
+    fill(r, 18, 26, 2, 8, 'S');             /* the low roof over the pit: too low to jump it */
+    fill(r, 19, 25, 12, 13, '.');
+    fill(r, 19, 25, 14, 14, '^');
+    fill(r, 35, 36, 11, 11, '^');           /* a hop on the way to the timed gate */
+    fill(r, 41, 41, 2, 8, 'S');             /* above gate 4 */
+    fill(r, 48, 50, 2, 8, 'S');             /* the mask's hiding place, behind cracked stone */
+    fill(r, 48, 48, 9, 11, 'C');
+
+    add_door(r, 2, 11, "in", "gloamwood:hollow");
+    add(r, TH_START, 3, 11);
+    add_sign(r, 4, 11, "SLASH THE LEVER WITH Y");
+    add_lever(r, 6, 11, 1, LEVER_ONCE, 180);
+    add_gate(r, 8, 11, 1, 3, 1, false, false, false);
+    add_sign(r, 10, 11, "UP + Y SLASHES UPWARD");
+    add_lever(r, 12, 8, 2, LEVER_ONCE, 180);          /* hanging from the corridor's ceiling, 3 tiles up */
+    add_gate(r, 16, 11, 1, 3, 2, false, false, false);
+    add_sign(r, 17, 11, "X THROWS A NEEDLE. HIT THE LEVER");
+    add_gate(r, 19, 12, 7, 1, 3, true, true, false);   /* the bridge: planks that appear */
+    add_lever(r, 27, 11, 3, LEVER_ONCE, 180);
+    add_sign(r, 29, 11, "QUICK: IT WON'T STAY OPEN");
+    add_lever(r, 31, 11, 4, LEVER_TIMED, 180);        /* 3 seconds */
+    add_gate(r, 41, 11, 1, 3, 4, false, false, false);
+    add_door(r, 43, 11, "down", "deep:up");
+    add(r, TH_BENCH, 46, 11);
+    add_relic(r, 49, 11, "MASK SHARD", GIVE_MASK);
+}
+
+/* "The Deep": down from the Hollow and back.
+ *   the ledge (row 5): push the crate off its edge; it lands on the plate below and holds the gate open
+ *   the chimney (cols 23-25): a key on its plank floor; up-slash its ceiling for a secret
+ *   the locked gate, the drop to the bottom, and a lever that opens the way back up to the Hollow */
+static void build_deep(World *w) {
+    const int W = 32, H = 24;
+    Room *r = world_add_room(w, "deep", W, H, BD_CAVE);
+    if (!r) return;
+    fill(r, 0, W - 1, 0, H - 1, '.');
+    fill(r, 0, W - 1, 0, 0, 'S');
+    fill(r, 0, 0, 0, H - 1, 'S');
+    fill(r, W - 1, W - 1, 0, H - 1, 'S');
+    fill(r, 0, W - 1, 21, H - 1, 'S');      /* the bottom floor: things stand in row 20 */
+    fill(r, 1, 9, 5, 5, 'S');               /* the ledge you come in on */
+    fill(r, 1, W - 2, 12, 12, 'S');         /* the middle floor: things stand in row 11 */
+    fill(r, 29, 30, 12, 12, '.');           /* ...with a drop at its far end */
+    fill(r, 12, 14, 8, 8, '=');             /* a step back up to the ledge */
+    fill(r, 18, W - 2, 1, 8, 'S');          /* rock over the middle floor's far half */
+    fill(r, 23, 25, 5, 8, '.');             /* the chimney */
+    fill(r, 23, 25, 7, 7, '=');             /* its plank floor */
+    fill(r, 23, 25, 4, 4, 'H');             /* its ceiling: hidden stone */
+    fill(r, 23, 25, 2, 3, '.');             /* the secret above it */
+    fill(r, 8, 8, 13, 17, 'S');             /* above the last gate */
+
+    add_door(r, 2, 4, "up", "hollow:down");
+    add(r, TH_START, 3, 4);
+    add_sign(r, 4, 4, "PUSH THE CRATE OFF THE EDGE");
+    add(r, TH_CRATE, 7, 4);
+    Thing plate = thing_default(TH_PLATE, 10, 11);
+    room_add_thing(r, plate);
+    add_gate(r, 18, 11, 1, 3, 1, false, false, false);
+    Thing key = thing_default(TH_KEY, 24, 6);
+    room_add_thing(r, key);
+    add_relic(r, 24, 3, "SILVER BELL", GIVE_NEEDLE);
+    add_gate(r, 27, 11, 1, 3, 0, false, false, true);  /* locked: the chimney's key */
+    add_sign(r, 26, 20, "A WAY BACK UP");
+    add_lever(r, 22, 20, 2, LEVER_ONCE, 180);
+    add(r, TH_CRAWLER, 15, 20);
+    add_gate(r, 8, 20, 1, 3, 2, false, false, false);
+    add_door(r, 4, 20, "short", "hollow:down");
 }
 
 void world_builtin(World *w) {
     world_free(w);
     build_gloamwood(w);
+    build_hollow(w);
+    build_deep(w);
 }
 
 /* ---- the file ---------------------------------------------------------------- */

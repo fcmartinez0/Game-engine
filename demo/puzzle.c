@@ -545,13 +545,17 @@ void puzzle_draw(const Puzzle *pz, GeImage *fb, int camx, int camy, uint32_t tic
         uint32_t wc = puzzle_wire_color(t->ch);
         switch (t->kind) {
         case TH_LEVER: {
-            ge_fill_rect(fb, x + 2, y + 12, 12, 4, GE_RGB(84, 80, 108), 0);           /* the base */
-            ge_fill_rect(fb, x + 2, y + 12, 12, 1, GE_RGB(120, 116, 140), 0);
+            /* under a ceiling with nothing to stand on, it hangs from the ceiling */
+            bool hang = cell_type(pz, t->col, t->row - 1) == GE_TILE_SOLID && cell_type(pz, t->col, t->row + 1) != GE_TILE_SOLID &&
+                        cell_type(pz, t->col, t->row + 1) != GE_TILE_ONEWAY;
+            int base = hang ? y : y + 12, pivot = hang ? y + 4 : y + 12;
+            ge_fill_rect(fb, x + 2, base, 12, 4, GE_RGB(84, 80, 108), 0);             /* the base */
+            ge_fill_rect(fb, x + 2, hang ? base + 3 : base, 12, 1, GE_RGB(120, 116, 140), 0);
             bool blink = t->mode == LEVER_TIMED && p->on && p->timer < 60 && (tick & 4);
-            int hx = x + 8 + (p->on ? 6 : -6), hy = y + 3;                          /* the handle leans the way it was pushed */
-            ge_draw_line(fb, x + 8, y + 12, hx, hy, 2, GE_RGB(60, 56, 70));
+            int hx = x + 8 + (p->on ? 6 : -6), hy = hang ? y + 13 : y + 3;          /* the handle leans the way it was pushed */
+            ge_draw_line(fb, x + 8, pivot, hx, hy, 2, GE_RGB(60, 56, 70));
             ge_fill_circle(fb, hx, hy, 3, blink ? GE_WHITE : (p->on ? wc : GE_RGB(70, 66, 80)), 0);
-            gem(fb, x + 8, y + 14, wc);
+            gem(fb, x + 8, hang ? y + 2 : y + 14, wc);
             break;
         }
         case TH_PLATE: {

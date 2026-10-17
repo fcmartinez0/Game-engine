@@ -4,6 +4,7 @@
 #include "../demo/demo.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define GLOAMWOOD_TILEMAP_HASH 0xc53e6169u   /* the old level.c's, cell for cell */
@@ -189,8 +190,48 @@ static void test_editing_helpers(void) {
     world_free(&w);
 }
 
+/* "room:door" -> the door's room and the door, or -1 */
+static int door_target(const World *w, const char *target, int *door) {
+    char name[32];
+    const char *colon = strchr(target, ':');
+    if (!colon || (size_t)(colon - target) >= sizeof name) return -1;
+    memcpy(name, target, (size_t)(colon - target));
+    name[colon - target] = 0;
+    int r = world_find_room(w, name);
+    *door = -1;
+    for (int i = 0; r >= 0 && i < w->rooms[r].nthings; i++)
+        if (w->rooms[r].things[i].kind == TH_DOOR && !strcmp(w->rooms[r].things[i].name, colon + 1)) *door = i;
+    return *door >= 0 ? r : -1;
+}
+
+static void test_builtin_doors(void) {
+    puts("the built-in world: every door leads to a door that exists, and the sample rooms are caves");
+    static World w;
+    world_builtin(&w);
+    CHECK(world_find_room(&w, "hollow") >= 0 && world_find_room(&w, "deep") >= 0);
+    int doors = 0;
+    for (int r = 0; r < w.nrooms; r++)
+        for (int i = 0; i < w.rooms[r].nthings; i++) {
+            const Thing *t = &w.rooms[r].things[i];
+            if (t->kind != TH_DOOR) continue;
+            doors++;
+            int d, to = door_target(&w, t->target, &d);
+            if (to < 0) printf("  %s door %s leads to %s, which isn't there\n", w.rooms[r].name, t->name, t->target);
+            CHECK(to >= 0 && to != r);
+            for (int k = room_find(&w.rooms[r], TH_BENCH, 0); k >= 0; k = room_find(&w.rooms[r], TH_BENCH, k + 1))
+                CHECK(abs(w.rooms[r].things[k].col - t->col) >= 2 || w.rooms[r].things[k].row != t->row);   /* UP rests at a bench */
+        }
+    CHECK(doors == 5);
+    CHECK(w.rooms[world_find_room(&w, "hollow")].backdrop == BD_CAVE && w.rooms[world_find_room(&w, "deep")].backdrop == BD_CAVE);
+    /* the Gloamwood's door is its last thing, so everything before it spawns as it always did */
+    const Room *gw = &w.rooms[0];
+    CHECK(gw->things[gw->nthings - 1].kind == TH_DOOR);
+    world_free(&w);
+}
+
 int main(void) {
     test_round_trip();
+    test_builtin_doors();
     test_gloamwood_pinned();
     test_friendly_values();
     test_bad_files();
