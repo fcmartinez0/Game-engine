@@ -134,27 +134,22 @@ static bool gate_wants_open(const Puzzle *pz, int i) {
     return t->invert ? !on : on;
 }
 
-/* Only plates on its wire: crates reset when you leave the room, so a gate held open by a crate stays open
- * for good once you have walked through it (or you could be shut out of where you came from). */
-static bool plates_only(const Puzzle *pz, int ch) {
-    if (ch <= 0) return false;
-    int plates = 0;
-    for (int k = 0; k < pz->room->nthings; k++) {
-        const Thing *s = &pz->room->things[k];
-        if (s->ch != ch) continue;
-        if (s->kind == TH_LEVER) return false;
-        if (s->kind == TH_PLATE) plates++;
-    }
-    return plates > 0;
+/* is any of the rect in the camera's view? */
+static bool in_view(const Puzzle *pz, GeRect r) {
+    const GeCamera *c = &pz->w->cam;
+    return r.x + r.w > c->x && r.x < c->x + c->vw && r.y + r.h > c->y && r.y < c->y + c->vh;
 }
 
 static void gate_update(Puzzle *pz, int i) {
     const Thing *t = &pz->room->things[i];
     Piece *g = &pz->p[i];
-    if (!t->lock && !t->invert && !pz->prog->done[i] && g->open_rows == t->h && hero_ok(pz) && plates_only(pz, t->ch) &&
-        ge_rect_overlap(body(hero(pz)), (GeRect){ (float)(t->col * T), (float)(gate_top(t) * T), (float)(t->w * T), (float)(t->h * T) }))
-        pz->prog->done[i] = true;
     bool want = gate_wants_open(pz, i);
+    if (want != g->want) {                                                             /* its wire changed */
+        g->want = want;
+        GeRect r = { (float)(t->col * T), (float)(gate_top(t) * T), (float)(t->w * T), (float)(t->h * T) };
+        if (!in_view(pz, r)) g->alert = 90;                                            /* out of sight: point at it */
+    }
+    if (g->alert > 0) g->alert--;
     if (want && g->open_rows < t->h) {
         if (--g->step <= 0) { g->open_rows++; g->step = 2; gate_apply(pz, i); }       /* opens quickly */
     } else if (!want && g->open_rows > 0) {
@@ -184,6 +179,31 @@ static void crate_place(Puzzle *pz, int i, int col, int row) {
     set_cell(pz, col, row, GE_TILE_SOLID, TV_CRATE);
 }
 
+static bool plate_at(const Puzzle *pz, int col, int row) {
+    for (int k = 0; k < pz->room->nthings; k++)
+        if (pz->room->things[k].kind == TH_PLATE && pz->room->things[k].col == col && pz->room->things[k].row == row) return true;
+    return false;
+}
+
+/* where a crate starts: on the last plate it came to rest on, else where it was built */
+static void crate_home(const Puzzle *pz, int i, int *col, int *row) {
+    const Thing *t = &pz->room->things[i];
+    *col = t->col; *row = t->row;
+    if (pz->prog->crate_homed[i]) { *col = pz->prog->crate_home[i][0]; *row = pz->prog->crate_home[i][1]; }
+}
+
+/* put a crate back at its home (entering the room, or after it fell out of it); false if something is there */
+static bool crate_go_home(Puzzle *pz, int i) {
+    int col, row;
+    crate_home(pz, i, &col, &row);
+    if (cell_type(pz, col, row) != GE_TILE_EMPTY || cell_occupied(pz, col, row, i)) {   /* the plate is taken: as built */
+        col = pz->room->things[i].col; row = pz->room->things[i].row;
+        if (cell_type(pz, col, row) != GE_TILE_EMPTY || cell_occupied(pz, col, row, i)) return false;
+    }
+    crate_place(pz, i, col, row);
+    return true;
+}
+
 static void crate_move(Puzzle *pz, int i, int dx, int dy, int speed) {
     Piece *c = &pz->p[i];
     restore_cell(pz, c->col, c->row);
@@ -201,12 +221,17 @@ static void crate_update(Puzzle *pz, int i) {
     if (c->dx || c->dy) {                                           /* moving into its new cell */
         c->px += c->speed;
         if (c->px < T) return;
-        if (c->row >= pz->w->map.h) {                               /* fell out of the room: back where it began */
-            if (cell_type(pz, t->col, t->row) == GE_TILE_EMPTY) crate_place(pz, i, t->col, t->row);
-            else { c->dx = c->dy = 0; c->px = 0; }
+        if (c->row >= pz->w->map.h) {                               /* fell out of the room: back home */
+            c->col = -100; c->row = -100;                           /* (nowhere, while looking for room at home) */
+            if (!crate_go_home(pz, i)) { c->dx = c->dy = 0; c->px = 0; c->col = t->col; c->row = t->row; }
             return;
         }
         crate_place(pz, i, c->col, c->row);
+        if (!crate_can_enter(pz, i, c->col, c->row + 1) && plate_at(pz, c->col, c->row)) {   /* a plate catches it: */
+            c->push = 0;                                            /* it stops there a moment, even if you keep pushing */
+            pz->prog->crate_homed[i] = true;
+            pz->prog->crate_home[i][0] = c->col; pz->prog->crate_home[i][1] = c->row;
+        }
     }
     if (crate_can_enter(pz, i, c->col, c->row + 1)) { crate_move(pz, i, 0, 1, 2); return; }   /* falls */
     if (!hero_ok(pz)) return;
@@ -252,6 +277,21 @@ static int crack_group(const Puzzle *pz, int col, int row, int16_t out[][2], int
     return n;
 }
 
+/* a cell under stone that just broke is open to the air now: give it the top edge the room would have built */
+static void redress_below(Puzzle *pz, int col, int row) {
+    GeTilemap *m = &pz->w->map;
+    int y = row + 1;
+    if (col < 0 || y < 0 || col >= m->w || y >= m->h || m->type[y * m->w + col] != GE_TILE_SOLID || puzzle_owns_cell(pz, col, y)) return;
+    char c = room_tile(pz->room, col, y);
+    if (c == '#') m->vis[y * m->w + col] = TV_GRASS;
+    else if (c == 'S') m->vis[y * m->w + col] = TV_STONE_TOP;
+}
+
+static void break_cell(Puzzle *pz, int col, int row) {
+    set_cell(pz, col, row, GE_TILE_EMPTY, 0);
+    redress_below(pz, col, row);
+}
+
 static void crack_hit(Puzzle *pz, int col, int row, bool down) {
     int16_t grp[64][2];
     int n = crack_group(pz, col, row, grp, 64);
@@ -277,7 +317,7 @@ static void crack_hit(Puzzle *pz, int col, int row, bool down) {
         return;
     }
     for (int k = 0; k < n; k++) {                                   /* the second breaks it all */
-        set_cell(pz, grp[k][0], grp[k][1], GE_TILE_EMPTY, 0);
+        break_cell(pz, grp[k][0], grp[k][1]);
         if (pz->prog->nbroken < ROOM_MAX_BROKEN) {
             pz->prog->broken[pz->prog->nbroken][0] = grp[k][0];
             pz->prog->broken[pz->prog->nbroken][1] = grp[k][1];
@@ -350,17 +390,21 @@ void puzzle_enter(Puzzle *pz, Room *r, RoomProgress *prog, GeWorld *w, int hero_
     memset(pz, 0, sizeof *pz);
     pz->room = r; pz->prog = prog; pz->w = w; pz->hero = hero_idx; pz->keys = keys;
     pz->sign_near = pz->door_near = -1;
-    for (int k = 0; k < prog->nbroken; k++) set_cell(pz, prog->broken[k][0], prog->broken[k][1], GE_TILE_EMPTY, 0);
+    for (int i = 0; i < r->nthings; i++) { pz->p[i].col = -100; pz->p[i].row = -100; }   /* (no crate anywhere yet) */
+    for (int k = 0; k < prog->nbroken; k++) break_cell(pz, prog->broken[k][0], prog->broken[k][1]);
     for (int i = 0; i < r->nthings; i++) {
         const Thing *t = &r->things[i];
         Piece *p = &pz->p[i];
         if (t->kind == TH_LEVER) p->on = t->mode == LEVER_ONCE && prog->done[i];   /* pulled for good */
-        if (t->kind == TH_CRATE && cell_type(pz, t->col, t->row) == GE_TILE_EMPTY) crate_place(pz, i, t->col, t->row);
-        else if (t->kind == TH_CRATE) { p->col = t->col; p->row = t->row; }
+        if (t->kind == TH_CRATE && !crate_go_home(pz, i)) { p->col = t->col; p->row = t->row; }
     }
     wires_update(pz);
     for (int i = 0; i < r->nthings; i++)                           /* gates start where their wires say, no animation */
-        if (r->things[i].kind == TH_GATE) { pz->p[i].open_rows = gate_wants_open(pz, i) ? r->things[i].h : 0; gate_apply(pz, i); }
+        if (r->things[i].kind == TH_GATE) {
+            pz->p[i].want = gate_wants_open(pz, i);
+            pz->p[i].open_rows = pz->p[i].want ? r->things[i].h : 0;
+            gate_apply(pz, i);
+        }
 }
 
 void puzzle_pre_update(Puzzle *pz, GeIntent *it) {
@@ -458,6 +502,31 @@ bool puzzle_owns_cell(const Puzzle *pz, int col, int row) {
 }
 
 /* ---- drawing ---------------------------------------------------------------- */
+
+void puzzle_draw_hints(const Puzzle *pz, GeImage *fb, int camx, int camy, uint32_t tick) {
+    for (int i = 0; i < pz->room->nthings; i++) {
+        const Thing *t = &pz->room->things[i];
+        const Piece *g = &pz->p[i];
+        if (t->kind != TH_GATE || g->alert <= 0 || ((tick / 8) & 1)) continue;   /* (it blinks) */
+        float gx = (float)(t->col * T) + t->w * T * 0.5f - (float)camx, gy = (float)(gate_top(t) * T) + t->h * T * 0.5f - (float)camy;
+        float cx = fb->w * 0.5f, cy = fb->h * 0.5f, dx = gx - cx, dy = gy - cy;
+        float sx = fabsf(dx) > 1e-3f ? (cx - 14.0f) / fabsf(dx) : 1e9f, sy = fabsf(dy) > 1e-3f ? (cy - 14.0f) / fabsf(dy) : 1e9f;
+        float k = sx < sy ? sx : sy;
+        if (k >= 1.0f) continue;                                                 /* on screen after all */
+        int ax = (int)(cx + dx * k), ay = (int)(cy + dy * k);
+        float len = sqrtf(dx * dx + dy * dy), ux = dx / len, uy = dy / len;       /* pointing at it */
+        uint32_t c = puzzle_wire_color(t->ch), ink = GE_RGB(20, 14, 30);
+        int tx = ax + (int)(ux * 9), ty = ay + (int)(uy * 9);
+        int bx = ax - (int)(ux * 5), by = ay - (int)(uy * 5);
+        int px = (int)(-uy * 6), py = (int)(ux * 6);
+        ge_draw_line(fb, bx + px, by + py, tx, ty, 3, ink);
+        ge_draw_line(fb, bx - px, by - py, tx, ty, 3, ink);
+        ge_draw_line(fb, bx + px, by + py, tx, ty, 1, c);
+        ge_draw_line(fb, bx - px, by - py, tx, ty, 1, c);
+        ge_fill_circle(fb, ax, ay, 3, ink, 0);
+        ge_fill_circle(fb, ax, ay, 2, c, 0);
+    }
+}
 
 static void gem(GeImage *fb, int x, int y, uint32_t c) {
     ge_fill_rect(fb, x - 2, y - 2, 5, 5, GE_RGB(20, 14, 30), 0);

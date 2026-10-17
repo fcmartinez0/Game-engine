@@ -260,11 +260,17 @@ static void room_build(int r) {
 
 /* ---- spawning ---------------------------------------------------------- */
 
+/* the floor under a point (searching down from y), or near the bottom of the room if there is none */
 static float ground_at(float x, float y) {
-    const Thing *h = find_thing(TH_HALL);    /* the hall has a ceiling: from above it, look for the floor under it */
-    if (h && x >= h->col * GE_TILE && x < (h->col + h->w + 2) * GE_TILE && y < (h->row - h->h + 1) * GE_TILE) y = (float)(h->row - h->h + 2) * GE_TILE;
     float gy = ge_world_ground_y(&g.world, x, y);
     return gy < 0 ? (float)((room()->h - 3) * GE_TILE) : gy;
+}
+/* a column with no row to go by (--warp): the floor under the first open cell from the top, so a room with
+ * a ceiling puts you inside it, not on its roof */
+static float ground_in_column(float x) {
+    int col = (int)floorf(x / GE_TILE), row = 0;
+    while (row < g.world.map.h - 1 && ge_tilemap_get(&g.world.map, col, row) == GE_TILE_SOLID) row++;
+    return ground_at(x, (float)(row * GE_TILE));
 }
 
 static void spawn_hero_at(float x, float y_from) {
@@ -275,9 +281,11 @@ static void spawn_hero_at(float x, float y_from) {
     g.safe_y = hero()->pos.y;
     g.world.cam.x = x - SCREEN_W * 0.5f;
 }
-static void spawn_hero(float x) { spawn_hero_at(x, 0); }
+static void spawn_hero(float x) { spawn_hero_at(x, ground_in_column(x) - 1.0f); }
 
 static GeActorDef g_duel_defs[3];
+static int g_base_ammo;            /* the hero's needles as the character files say, before relics */
+static void apply_relic_ammo(void) { g.ch.hero.ammo_max = g_base_ammo + g.bonus_ammo; }
 
 static const GeSprite *duel_sprite(int variant) {
     return variant == STYLE_PARAGON ? &g.spr.paragon : variant == STYLE_FENCER ? &g.spr.fencer : &g.spr.brawler;
@@ -1036,7 +1044,8 @@ static int load_characters(void) {
     if (!g.no_mods) mods_apply_sprites(&g.spr, &g.mods);
     if (chars_build(&g.ch, &g.spr) != 0) return 1;
     if (!g.no_mods) mods_apply_moves(&g.ch, &g.spr, &g.mods);
-    g.ch.hero.ammo_max += g.bonus_ammo;                 /* relics found this session */
+    g_base_ammo = g.ch.hero.ammo_max;
+    apply_relic_ammo();                                 /* relics found this session */
     for (int v = 0; v < 3; v++) {
         const GeSprite *sp = duel_sprite(v);
         g_duel_defs[v] = g.ch.duelist;
@@ -1105,7 +1114,7 @@ static int demo_init(void *user) {
         g.nbackdrop[bd] = scratch.nlayers;
     }
     load_world();
-    if (g.to_paragon) { int h = room_find(&g.wd.rooms[0], TH_HALL, 0); g.warp_col = h >= 0 ? g.wd.rooms[0].things[h].col + 10 : 1; }
+    if (g.to_paragon) { int h = room_find(&g.wd.rooms[0], TH_HALL, 0); g.warp_col = h >= 0 ? g.wd.rooms[0].things[h].col + 10 : 1; }   /* (in its column the first open cell is inside the hall) */
     room_build(0);
     set_backdrop(room()->backdrop);
     if (g.beat_all)                                   /* dev: pretend every duelist and the boss are already beaten */
@@ -1134,7 +1143,7 @@ static void demo_update_inner(const GeInput *in);
 /* ---- dev menu ------------------------------------------------------------ */
 
 /* Dev warps: the landmarks of the room you are in, from its things. */
-typedef struct { char name[28]; int col; } Warp;
+typedef struct { char name[28]; int col, row; } Warp;   /* row: where to look down for the floor from */
 static Warp g_warps[32];
 static int g_nwarps;
 static void build_warps(void) {
@@ -1154,11 +1163,12 @@ static void build_warps(void) {
         default: continue;
         }
         if (wp->col < 1) wp->col = 1;
+        wp->row = t->row;
         g_nwarps++;
     }
     for (int i = 1; i < g_nwarps; i++)                 /* left to right */
         for (int j = i; j > 0 && g_warps[j].col < g_warps[j - 1].col; j--) { Warp t = g_warps[j]; g_warps[j] = g_warps[j - 1]; g_warps[j - 1] = t; }
-    if (g_nwarps == 0) { snprintf(g_warps[0].name, sizeof g_warps[0].name, "LEFT EDGE"); g_warps[0].col = 1; g_nwarps = 1; }
+    if (g_nwarps == 0) { snprintf(g_warps[0].name, sizeof g_warps[0].name, "LEFT EDGE"); g_warps[0].col = 1; g_warps[0].row = -1; g_nwarps = 1; }
     if (g.warp_sel >= g_nwarps) g.warp_sel = 0;
 }
 #define NWARPS g_nwarps
@@ -1185,14 +1195,14 @@ static void set_logging(bool on) {
     }
 }
 
-static void warp_to(int col) {
+static void warp_to(int col, int row) {   /* row < 0: the first floor from the top of the column */
     GeEntity *p = hero();
     if (!p->active || g.mode != M_OVERWORLD) return;
     const Thing *a = find_thing(TH_ARENA), *h = find_thing(TH_HALL);
     if (g.boss_engaged && a && col < a->col) reset_boss();
     if (h && col >= h->col) arena_set_exit(false);
     float x = col * GE_TILE + 8.0f;
-    p->pos = (GeVec2){ x, ground_at(x, 0) };
+    p->pos = (GeVec2){ x, row < 0 ? ground_in_column(x) : ground_at(x, (float)(row * GE_TILE)) };
     p->vel = (GeVec2){ 0, 0 };
     p->state = GE_ST_IDLE;
     g.safe_x = x; g.safe_y = p->pos.y;
@@ -1217,7 +1227,7 @@ static void puzzle_events(void) {
             GeEntity *p = hero();
             const char *gift = "";
             if (t && t->gives == GIVE_MASK) { g.bonus_masks++; p->max_hp++; p->hp++; gift = ": ONE MORE MASK"; }
-            else if (t && t->gives == GIVE_NEEDLE) { g.bonus_ammo++; g.ch.hero.ammo_max++; p->ammo++; gift = ": ONE MORE NEEDLE"; }
+            else if (t && t->gives == GIVE_NEEDLE) { g.bonus_ammo++; apply_relic_ammo(); p->ammo++; gift = ": ONE MORE NEEDLE"; }
             else if (t && t->gives == GIVE_SILK) { p->meter = p->def->meter_max; gift = ": SILK FULL"; }
             snprintf(buf, sizeof buf, "FOUND %.24s%s", t ? t->name : "A RELIC", gift);
             say(buf, 180);
@@ -1293,7 +1303,7 @@ static void menu_apply(int item, int dir, bool act) {
         break;
     case MI_WARP:
         if (dir) g.warp_sel = (g.warp_sel + NWARPS + dir) % NWARPS;
-        if (act) { warp_to(WARPS[g.warp_sel].col); g.menu_open = false; }
+        if (act) { warp_to(WARPS[g.warp_sel].col, WARPS[g.warp_sel].row); g.menu_open = false; }
         break;
     case MI_MARK:
         if (act) { LOG("--- marked by the player (something worth looking at happened here) ---"); devlog_flush(); say("LOG MARKED", 60); g.menu_open = false; }
@@ -1673,6 +1683,7 @@ static void draw_hud(GeImage *fb) {
         ge_fill_rect(fb, x - 6, 36, tw + 12, 1, GE_RGB(150, 140, 190), 0);
         ge_text(fb, x, 40, s, GE_RGB(236, 230, 250), 1);
     }
+    puzzle_draw_hints(&g.pz, fb, (int)w->cam.x, (int)w->cam.y, g.tick);
     if (g.keys > 0) {                                             /* keys carried */
         for (int k = 0; k < g.keys && k < 5; k++) {
             int kx = 92 + k * 12;

@@ -12,14 +12,18 @@
 #include "world.h"
 #include "ge/ge_input.h"
 
-/* What the session remembers about a room: once-levers pulled, keys and relics taken, locks opened, and
- * broken stone. Crates, toggle and timed levers and plates start over each time you come into the room,
- * so a crate shoved into a corner can never lock a room for good. (Not saved between sessions yet.) */
+/* What the session remembers about a room: once-levers pulled, keys and relics taken, locks opened, broken
+ * stone, and crates left on plates. Toggle and timed levers start over each time you come into the room, and
+ * so do crates, at their place as built or on the last plate they came to rest on: a crate shoved into a
+ * corner can never lock a room for good, and a gate you solved with a crate stays solved. (Not saved between
+ * sessions yet.) */
 #define ROOM_MAX_BROKEN 256
 typedef struct {
     bool done[ROOM_MAX_THINGS];
     int16_t broken[ROOM_MAX_BROKEN][2];
     int nbroken;
+    bool crate_homed[ROOM_MAX_THINGS];         /* this crate came to rest on a plate: it starts there now */
+    int16_t crate_home[ROOM_MAX_THINGS][2];
 } RoomProgress;
 
 typedef struct {
@@ -31,6 +35,8 @@ typedef struct {
     int16_t col, row;         /* crates: the cell it is in */
     int push;                 /* crates: ticks the hero has been pushing against it */
     int dx, dy, px, speed;    /* crates: moving one cell: direction, pixels so far, pixels a tick */
+    bool want;                /* gates: what its wire said last tick (open or shut) */
+    int alert;                /* gates: ticks left of the arrow pointing at it, after it changed out of view */
 } Piece;
 
 /* What happened this tick, for the game to show, log and reward. */
@@ -64,6 +70,9 @@ void puzzle_update(Puzzle *pz, const GeInput *in);
 /* A shot stopped against a solid cell (the engine's GE_EV_SHOT_TILE). */
 void puzzle_shot_tile(Puzzle *pz, int owner, int cell);
 void puzzle_draw(const Puzzle *pz, GeImage *fb, int camx, int camy, uint32_t tick);
+/* over everything (with the HUD): an arrow at the screen's edge, in its wire's colour, toward a gate that just
+ * opened or shut out of view, so a lever whose gate is far away still says what it did */
+void puzzle_draw_hints(const Puzzle *pz, GeImage *fb, int camx, int camy, uint32_t tick);
 /* the colour of a wire, for the editor too */
 uint32_t puzzle_wire_color(int ch);
 /* is this cell part of a puzzle piece (a gate, a crate)? Safe-ground checks skip those: they can vanish */
