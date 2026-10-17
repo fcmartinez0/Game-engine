@@ -54,7 +54,51 @@ Buttons are named by position on a 3DS (A right, B bottom, X top, Y left). On a 
 
 **The final boss, the Paragon.** Past Thornwarden's far door is a long hall with a bench and one more fighter, built to be *your* opponent: it watches every duel you fight and learns what you do (which attacks, from what range, how you block, how you answer jump-ins and projectiles, whether you tech throws), remembers it between sessions in a text file, and plays to beat those habits. Every duelist you defeat also teaches it a technique. It cannot be beaten in this demo: it can be taken down to 1 health, and then, or after 75 seconds, it ends the fight. Afterwards an end-of-demo screen lists the habits it learned about you in plain words. See [docs/PARAGON.md](docs/PARAGON.md).
 
+**The caves.** A stone door at the forest's left edge leads down to the Hollow and the Deep, two rooms of puzzles that teach one idea at a time: a lever beside a gate, a lever hanging from a low ceiling (up-slash), a needle thrown across a spike pit to raise a plank bridge, a timed lever whose gate is ten tiles away, cracked stone hiding a mask shard; then a crate pushed off a ledge onto a plate, a chimney with a key and a secret above hidden stone, a locked gate, and a lever that opens the way back. A gate that opens out of sight shows a blinking arrow at the screen's edge.
+
 **The boss**, Thornwarden, shuts the gate behind you. It has armour (no flinching), a sweeping swing, a charge across the arena, a leap that sends shockwaves along the floor, and spear volleys you can slash out of the air. It gets faster below half health.
+
+## Building the world
+
+Every room is data: tiles plus *things* (benches, doors, creatures, duelists, levers, gates, crates...). The game builds what it plays from that, the editor changes it, and it is saved as plain text in `mods/world.txt` (on a 3DS: `SD:/3ds/gloamwood/mods/world.txt`). *Analogy: a stage set described on paper, every prop with its place and settings, that the crew can rebuild exactly any night.* Only the rooms you changed go in the file; the built-in rooms you didn't touch keep getting fixes from new builds.
+
+**The editor.** Press **START** while exploring (Enter on a PC, or the dev menu's EDIT WORLD). *Analogy: a model railway's layout table.* The bottom screen is the table seen from above (the map, 8 px a tile), the top screen is a camera down at the trains' height, and START runs a train over what you just laid.
+
+```
+ y 0-23     UNDO | ERASER | ROOM | SAVE | PLAY
+ y 24-191   the map (40 x 21 tiles); the D-pad scrolls it; a frame shows what the top screen sees
+ y 192-239  GROUND | PUZZLE | EXPLORE | FOES, and their brushes   (or the selected piece's settings)
+```
+
+* **One rule for the stylus:** what is under it when it touches down decides. A piece: a tap selects it, a drag moves it. Anywhere else, the brush you picked paints tiles or places a piece. Drop a piece on ERASER (or tap it with ERASER on) to remove it; **B** or a tap on empty map lets go of it.
+* **Hold R** while dragging a tile brush to fill a box. **L** (Q on a PC) undoes a whole stroke, drag or setting change at once (32 steps).
+* **Wires** are coloured extension cords: a gate opens while a switch on the same wire is on. A new lever or plate takes a free wire; a new gate joins the switch you placed or picked last. So LEVER, tap the map, GATE, tap the map, START is already a working puzzle. A gate's *OPENS WHEN* is ANY (a doorbell: any button rings it) or ALL (a vault: every key turned). BRIDGE is a gate that *appears* when switched on.
+* **The top screen** magnifies wherever the stylus is, names the brush or piece and says what it does, and keeps one line of warnings about the room: a gate with no switch, a wire with no gate, a door that leads nowhere, a door beside a bench (UP would rest instead), too many creatures.
+* **ROOM:** your rooms, WIDER / NARROWER / TALLER / SHORTER (space is added just inside the right wall or under the ceiling, and the pieces move with their cells), the backdrop, RENAME, NEW ROOM (a cave whose door already leads back beside the marker), BACK TO BUILT-IN, RESTORE AUTOSAVE, and an overview of the room to tap and jump to. **Doors:** select one, then < > on LEADS TO links it to a door in another room, both ends at once; GO THROUGH shows the other side.
+* **Signs, relic names and room names** are typed on an on-screen keyboard.
+* **START (or PLAY) tests** from the green TEST FROM HERE figure (drag it). Testing costs nothing: each test starts from the game as it was when you began editing, and the rooms you changed start fresh. The bottom screen then offers BACK TO EDITING (or START), RESTART ROOM, STOP EDITING (carry on playing from here, for real) and lights for each wire.
+* **SAVE** writes `world.tmp`, keeps the old file as `world.bak`, then renames, so pulling the card halfway never loses your world. A `world.txt` that fails to load is never written over: it is kept as `world-broken.txt`, and its line number and problem are shown. Each test and quitting also write `world.autosave.txt`; ROOM > RESTORE AUTOSAVE brings it back.
+
+**The builder's ruler**, for laying out jumps: a jump climbs 3 tiles and crosses 4; a double jump climbs 5 (never ask for 6); with the air dash about 10 across; a dash covers 3 tiles; a pogo bounce climbs 3; the needle flies 20 tiles straight. **Every stone wall can be climbed** by wall-jumping, so only open air, planks and spikes can stop the hero going up.
+
+**The file**, if you'd rather type: one character per tile (`.` empty, `#` ground, `S` stone, `T` stone with a top edge, `=` plank, `^` spikes, `C` cracked stone, `H` hidden stone) and one line per thing.
+
+```
+gloamwood-world 1
+room hollow 54 15 cave
+tiles
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+...
+end
+thing door 2 11 id="in" to="gloamwood:hollow"
+thing lever 6 11 ch=1 mode=once
+thing gate 8 11 w=1 h=3 ch=1 need=any
+thing lever 31 11 ch=4 mode=timed time=3.0
+thing sign 4 11 text="SLASH THE LEVER WITH Y"
+endroom
+```
+
+A room in the file replaces the built-in room of the same name; any other room is added. Mistakes are reported with the line number, and the built-in world is played instead. `--world FILE` plays another file, `--room NAME` starts in a room, and `--export-world FILE` writes out the whole world as it would be played.
 
 ## How the engine is put together
 
@@ -196,6 +240,8 @@ Memory traffic (`tools/perf/bench.sh`, a cache shaped like the ARM11's) fell by 
 
 ## Testing
 
+`ctest` in the build folder runs everything below. `scenes` and `scenes_from_file` pin the last frame of ten benchmark scenes (the forest, a duel, the hall, the Paragon, two long autoplay runs, the boss) to checksums, played from the built-in world and again from it exported to a file and read back. `world_tests` (85 checks) round-trips the world file, pins the Gloamwood's tiles to the old hand-made level cell for cell, checks that bad files say what and where, that every built-in door leads to a door that exists, and that growing and shrinking rooms moves the pieces with their cells. `puzzle_tests` (97 checks) plays each puzzle piece with the game's own hero, art and moves (levers, toggles, timers, gates that wait for you, crates and plates, cracks, needles, keys, bridges, doors, the off-screen arrow) and plays the Hollow and the Deep through from start to finish. `editor` drives the editor with scripted stylus taps and drags: ten inputs make a working lever and gate, a moved lever is saved and loads next time, UNDO takes back a stroke, a broken world.txt is kept aside, NEW ROOM links its door both ways.
+
 * `paragon_tests` (56 checks): the player model learns a repeated habit and predicts it, saves and loads, describes the player in words; an undying fighter bottoms out at 1 health and the finisher always ends the round (by hit and by clock); frame-data helpers match real recovery; the Paragon beats the level-3 CPU, takes less damage once it has been taught a player's habit, wins 24 of 24 matches under the boss rules, and is deterministic. `paragon_demo` walks into the hall headlessly and loses to it as designed.
 * `engine_tests` (163 checks): the background compositor against painting in order (300 random worlds: solid, holed, see-through and additive layers, wrapping, drift, tiles, the clip column, zoom, low detail), magnified blits against the plain per-pixel rule (2000 random cases), outlined text (direct path against the clipped one, at 1× and 2×), the pattern backgrounds (every picture, palette cycling, tiling, clipping, separate cycling groups), the clip parser, tile physics, one-way platforms and spikes, double jump, wall slide and wall jump, air dash, pogo off spikes and enemies, up-slash, flyers, recoil, contact damage, tools and ammo, breakable shots, the silk meter, skills and heals, armour, floor-hugging shots, zoomed drawing, the font, the 3DS screen rotation, the fast blit paths against the plain ones (including off-screen and clipped), and the `.layers` and asset-tool round trips.
 * `fight_tests` (64 checks): the forgiving guard (L also blocks in your own move's recovery and in the air), the forgiving throw break (a tap of L, a longer window, only for the side it is given to), the K button, the guard button (stops lows and overheads, loses to throws), the guard pose when holding back against an attack, the input buffer (and that it expires), the throw-break window, the dash button, motion inputs (including too-slow ones, and left-facing fighters), command normals, dashes, high/low/mid blocking, chip damage, throws in and out of range, cancels only on contact, the L→M→H combo, the juggle limit, supers, invulnerable anti-airs, K.O., time over, best-of-three, and a deterministic CPU-vs-CPU match.
@@ -203,4 +249,4 @@ Memory traffic (`tools/perf/bench.sh`, a cache shaped like the ARM11's) fell by 
 
 ## Not there yet
 
-The Paragon's story · audio · the 3DS bottom screen and stereoscopic 3D · a level editor (levels are code, or ASCII via `ge_tilemap_from_ascii`) · slopes · save files · remappable controls · multi-hit supers (each move connects once) · the GPU renderer above.
+The Paragon's story · audio · stereoscopic 3D · editing the boss, its arena and the Paragon's hall in the editor (they are made in world.txt) · saving puzzle progress between sessions · slopes · save files · remappable controls · multi-hit supers (each move connects once) · the GPU renderer above.
