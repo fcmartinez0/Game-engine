@@ -23,6 +23,7 @@ void ge_null_configure(int max_frames, int dump_every, const char *dump_dir, GeN
 uint32_t ge_null_last_checksum(void) { return g_checksum; }
 void ge_null_set_touch(GeNullTouch fn) { g_touch = fn; }
 int ge_null_bottom_updates(void) { return g_bottom_updates; }
+uint32_t ge_null_bottom_checksum(void) { return g_bottom.px ? ge_image_checksum(&g_bottom) : 0; }
 
 int ge_plat_touch(int *x, int *y) { return g_touch ? g_touch(g_script_user, g_frame, x, y) : 0; }
 

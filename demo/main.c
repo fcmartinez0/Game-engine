@@ -5,6 +5,7 @@
 #include "demo.h"
 #include "devlog.h"
 #include "puzzle.h"
+#include "editor.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
 #include "ge/ge_platform.h"
@@ -61,6 +62,13 @@ typedef struct {
     int bench_room, bench_col, bench_row;   /* where you rested last */
     float safe_x, safe_y;
     int warp_fade;                /* spike respawn fade */
+    bool editing;                 /* the world editor has both screens (editor.c) */
+    bool test_play;               /* playing what the editor made: each PLAY starts again from `snap` */
+    struct {                      /* the game as it was when editing began, put back before every test play */
+        RoomProgress progress[WORLD_MAX_ROOMS];
+        bool beaten[WORLD_MAX_ROOMS][ROOM_MAX_THINGS];
+        int keys, bonus_masks, bonus_ammo, bench_room, bench_col, bench_row, hp, meter, ammo;
+    } snap;
     bool hero_dying;
     int respawn_timer;
 
@@ -1157,7 +1165,7 @@ static void build_warps(void) {
 }
 #define NWARPS g_nwarps
 #define WARPS g_warps
-enum { MI_PERF, MI_DETAIL, MI_LOG, MI_GOD, MI_DUEL, MI_WARP, MI_PRACTICE, MI_MARK, MI_MODS, MI_EXPORT, MI_RESET, MI_CLOSE, MI_COUNT };
+enum { MI_PERF, MI_DETAIL, MI_LOG, MI_GOD, MI_DUEL, MI_WARP, MI_PRACTICE, MI_MARK, MI_MODS, MI_EXPORT, MI_RESET, MI_EDIT, MI_COUNT };
 
 static void apply_detail(void) {
     bool low = g.detail_mode == 0 ? g.auto_low : g.detail_mode == 1;
@@ -1244,6 +1252,117 @@ static void door_update(void) {
     if (--g.door_fade == 20) { calm_flush(); room_enter(g.door_room, g.door_to[0] ? g.door_to : NULL); }
 }
 
+/* ---- the world editor (editor.c), and playing what it made ---------------
+ * START in the overworld opens the editor; its PLAY (or START) is a test play from its marker; START again goes
+ * back to editing. Every test play starts from the game as it was when editing began (rooms you changed start
+ * fresh), so testing costs nothing: STOP EDITING on the bottom screen carries on from where you are, for real. */
+
+/* the editor's room as built and at rest: nothing alive in it, the pieces as they start */
+static void editor_show_room(int r) {
+    GeWorld *w = &g.world;
+    for (int i = 0; i < GE_MAX_ENTS; i++) w->ents[i].active = false;
+    for (int i = 0; i < GE_MAX_SHOTS; i++) w->shots[i].active = false;
+    for (int i = 0; i < GE_MAX_PARTS; i++) w->parts[i].life = 0;
+    w->follow = -1;
+    w->cam.locked = false;
+    w->cam.shake = 0;
+    w->foreground_off = w->background_off = false;
+    w->background_clip_x = 0;
+    room_build(r);
+    set_backdrop(room()->backdrop);
+    static RoomProgress none;
+    static int no_keys;
+    memset(&none, 0, sizeof none);
+    no_keys = 0;
+    puzzle_enter(&g.pz, room(), &none, w, g.player, &no_keys);
+}
+
+static void editor_log_line(const char *line) { LOG("%s", line); }
+
+static bool can_edit(void) {
+    GeEntity *p = hero();
+    return g.mode == M_OVERWORLD && !g.menu_open && g.door_fade == 0 && g.warp_fade == 0 && !g.boss_engaged &&
+           (g.test_play || (p->active && p->state != GE_ST_DEAD));
+}
+
+static void open_editor(void) {
+    GeEntity *p = hero();
+    if (!g.test_play) {                    /* editing begins: remember the game as it is */
+        memcpy(g.snap.progress, g.progress, sizeof g.progress);
+        memcpy(g.snap.beaten, g.beaten, sizeof g.beaten);
+        g.snap.keys = g.keys; g.snap.bonus_masks = g.bonus_masks; g.snap.bonus_ammo = g.bonus_ammo;
+        g.snap.bench_room = g.bench_room; g.snap.bench_col = g.bench_col; g.snap.bench_row = g.bench_row;
+        g.snap.hp = p->hp; g.snap.meter = p->meter; g.snap.ammo = p->ammo;
+        editor_forget_edits();
+    }
+    int col = (int)floorf(p->pos.x / GE_TILE), row = (int)floorf((p->pos.y - 1.0f) / GE_TILE);
+    if (!p->active || p->state == GE_ST_DEAD) { int rm; editor_marker(&rm, &col, &row); }   /* (fallen: where the last test began) */
+    g.editing = true;
+    g.test_play = false;
+    g.menu_open = false;
+    g.msg_timer = 0;
+    g.boss_state = B_SLEEP;
+    static EditorHost host;
+    host = (EditorHost){ &g.wd, &g.world, &g.spr, editor_show_room, editor_log_line, &g.world_broken, g.world_problem };
+    editor_open(&host, g.room, col, row);
+    g.bottom_dirty = true;
+    calm_flush();
+}
+
+/* PLAY: the game as editing found it, rooms you changed fresh, the hero at the marker */
+static void start_test(void) {
+    editor_autosave();                     /* (the screen is about to change anyway: a good moment to write) */
+    memcpy(g.progress, g.snap.progress, sizeof g.progress);
+    memcpy(g.beaten, g.snap.beaten, sizeof g.beaten);
+    for (int r = 0; r < WORLD_MAX_ROOMS; r++)
+        if (editor_room_edited(r)) { memset(&g.progress[r], 0, sizeof g.progress[r]); memset(g.beaten[r], 0, sizeof g.beaten[r]); }
+    g.keys = g.snap.keys; g.bonus_masks = g.snap.bonus_masks; g.bonus_ammo = g.snap.bonus_ammo;
+    g.bench_room = g.snap.bench_room < g.wd.nrooms ? g.snap.bench_room : 0;
+    g.bench_col = g.snap.bench_col; g.bench_row = g.snap.bench_row;
+    apply_relic_ammo();
+    int rm, col, row;
+    editor_marker(&rm, &col, &row);
+    g.editing = false;
+    g.test_play = true;
+    g.mode = M_OVERWORLD;
+    g.mode_timer = 0;
+    g.hero_dying = false;
+    g.respawn_timer = 0;
+    GeEntity *p = hero();
+    p->active = true;
+    p->max_hp = hero_masks();
+    p->hp = ge_clampi(g.snap.hp, 1, p->max_hp);
+    p->meter = g.snap.meter;
+    p->ammo = ge_clampi(g.snap.ammo, 0, p->def->ammo_max);
+    p->dead_timer = 0;
+    p->invuln = 30;
+    ge_anim_play(&p->anim, p->def->clip_idle, true);
+    room_enter(rm, NULL);
+    /* at the marker: on the floor under it, or out of the rock it is in */
+    int r = ge_clampi(row, 0, room()->h - 1);
+    while (r > 0 && ge_tilemap_get(&g.world.map, col, r) == GE_TILE_SOLID) r--;
+    float x = col * GE_TILE + 8.0f, y = ground_at(x, (float)(r * GE_TILE));
+    p->pos = (GeVec2){ x, y };
+    p->vel = (GeVec2){ 0, 0 };
+    p->state = GE_ST_IDLE;
+    g.safe_x = x; g.safe_y = y;
+    g.world.follow = g.player;
+    g.world.cam.x = x - SCREEN_W * 0.5f;
+    g.world.cam.y = y - SCREEN_H * 0.65f;
+    say("TESTING. START: BACK TO EDITING", 150);
+    g.bottom_dirty = true;
+    LOG("editor: test play in %s from %d,%d", room()->name, col, row);
+}
+
+/* STOP EDITING: what happens now counts */
+static void stop_editing(void) {
+    g.test_play = false;
+    editor_forget_edits();
+    say(editor_unsaved() ? "PLAYING FOR REAL. YOUR ROOMS AREN'T SAVED YET (START, THEN SAVE)" : "PLAYING FOR REAL", 180);
+    g.bottom_dirty = true;
+    LOG("editor: editing stopped, playing on in %s", room()->name);
+}
+
 /* Things that are hard to undo (switching the log off, wiping the Paragon's memory) need a second tap or A
  * press within two seconds: a stray touch on the bottom screen should never cost a play log. */
 static bool confirmed(int item) {
@@ -1303,7 +1422,12 @@ static void menu_apply(int item, int dir, bool act) {
             LOG("dev: exported %d character files to %s/_export", n, mods_dir());
         }
         break;
-    case MI_CLOSE:  if (act || dir) g.menu_open = !g.menu_open; break;
+    case MI_EDIT:
+        if (!act) break;
+        g.menu_open = false;
+        if (can_edit()) open_editor();
+        else say("THE EDITOR OPENS FROM THE OVERWORLD (NOT IN A FIGHT)", 120);
+        break;
     }
 }
 
@@ -1436,6 +1560,12 @@ static void draw_coach(GeImage *fb) {
 
 static bool draw_bottom(void *user, GeImage *fb) {
     (void)user;
+    if (g.editing) return editor_draw_bottom(fb);
+    if (g.test_play && !coach_showing() && !g.menu_open) {
+        bool force = g.bottom_dirty;
+        g.bottom_dirty = false;
+        return editor_draw_test(fb, &g.pz, force);
+    }
     if (coach_showing()) {
         coach_update();
         if (paragon_duel() && g.tick >= (uint32_t)g.coach_facts_tick) {   /* refresh its beliefs every two seconds */
@@ -1468,10 +1598,10 @@ static bool draw_bottom(void *user, GeImage *fb) {
     const char *val[MI_COUNT] = { g.show_perf ? "ON" : "OFF", detail, devlog_is_open() ? "ON" : (g.log_wanted ? "NO SD?" : "OFF"),
                                   g.god ? "ON" : "OFF", g.difficulty < 0 ? "EASY" : g.difficulty > 0 ? "HARD" : "NORMAL",
                                   WARPS[g.warp_sel].name, "TAP", "TAP", "TAP", "TAP",
-                                  g.confirm_item == MI_RESET ? "TAP AGAIN TO WIPE" : "TAP", g.menu_open ? "RESUME" : "PAUSE" };
+                                  g.confirm_item == MI_RESET ? "TAP AGAIN TO WIPE" : "TAP", "START" };
     if (g.confirm_item == MI_LOG) val[MI_LOG] = "TAP AGAIN: OFF";
     const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DIFFICULTY", "WARP (TAP TO GO)", "PRACTICE DUEL",
-                                    "MARK THIS MOMENT", "RELOAD MODS", "EXPORT CHARACTERS", "WIPE PARAGON MEMORY", "GAME" };
+                                    "MARK THIS MOMENT", "RELOAD MODS", "EXPORT CHARACTERS", "WIPE PARAGON MEMORY", "EDIT WORLD" };
     for (int i = 0; i < MI_COUNT; i++) {
         int y = BM_ROW_Y + i * BM_ROW_H;
         bool sel = i == g.menu_sel && (g.menu_open || g.tap_flash > 0);
@@ -1510,9 +1640,26 @@ static bool draw_bottom(void *user, GeImage *fb) {
 static void demo_update(void *user, const GeInput *in) {
     (void)user;
     uint64_t t0 = ge_plat_time_us();
-    bottom_touch(in);                                      /* the bottom screen works paused or not */
+    if (g.editing) {                                       /* the editor has both screens; the game waits */
+        if (editor_update(in) == ED_PLAY) start_test();
+        g.update_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.update_ms) * 0.1f;
+        return;
+    }
+    if (g.test_play && !g.menu_open && !coach_showing()) {   /* the test play's own bottom screen */
+        TestAction a = editor_test_touch(in);
+        if (a == TP_EDIT) { if (can_edit()) open_editor(); else say("FINISH THIS FIRST, THEN BACK TO EDITING", 90); }
+        else if (a == TP_RESTART) start_test();
+        else if (a == TP_STOP) stop_editing();
+        if (a != TP_NONE) { g.update_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.update_ms) * 0.1f; return; }
+    } else {
+        bottom_touch(in);                                  /* the bottom screen works paused or not */
+    }
     if (g.menu_open) menu_input(in);                       /* the game is paused underneath */
     else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; g.bottom_dirty = true; calm_flush(); }
+    else if ((in->pressed & GE_BTN_START) && g.mode == M_OVERWORLD && !g.autoplay) {   /* START: the world editor */
+        if (can_edit()) open_editor();
+        else say(g.boss_engaged ? "NOT DURING A BOSS FIGHT" : "NOT RIGHT NOW", 90);
+    }
     else {
         demo_update_inner(in);
         if (g.mode == M_BATTLE) g.ticks_duel++; else g.ticks_world++;
@@ -1810,6 +1957,7 @@ static void demo_draw(void *user, GeImage *fb) {
 }
 
 static void demo_draw_inner(GeImage *fb) {
+    if (g.editing) { ge_world_draw(&g.world, fb); editor_draw_top(fb); return; }
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
         if (paragon_duel() && g.fight_live) draw_paragon_voice(fb);
@@ -1848,6 +1996,7 @@ static void demo_draw_inner(GeImage *fb) {
 
 static void demo_shutdown(void *user) {
     (void)user;
+    editor_autosave();                     /* quitting with START+SELECT (or ESC) mid-edit keeps the work */
     if (devlog_is_open()) {
         uint64_t secs = (g.now_us - g.start_us) / 1000000u;
         devlog("session end. play time %s (exploring %s, duelling %s)", devlog_hms(secs), devlog_hms((uint64_t)g.ticks_world / 60),
@@ -1862,9 +2011,11 @@ static void demo_shutdown(void *user) {
     }
 #ifdef DEMO_HEADLESS
     GeEntity *p = hero();
-    printf("mode=%d x=%.0f (col %d) masks=%d kills=%d duels_won=%d duels_lost=%d deaths=%d heals=%d boss=%s checksum=%08x\n",
+    printf("mode=%d x=%.0f (col %d) masks=%d kills=%d duels_won=%d duels_lost=%d deaths=%d heals=%d boss=%s room=%s editing=%d "
+           "checksum=%08x bottom=%08x\n",
            g.mode, p->pos.x, (int)(p->pos.x / GE_TILE), p->active ? p->hp : 0, g.kills, g.duels_won, g.duels_lost, g.deaths, g.heals,
-           boss_beaten_anywhere() ? "defeated" : (g.boss_engaged ? "fighting" : "waiting"), ge_null_last_checksum());
+           boss_beaten_anywhere() ? "defeated" : (g.boss_engaged ? "fighting" : "waiting"), room()->name, g.editing ? 1 : (g.test_play ? 2 : 0),
+           ge_null_last_checksum(), ge_null_bottom_checksum());
 #endif
     paragon_profile_save(&g.model);
     encounter_free();
@@ -1884,21 +2035,34 @@ static uint32_t tap_script(void *user, int frame) {
     for (int i = 0; i < g_ntaps; i++) if (frame >= g_taps[i].frame && frame <= g_taps[i].last) b |= g_taps[i].btn;
     return b;
 }
-/* --touch 160,100@300: a scripted tap on the bottom screen */
-static struct { int x, y, frame; } g_touches[16];
+/* --touch 160,100@300: a scripted tap on the bottom screen (one frame); 160,100@300-310: held there;
+ * 40,60>200,60@300-330: dragged from one point to the other over those frames. Entries separated by ; */
+static struct { int x0, y0, x1, y1, f0, f1; } g_touches[64];
 static int g_ntouches;
 static int touch_script(void *user, int frame, int *x, int *y) {
     (void)user;
-    for (int i = 0; i < g_ntouches; i++)
-        if (g_touches[i].frame == frame) { *x = g_touches[i].x; *y = g_touches[i].y; return 1; }
+    for (int i = 0; i < g_ntouches; i++) {
+        if (frame < g_touches[i].f0 || frame > g_touches[i].f1) continue;
+        int span = g_touches[i].f1 - g_touches[i].f0, at = frame - g_touches[i].f0;
+        *x = span ? g_touches[i].x0 + (g_touches[i].x1 - g_touches[i].x0) * at / span : g_touches[i].x0;
+        *y = span ? g_touches[i].y0 + (g_touches[i].y1 - g_touches[i].y0) * at / span : g_touches[i].y0;
+        return 1;
+    }
     return 0;
 }
 static void parse_touches(const char *s) {
-    int x, y, frame, used;
-    while (g_ntouches < 16 && sscanf(s, "%d,%d@%d%n", &x, &y, &frame, &used) == 3) {
-        g_touches[g_ntouches].x = x; g_touches[g_ntouches].y = y; g_touches[g_ntouches++].frame = frame;
+    int x0, y0, used;
+    while (g_ntouches < 64 && sscanf(s, "%d,%d%n", &x0, &y0, &used) == 2) {
         s += used;
-        if (*s == ';' || *s == ' ') s++;
+        int x1 = x0, y1 = y0, f0, f1;
+        if (*s == '>' && sscanf(s, ">%d,%d%n", &x1, &y1, &used) == 2) s += used;
+        if (sscanf(s, "@%d%n", &f0, &used) != 1) break;
+        s += used;
+        f1 = f0;
+        if (*s == '-' && sscanf(s, "-%d%n", &f1, &used) == 1) s += used;
+        g_touches[g_ntouches].x0 = x0; g_touches[g_ntouches].y0 = y0; g_touches[g_ntouches].x1 = x1; g_touches[g_ntouches].y1 = y1;
+        g_touches[g_ntouches].f0 = f0; g_touches[g_ntouches++].f1 = f1;
+        if (*s == ';' || *s == ' ' || *s == ',') s++;
     }
 }
 static void parse_taps(const char *s) {
