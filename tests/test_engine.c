@@ -427,6 +427,94 @@ static void test_armor_grounded_zoom_font(void) {
     ge_sprite_free(&s);
 }
 
+/* The background compositor skips hidden layers and pixels other things will cover; whatever the layers,
+ * tiles, scrolling, clipping and zoom, the frame must come out exactly as painting everything back to front
+ * does. Random worlds, both ways, compared pixel for pixel (left of the clip column: the game's own art
+ * covers the rest, so the compositor leaves it alone). */
+static GeImage rand_layer_img(GeRng *r, int w, int h, int mode) {
+    GeImage im = ge_image_create(w, h);
+    int top = (int)(ge_rng_next(r) % (uint32_t)h);
+    for (int x = 0; x < w; x++) {
+        top += (int)(ge_rng_next(r) % 7u) - 3;
+        if (top < 0) top = 0;
+        if (top > h) top = h;
+        for (int y = 0; y < h; y++) {
+            uint32_t c = ge_rng_next(r) & 0x00FFFFFFu, a = 0;
+            if (mode == 0) a = 255;                                         /* solid (a sky) */
+            else if (y >= top) a = ge_rng_next(r) % 23u == 0 ? 0 : 255;     /* a silhouette with a few holes */
+            if (mode == 2 && a && ge_rng_next(r) % 5u == 0) a = 1 + ge_rng_next(r) % 254u;   /* see-through bits */
+            if (mode == 1 && y >= h - 3) a = 255;                           /* solid bottom rows */
+            im.px[y * w + x] = (a << 24) | c;
+        }
+    }
+    return im;
+}
+
+static void test_compositor_matches_painting(void) {
+    puts("background compositor vs painting in order");
+    GeRng r;
+    ge_rng_seed(&r, 2024);
+    int bad = 0, trials = 300;
+    GeImage a = ge_image_create(400, 240), b = ge_image_create(400, 240);
+    for (int t = 0; t < trials; t++) {
+        GeWorld w;
+        ge_world_init(&w, 400, 240, (uint32_t)t);
+        if (ge_rng_next(&r) % 3u) {   /* a full-screen sky first (so nothing needs clearing), or not */
+            GeParallaxLayer sky = { .img = rand_layer_img(&r, 400 + (int)(ge_rng_next(&r) % 300u), 240, 0), .opaque = true };
+            ge_world_add_layer(&w, sky);
+        }
+        int nbg = 1 + (int)(ge_rng_next(&r) % 4u);
+        for (int i = 0; i < nbg; i++) {
+            int mode = ge_rng_next(&r) % 6u == 0 ? 2 : 1;
+            GeParallaxLayer l = { .img = rand_layer_img(&r, 32 + (int)(ge_rng_next(&r) % 700u), 10 + (int)(ge_rng_next(&r) % 200u), mode),
+                                  .factor_x = ge_rng_range(&r, 0.0f, 1.2f), .factor_y = ge_rng_next(&r) % 2u ? 0.0f : ge_rng_range(&r, 0.0f, 0.5f),
+                                  .auto_x = ge_rng_next(&r) % 3u == 0 ? ge_rng_range(&r, -0.3f, 0.3f) : 0.0f,
+                                  .y = (int)(ge_rng_next(&r) % 260u) - 30, .additive = ge_rng_next(&r) % 9u == 0,
+                                  .optional = ge_rng_next(&r) % 4u == 0 };
+            ge_world_add_layer(&w, l);
+        }
+        int nfg = (int)(ge_rng_next(&r) % 3u);
+        for (int i = 0; i < nfg; i++) {
+            GeParallaxLayer l = { .img = rand_layer_img(&r, 64 + (int)(ge_rng_next(&r) % 400u), 10 + (int)(ge_rng_next(&r) % 60u), 1 + (int)(ge_rng_next(&r) % 2u)),
+                                  .factor_x = ge_rng_range(&r, 1.0f, 1.7f), .y = (int)(ge_rng_next(&r) % 240u), .foreground = true };
+            ge_world_add_layer(&w, l);
+        }
+        if (ge_rng_next(&r) % 4u) {   /* tiles: two solid cells, one with see-through pixels */
+            w.tileset = ge_image_create(GE_TILE * 3, GE_TILE);
+            for (int i = 0; i < GE_TILE * 3 * GE_TILE; i++) {
+                int cell = (i % (GE_TILE * 3)) / GE_TILE;
+                w.tileset.px[i] = (cell == 2 && i % 3 == 0 ? 0x40000000u : 0xFF000000u) | (ge_rng_next(&r) & 0xFFFFFFu);
+            }
+            ge_tilemap_create(&w.map, 80, 30);
+            for (int i = 0; i < 80 * 30; i++) {
+                int row = i / 80;
+                bool solid = row >= 22 ? ge_rng_next(&r) % 8u != 0 : ge_rng_next(&r) % 11u == 0;
+                w.map.type[i] = solid ? GE_TILE_SOLID : GE_TILE_EMPTY;
+                w.map.vis[i] = (uint8_t)(ge_rng_next(&r) % 3u);
+            }
+        }
+        w.zoom = ge_rng_next(&r) % 4u == 0 ? 2 : 1;
+        w.low_detail = ge_rng_next(&r) % 2u;
+        w.background_clip_x = ge_rng_next(&r) % 4u == 0 ? 50 + (int)(ge_rng_next(&r) % 350u) : 0;
+        w.tick = ge_rng_next(&r) % 5000u;
+        w.cam.x = ge_rng_range(&r, -50.0f, 900.0f);
+        w.cam.y = ge_rng_range(&r, -40.0f, 300.0f);
+        for (int i = 0; i < 400 * 240; i++) a.px[i] = b.px[i] = 0xFF000000u | (uint32_t)i * 2654435761u;   /* the same leftovers */
+        w.reference_background = true;
+        ge_world_draw(&w, &a);
+        w.reference_background = false;
+        ge_world_draw(&w, &b);
+        int cw = w.background_clip_x > 0 ? w.background_clip_x : 400;
+        bool same = true;
+        for (int y = 0; y < 240 && same; y++)
+            for (int x = 0; x < cw; x++) if (a.px[y * 400 + x] != b.px[y * 400 + x]) { same = false; break; }
+        if (!same && bad++ < 3) printf("  world %d differs (layers %d, zoom %d, clip %d, low %d)\n", t, w.nlayers, w.zoom, w.background_clip_x, w.low_detail);
+        ge_world_free(&w);
+    }
+    CHECK(bad == 0);
+    ge_image_free(&a); ge_image_free(&b);
+}
+
 /* Outlined text: the direct path (scale 1, opaque, fully on screen) must draw exactly what the general
  * clipped path draws, and the outline goes all the way round, the right side included. */
 static void test_text_outline(void) {
@@ -513,6 +601,43 @@ static void test_3ds_rotate(void) {
 }
 
 /* Fast paths must draw exactly what the plain blit draws -- including when clipped or off-screen. */
+/* The magnified blitter against the plain rule, pixel by pixel: random sheets (solid, see-through and empty
+ * pixels), source rects, positions clipped on every edge at odd offsets, flips, opaque or not, 2x and 3x. */
+static void test_blit_scaled_random(void) {
+    puts("magnified blits vs the plain rule");
+    GeRng r;
+    ge_rng_seed(&r, 77);
+    GeImage src = ge_image_create(20, 20), a = ge_image_create(64, 48), b = ge_image_create(64, 48);
+    int bad = 0;
+    static const int fl[] = { 0, GE_FLIP_X, GE_FLIP_Y, GE_FLIP_X | GE_FLIP_Y, GE_OPAQUE, GE_OPAQUE | GE_FLIP_X };
+    for (int t = 0; t < 2000; t++) {
+        for (int i = 0; i < 400; i++) {
+            uint32_t k = ge_rng_next(&r) % 4u, al = k == 0 ? 0 : k == 1 ? 1 + ge_rng_next(&r) % 254u : 255;
+            src.px[i] = (al << 24) | (ge_rng_next(&r) & 0xFFFFFFu);
+        }
+        for (int i = 0; i < 64 * 48; i++) a.px[i] = b.px[i] = 0xFF000000u | (ge_rng_next(&r) & 0xFFFFFFu);
+        GeIRect sr = { (int)(ge_rng_next(&r) % 10u), (int)(ge_rng_next(&r) % 10u), 1 + (int)(ge_rng_next(&r) % 10u), 1 + (int)(ge_rng_next(&r) % 10u) };
+        int scale = 2 + (int)(ge_rng_next(&r) % 2u), flags = fl[ge_rng_next(&r) % 6u];
+        int dx = (int)(ge_rng_next(&r) % 100u) - 30, dy = (int)(ge_rng_next(&r) % 80u) - 30;
+        ge_blit_scaled(&a, &src, sr, dx, dy, scale, flags, GE_WHITE);
+        for (int y = 0; y < 48; y++)
+            for (int x = 0; x < 64; x++) {
+                int lx = x - dx, ly = y - dy;
+                if (lx < 0 || ly < 0 || lx >= sr.w * scale || ly >= sr.h * scale) continue;
+                lx /= scale; ly /= scale;
+                int sx = (flags & GE_FLIP_X) ? sr.x + sr.w - 1 - lx : sr.x + lx;
+                int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
+                uint32_t c = src.px[sy * 20 + sx];
+                if (flags & GE_OPAQUE) b.px[y * 64 + x] = c;
+                else ge_blend_row(&b.px[y * 64 + x], &c, 1, 0);
+            }
+        if (memcmp(a.px, b.px, sizeof(uint32_t) * 64 * 48) != 0 && bad++ < 3)
+            printf("  case %d differs (scale %d, flags %d, at %d,%d, rect %dx%d)\n", t, scale, flags, dx, dy, sr.w, sr.h);
+    }
+    CHECK(bad == 0);
+    ge_image_free(&src); ge_image_free(&a); ge_image_free(&b);
+}
+
 static void test_blit_fast_paths(void) {
     puts("blit fast paths");
     GeImage ts = ge_image_create(GE_TILE * 2, GE_TILE), a = ge_image_create(64, 48), b = ge_image_create(64, 48);
@@ -871,6 +996,8 @@ int main(void) {
     test_armor_grounded_zoom_font();
     test_3ds_rotate();
     test_text_outline();
+    test_compositor_matches_painting();
+    test_blit_scaled_random();
     test_blit_fast_paths();
     test_gfx();
     test_patterns();

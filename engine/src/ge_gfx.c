@@ -247,6 +247,48 @@ void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy
     int lx0 = (x0 - dx) / scale, sub0 = (x0 - dx) % scale;
     int ly = (y0 - dy) / scale, suby = (y0 - dy) % scale;
     int step = (flags & GE_FLIP_X) ? -1 : 1;
+    if (scale == 2 && (opaque || fast)) {
+        /* The duels' 2x zoom: each source pixel is read and tested once for its whole 2x2 block, and two
+         * screen rows are written per pass where both are on screen. */
+        int n = x1 - x0;
+        for (int y = y0; y < y1; ) {
+            bool pair = suby == 0 && y + 1 < y1;
+            uint32_t *d0 = dst->px + (size_t)y * dst->w + x0, *d1 = d0 + dst->w;
+            int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
+            const uint32_t *sp = src->px + (size_t)sy * src->w + (step < 0 ? sr.x + sr.w - 1 - lx0 : sr.x + lx0);
+            int i = 0;
+#define PUT2(d, k, s) do { uint32_t sa_ = (s) >> 24;                                                       \
+                           if (opaque || sa_ == 255) d[k] = (s); else if (sa_) d[k] = px_blend(d[k], (s), 0); } while (0)
+            if (sub0) {                                     /* starting on the right half of a source pixel */
+                uint32_t c = *sp; sp += step;
+                PUT2(d0, 0, c);
+                if (pair) PUT2(d1, 0, c);
+                i = 1;
+            }
+            if (pair) {
+                for (; i + 2 <= n; i += 2, sp += step) {
+                    uint32_t c = *sp, sa = c >> 24;
+                    if (opaque || sa == 255) { d0[i] = c; d0[i + 1] = c; d1[i] = c; d1[i + 1] = c; }
+                    else if (sa) {
+                        d0[i] = px_blend(d0[i], c, 0); d0[i + 1] = px_blend(d0[i + 1], c, 0);
+                        d1[i] = px_blend(d1[i], c, 0); d1[i + 1] = px_blend(d1[i + 1], c, 0);
+                    }
+                }
+                if (i < n) { uint32_t c = *sp; PUT2(d0, i, c); PUT2(d1, i, c); }
+            } else {
+                for (; i + 2 <= n; i += 2, sp += step) {
+                    uint32_t c = *sp, sa = c >> 24;
+                    if (opaque || sa == 255) { d0[i] = c; d0[i + 1] = c; }
+                    else if (sa) { d0[i] = px_blend(d0[i], c, 0); d0[i + 1] = px_blend(d0[i + 1], c, 0); }
+                }
+                if (i < n) { uint32_t c = *sp; PUT2(d0, i, c); }
+            }
+#undef PUT2
+            if (pair) { y += 2; ly++; }
+            else { y++; if (++suby == 2) { suby = 0; ly++; } }
+        }
+        return;
+    }
     const uint32_t *prev = NULL;                            /* the row above, if it came from the same source row */
     for (int y = y0; y < y1; y++) {
         uint32_t *drow = dst->px + (size_t)y * dst->w;
