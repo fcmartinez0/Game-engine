@@ -70,6 +70,12 @@ run "$d" --no-mods --frames 120 --press "START@30,START@40" --touch "240,99@60;2
 check "stopped" has "$d/run.log" "editor: editing stopped, playing on in gloamwood"
 check "playing for real" has "$d/out.txt" "editing=0"
 
+# 7. A sign's words, typed on the on-screen keyboard (I ' M), are saved as typed.
+d="$tmp/sign"
+run "$d" --no-mods --frames 140 --press "START@30" --touch "200,204@40;80,228@50;140,116@60;240,156@70;304,180@75;208,204@80;276,228@90;224,12@100"
+check "sign placed" has "$d/run.log" "editor: placed sign at 17,11 in gloamwood"
+check "sign words saved" has "$d/mods/world.txt" "^thing sign 17 11 text=\"I'M\""
+
 rm -rf "$tmp"
 [ $fail = 0 ] && echo "editor: all checks passed"
 exit $fail
