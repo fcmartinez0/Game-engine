@@ -481,7 +481,7 @@ void art_make_tileset(GeImage *tiles) {
     ge_rng_seed(&r, 7);
     const uint32_t d0 = GE_RGB(86, 58, 56), d1 = GE_RGB(100, 68, 62), d2 = GE_RGB(64, 44, 48);
     const uint32_t s0 = GE_RGB(70, 66, 92), s1 = GE_RGB(84, 80, 108), s2 = GE_RGB(52, 48, 72);
-    for (int t = 0; t < TV_COUNT; t++)
+    for (int t = 0; t < TV_FIRST_PUZZLE; t++)
         for (int y = 0; y < GE_TILE; y++)
             for (int x = 0; x < GE_TILE; x++) {
                 float n = ge_rng_float(&r);
@@ -516,6 +516,43 @@ void art_make_tileset(GeImage *tiles) {
             int hw = (y + 1) / 4, x0 = TV_SPIKE * GE_TILE + k * 4 + 2 - hw;
             ge_fill_rect(tiles, x0, 4 + y, hw * 2 + 1, 1, y < 2 ? GE_RGB(240, 240, 255) : mix(GE_RGB(190, 190, 210), GE_RGB(80, 76, 100), (float)y / 12), 0);
         }
+    art_puzzle_tiles(tiles);
+}
+
+/* The puzzle cells (placeholder art): drawn after the others with their own random numbers, so adding
+ * them left every older cell exactly as it was. */
+void art_puzzle_tiles(GeImage *tiles) {
+    GeRng r;
+    ge_rng_seed(&r, 31);
+    const uint32_t s0 = GE_RGB(70, 66, 92), s1 = GE_RGB(84, 80, 108), s2 = GE_RGB(52, 48, 72);
+    int cx = TV_CRACK * GE_TILE, gx = TV_GATE * GE_TILE, bx = TV_CRATE * GE_TILE, lx = TV_LOCK * GE_TILE;
+    for (int y = 0; y < GE_TILE; y++)
+        for (int x = 0; x < GE_TILE; x++) {
+            float n = ge_rng_float(&r);
+            uint32_t c = n < 0.15f ? s2 : (n > 0.8f ? s1 : s0);              /* cracked stone: stone, lighter, */
+            if (y % 8 == 7 || (x + (y / 8) * 8) % 16 == 0) c = s2;
+            tiles->px[y * tiles->w + cx + x] = mix(c, GE_RGB(120, 110, 130), 0.25f);
+            tiles->px[y * tiles->w + gx + x] = 0;                            /* gate: see-through between bars */
+            uint32_t wood = (x + y) % 5 == 0 ? GE_RGB(132, 90, 56) : GE_RGB(150, 104, 66);   /* crate */
+            if (x == 0 || y == 0 || x == GE_TILE - 1 || y == GE_TILE - 1) wood = GE_RGB(70, 46, 40);
+            else if (x == y || x == GE_TILE - 1 - y) wood = GE_RGB(100, 68, 50);
+            tiles->px[y * tiles->w + bx + x] = wood;
+            uint32_t door = (x % 5 == 0) ? GE_RGB(54, 38, 34) : GE_RGB(80, 56, 46);       /* lock: heavy planks, */
+            if (y == 2 || y == 13) door = GE_RGB(110, 108, 124);                           /* iron bands */
+            tiles->px[y * tiles->w + lx + x] = door;
+        }
+    static const int crack[][2] = { { 3, 0 }, { 4, 3 }, { 7, 5 }, { 6, 8 }, { 9, 11 }, { 8, 15 } };
+    for (int i = 0; i + 1 < 6; i++)
+        ge_draw_line(tiles, cx + crack[i][0], crack[i][1], cx + crack[i + 1][0], crack[i + 1][1], 1, GE_RGB(24, 20, 34));
+    ge_draw_line(tiles, cx + 7, 5, cx + 12, 4, 1, GE_RGB(24, 20, 34));
+    for (int k = 0; k < 3; k++)                                                    /* gate bars */
+        for (int y = 0; y < GE_TILE; y++) {
+            tiles->px[y * tiles->w + gx + 2 + k * 5] = GE_RGB(46, 44, 58);
+            tiles->px[y * tiles->w + gx + 3 + k * 5] = GE_RGB(120, 118, 140);
+        }
+    for (int x = 0; x < GE_TILE; x++) tiles->px[4 * tiles->w + gx + x] = tiles->px[12 * tiles->w + gx + x] = GE_RGB(80, 78, 96);
+    ge_fill_rect(tiles, lx + 6, 6, 4, 4, GE_RGB(220, 180, 80), 0);               /* the keyhole plate */
+    ge_fill_rect(tiles, lx + 7, 7, 2, 3, GE_RGB(20, 14, 20), 0);
 }
 
 void art_draw_bench(GeImage *fb, int x, int y) {

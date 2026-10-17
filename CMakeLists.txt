@@ -23,7 +23,7 @@ endif()
 # compiled straight into each executable (a static library would create a
 # circular dependency with the core).
 find_package(SDL2 QUIET)
-set(DEMO_SRC demo/main.c demo/art.c demo/backdrop.c demo/chars.c demo/level.c demo/devlog.c demo/paragon.c demo/encounter.c demo/mods.c)
+set(DEMO_SRC demo/main.c demo/art.c demo/backdrop.c demo/chars.c demo/world.c demo/devlog.c demo/paragon.c demo/encounter.c demo/mods.c)
 
 add_executable(demo_headless ${DEMO_SRC} platform/null.c)
 target_compile_definitions(demo_headless PRIVATE DEMO_HEADLESS)
@@ -51,6 +51,9 @@ add_executable(fight_tests tests/test_fight.c)
 target_link_libraries(fight_tests ge)
 add_test(NAME fight_tests COMMAND fight_tests)
 
+add_executable(world_tests tests/test_world.c demo/world.c)
+target_link_libraries(world_tests ge)
+add_test(NAME world_tests COMMAND world_tests)
 add_executable(paragon_tests tests/test_paragon.c)
 target_link_libraries(paragon_tests ge)
 add_test(NAME paragon_tests COMMAND paragon_tests)

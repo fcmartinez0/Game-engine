@@ -8,6 +8,7 @@
 #include "ge/ge_font.h"
 #include "ge/ge_platform.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +20,7 @@
 #include <3ds.h>
 #endif
 
-#define MAX_SPAWNS 32
+#define DUEL_PRACTICE (-2)        /* g.duel for a practice duel: nobody in the room */
 
 typedef enum { M_OVERWORLD, M_ALERT, M_TRANS_IN, M_BATTLE, M_TRANS_OUT, M_VICTORY, M_REPORT } Mode;
 enum { B_SLEEP, B_INTRO, B_IDLE, B_SWING, B_CHARGE, B_LEAP, B_THROW, B_DEAD };
@@ -33,14 +34,17 @@ typedef struct {
     Mode mode;
     int mode_timer;
 
+    World wd;                     /* every room, as data (the built-in world or mods/world.txt) */
+    char world_problem[96];       /* why mods/world.txt wasn't used, if it wasn't */
+    int room;                     /* the one being played */
     int player;
-    int ent_of[MAX_SPAWNS];       /* entity per level spawn, -1 = gone */
-    bool beaten[MAX_SPAWNS];
-    int duel;                     /* spawn index being duelled */
+    int ent_of[ROOM_MAX_THINGS];  /* entity per thing of the room, -1 = none or gone */
+    bool beaten[WORLD_MAX_ROOMS][ROOM_MAX_THINGS];
+    int duel;                     /* the thing being duelled, or DUEL_PRACTICE */
     bool first_strike;
     int duel_result;
     int duel_cd;
-    int bench_col;
+    int bench_room, bench_col, bench_row;   /* where you rested last */
     float safe_x, safe_y;
     int warp_fade;                /* spike respawn fade */
     bool hero_dying;
@@ -108,6 +112,35 @@ static bool g_log;
 
 static GeEntity *hero(void) { return &g.world.ents[g.player]; }
 
+/* ---- the room being played, as data ---------------------------------------- */
+static Room *room(void) { return &g.wd.rooms[g.room]; }
+static Thing *thing(int i) { return &room()->things[i]; }
+#define BEATEN(i) g.beaten[g.room][i]
+static const Thing *find_thing(int kind) { int i = room_find(room(), kind, 0); return i >= 0 ? thing(i) : NULL; }
+static float thing_x(const Thing *t) { return t->col * GE_TILE + 8.0f; }       /* its centre */
+static float thing_feet(const Thing *t) { return (t->row + 1) * (float)GE_TILE; }   /* the floor it stands on */
+/* the overworld entity kind a thing spawns, or -1 */
+static int thing_entity_kind(int kind) {
+    switch (kind) {
+    case TH_CRAWLER: return EN_CRAWLER;
+    case TH_BAT: return EN_BAT;
+    case TH_SPITTER: return EN_SPITTER;
+    case TH_GRUNT: return EN_GRUNT;
+    case TH_DUELIST: return EN_DUELIST;
+    case TH_BOSS: return EN_BOSS;
+    default: return -1;
+    }
+}
+/* a practice duel's opponent: Grobb at beginner strength, wherever you are */
+static const Thing *practice_thing(void) {
+    static Thing t;
+    if (!t.name[0]) { t = thing_default(TH_DUELIST, 0, 0); t.style = STYLE_BRAWLER; t.level = 0; snprintf(t.name, sizeof t.name, "GROBB"); }
+    return &t;
+}
+static const Thing *duel_thing(void) { return g.duel == DUEL_PRACTICE ? practice_thing() : thing(g.duel); }
+static int duel_ent(void) { return g.duel >= 0 ? g.ent_of[g.duel] : -1; }
+static int boss_ent(void) { return g.boss_spawn >= 0 ? g.ent_of[g.boss_spawn] : -1; }
+
 /* Writing to the SD card stalls the game for tens of milliseconds on a 3DS, so the play log is written at
  * moments nobody is playing through: a black fade, a bench, the menu (and at least once a minute). */
 static void calm_flush(void) { devlog_flush(); }
@@ -142,12 +175,59 @@ static void load_settings(void) {
 }
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
 
+/* ---- rooms ---------------------------------------------------------------- */
+
+static const char *world_path(void) {
+    static char p[192];
+    snprintf(p, sizeof p, "%s/world.txt", mods_dir());
+    return p;
+}
+
+/* The world to play: mods/world.txt if there is one (the editor saves there), else the built-in one. */
+static void load_world(void) {
+    char err[120];
+    if (!g.no_mods) {
+        FILE *f = fopen(world_path(), "r");
+        if (f) {
+            fclose(f);
+            int rc = world_load(&g.wd, world_path(), err, sizeof err);
+            if (rc == 0) { LOG("world: %d rooms from %s", g.wd.nrooms, world_path()); return; }
+            LOG("world: %s line %d: %s (playing the built-in world)", world_path(), rc, err);
+            snprintf(g.world_problem, sizeof g.world_problem, "WORLD.TXT LINE %d: %.70s", rc, err);
+        }
+    }
+    world_builtin(&g.wd);
+}
+
+static const char *room_title(void) {
+    static char t[32];
+    if (!strcmp(room()->name, "gloamwood")) return "THE GLOAMWOOD";
+    size_t i = 0;
+    for (; room()->name[i] && i + 1 < sizeof t; i++) t[i] = (char)toupper((unsigned char)room()->name[i]);
+    t[i] = 0;
+    return t;
+}
+
+static void build_warps(void);
+static void arena_set_exit(bool closed);
+
+/* Make room r the one being played: its tilemap from its tiles; nothing spawned yet. */
+static void room_build(int r) {
+    g.room = r;
+    room_build_tilemap(room(), &g.world.map);
+    for (int i = 0; i < ROOM_MAX_THINGS; i++) g.ent_of[i] = -1;
+    g.boss_spawn = g.paragon_spawn = -1;
+    arena_set_exit(true);            /* the arena's far door is shut until its boss falls */
+    build_warps();
+}
+
 /* ---- spawning ---------------------------------------------------------- */
 
 static float ground_at(float x, float y) {
-    if (x >= HALL_COL0 * GE_TILE) y = 7.0f * GE_TILE;      /* the hall has a ceiling: look for the floor below it */
+    const Thing *h = find_thing(TH_HALL);
+    if (h && x >= h->col * GE_TILE) y = (float)(h->row - h->h + 2) * GE_TILE;   /* the hall has a ceiling: look for the floor below it */
     float gy = ge_world_ground_y(&g.world, x, y);
-    return gy < 0 ? (float)(GROUND_ROW * GE_TILE) : gy;
+    return gy < 0 ? (float)((room()->h - 3) * GE_TILE) : gy;
 }
 
 static void spawn_hero(float x) {
@@ -161,7 +241,7 @@ static void spawn_hero(float x) {
 static GeActorDef g_duel_defs[3];
 
 static const GeSprite *duel_sprite(int variant) {
-    return variant == DUEL_PARAGON ? &g.spr.paragon : variant == DUEL_FENCER ? &g.spr.fencer : &g.spr.brawler;
+    return variant == STYLE_PARAGON ? &g.spr.paragon : variant == STYLE_FENCER ? &g.spr.fencer : &g.spr.brawler;
 }
 
 static bool ordinary_enemy(int kind) { return kind == EN_CRAWLER || kind == EN_BAT || kind == EN_SPITTER || kind == EN_GRUNT; }
@@ -170,31 +250,33 @@ static bool ordinary_enemy(int kind) { return kind == EN_CRAWLER || kind == EN_B
  * alive and at full health, the way Hollow Knight refills a room when you rest: duelists you beat and the
  * boss stay beaten. */
 static void spawn_level_part(bool ordinary_only) {
-    for (int i = 0; i < level_nspawns && i < MAX_SPAWNS; i++) {
-        const Spawn *s = &level_spawns[i];
+    for (int i = 0; i < room()->nthings; i++) {
+        const Thing *s = thing(i);
+        int kind = thing_entity_kind(s->kind);
+        if (kind < 0) continue;
         if (ordinary_only) {
-            if (!ordinary_enemy(s->kind)) continue;
+            if (!ordinary_enemy(kind)) continue;
             int old = g.ent_of[i];   /* (only if that slot still holds this enemy: slots get reused) */
-            if (old >= 0 && old != g.player && g.world.ents[old].kind == s->kind) g.world.ents[old].active = false;
+            if (old >= 0 && old != g.player && g.world.ents[old].kind == kind) g.world.ents[old].active = false;
             g.ent_of[i] = -1;
-            g.beaten[i] = false;
+            BEATEN(i) = false;
         }
-        float x = s->col * GE_TILE + 8.0f, y = s->row * GE_TILE;
+        float x = thing_x(s), y = thing_feet(s);
         const GeActorDef *d = NULL;
         const GeSprite *sp = NULL;
         int hp = 10;
-        switch (s->kind) {
+        switch (kind) {
         case EN_CRAWLER: d = &g.ch.crawler; sp = &g.spr.crawler; hp = 10; break;
         case EN_BAT:     d = &g.ch.bat; sp = &g.spr.bat; hp = 8; break;
         case EN_SPITTER: d = &g.ch.spitter; sp = &g.spr.spitter; hp = 12; break;
         case EN_GRUNT:   d = &g.ch.grunt; sp = &g.spr.brawler; hp = 22; break;
-        case EN_DUELIST: d = &g_duel_defs[s->variant]; sp = duel_sprite(s->variant); hp = 999; if (s->variant == DUEL_PARAGON) g.paragon_spawn = i; break;
+        case EN_DUELIST: d = &g_duel_defs[ge_clampi(s->style, 0, 2)]; sp = duel_sprite(s->style); hp = 999; if (s->style == STYLE_PARAGON) g.paragon_spawn = i; break;
         case EN_BOSS:    d = &g.ch.warden; sp = &g.spr.warden; hp = boss_hp(); g.boss_spawn = i; break;
         }
-        g.ent_of[i] = g.beaten[i] ? -1 : ge_world_spawn(&g.world, d, sp, 1, x, y, hp);
+        g.ent_of[i] = BEATEN(i) ? -1 : ge_world_spawn(&g.world, d, sp, 1, x, y, hp);
         if (g.ent_of[i] < 0) continue;
         GeEntity *e = &g.world.ents[g.ent_of[i]];
-        e->kind = s->kind;
+        e->kind = kind;
         e->facing = -1;
         e->ai_x0 = x;
         e->ai_y0 = y;
@@ -209,13 +291,33 @@ static void spawn_level_part(bool ordinary_only) {
 static void spawn_level(void) { spawn_level_part(false); }
 static void respawn_enemies(void) { spawn_level_part(true); LOG("enemies respawned"); }
 
+/* The boss arena's two doors: a column of h tiles standing on the arena's floor row. */
+static void arena_door(int col, bool closed) {
+    const Thing *a = find_thing(TH_ARENA);
+    if (!a) return;
+    GeTilemap *m = &g.world.map;
+    for (int y = a->row - a->h + 1; y <= a->row; y++)
+        if (col >= 0 && col < m->w && y >= 0 && y < m->h) {
+            m->type[y * m->w + col] = closed ? GE_TILE_SOLID : GE_TILE_EMPTY;
+            m->vis[y * m->w + col] = TV_STONE;
+        }
+}
+static void arena_set_gate(bool closed) { const Thing *a = find_thing(TH_ARENA); if (a) arena_door(a->a, closed); }
+static void arena_set_exit(bool closed) { const Thing *a = find_thing(TH_ARENA); if (a) arena_door(a->b, closed); }
+static bool boss_beaten(void) { return g.boss_spawn >= 0 && BEATEN(g.boss_spawn); }
+static bool boss_beaten_anywhere(void) {
+    for (int r = 0; r < g.wd.nrooms; r++)
+        for (int i = 0; i < g.wd.rooms[r].nthings; i++) if (g.wd.rooms[r].things[i].kind == TH_BOSS && g.beaten[r][i]) return true;
+    return false;
+}
+
 static void reset_boss(void) {
     g.boss_engaged = false;
     g.boss_state = B_SLEEP;
     g.world.cam.locked = false;
-    level_set_gate(&g.world, false);
-    level_set_exit(&g.world, !g.beaten[g.boss_spawn]);
-    int bi = g.ent_of[g.boss_spawn];
+    arena_set_gate(false);
+    arena_set_exit(!boss_beaten());
+    int bi = boss_ent();
     if (bi >= 0 && g.world.ents[bi].active) {
         GeEntity *b = &g.world.ents[bi];
         b->hp = b->max_hp;
@@ -238,7 +340,7 @@ static void respawn_at_bench(void) {
 /* ---- events ------------------------------------------------------------ */
 
 static int spawn_of(int ent) {
-    for (int i = 0; i < level_nspawns; i++) if (g.ent_of[i] == ent) return i;
+    for (int i = 0; i < room()->nthings; i++) if (g.ent_of[i] == ent) return i;
     return -1;
 }
 
@@ -247,12 +349,9 @@ static void start_duel_alert(int spawn, bool first_strike);
 /* A practice duel from the dev menu: Grobb at beginner strength, nothing won or lost. */
 static void start_practice(void) {
     if (g.mode != M_OVERWORLD || !hero()->active) { say("PRACTICE STARTS FROM THE OVERWORLD", 90); return; }
-    int grobb = -1;
-    for (int i = 0; i < level_nspawns; i++) if (level_spawns[i].name && !strcmp(level_spawns[i].name, "GROBB")) grobb = i;
-    if (grobb < 0) return;
     g.menu_open = false;
     g.practice = true;
-    start_duel_alert(grobb, false);
+    start_duel_alert(DUEL_PRACTICE, false);
     LOG("practice duel");
 }
 
@@ -264,7 +363,7 @@ static void start_duel_alert(int spawn, bool first_strike) {
     g.first_strike = first_strike;
     g.msg_timer = 0;                       /* the alert line takes the message slot */
     memset(&g.world.intents[g.player], 0, sizeof(GeIntent));
-    LOG("duel alert: %s%s (difficulty %s)", level_spawns[spawn].name, first_strike ? " (first strike)" : "",
+    LOG("duel alert: %s%s (difficulty %s)", duel_thing()->name, first_strike ? " (first strike)" : "",
         g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
 }
 
@@ -275,7 +374,7 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         if (b == g.player) {
             g.deaths++;
             g.model.ow[GE_OW_DEATH]++;
-            int bi = g.ent_of[g.boss_spawn];
+            int bi = boss_ent();
             LOG("hero killed at col %d by %s (boss hp %d)", (int)(w->ents[b].pos.x / GE_TILE), a >= 0 ? "a strike" : "contact/shot",
                 bi >= 0 ? w->ents[bi].hp : -1);
             return;
@@ -283,19 +382,19 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         if (w->ents[b].kind == EN_BOSS) {
             g.boss_state = B_DEAD;
             g.world.cam.locked = false;
-            level_set_gate(w, false);
-            level_set_exit(w, false);
+            arena_set_gate(false);
+            arena_set_exit(false);
             g.mode = M_VICTORY; g.mode_timer = 0;
             g.boss_engaged = false;
             LOG("boss defeated");
-            g.beaten[g.boss_spawn] = true;
+            if (g.boss_spawn >= 0) BEATEN(g.boss_spawn) = true;
             for (int i = 0; i < 40; i++)
                 ge_world_emit(w, w->ents[b].pos.x, w->ents[b].pos.y - 30, ge_rng_range(&w->rng, -3, 3), ge_rng_range(&w->rng, -4, 0), 0.08f, 60,
                               GE_ARGB(255, 255, 200, 120), 3, GE_P_ADD);
         }
         g.kills++;
         int s = spawn_of(b);
-        if (s >= 0) { g.beaten[s] = true; if (ordinary_enemy(level_spawns[s].kind)) g.ent_of[s] = -1; }
+        if (s >= 0) { BEATEN(s) = true; if (ordinary_enemy(thing_entity_kind(thing(s)->kind))) g.ent_of[s] = -1; }
     } else if (ev == GE_EV_HIT && b >= 0 && w->ents[b].kind == EN_DUELIST && a == g.player) {
         w->ents[b].hp = w->ents[b].max_hp;          /* you can't slash a duelist down: you get a head start */
         int s = spawn_of(b);
@@ -416,13 +515,18 @@ static void boss_ai(int idx) {
     if (b->state == GE_ST_DEAD || g.boss_state == B_DEAD) return;
     GeEntity *p = hero();
     if (!g.boss_engaged) {
-        if (p->active && p->pos.x > (BOSS_COL0 + 3) * GE_TILE && p->pos.x < (BOSS_COL1 + 1) * GE_TILE) {
+        const Thing *a = find_thing(TH_ARENA);    /* its arena, or (without one) close enough to see it */
+        bool inside = a ? p->pos.x > (a->col + 3) * GE_TILE && p->pos.x < (a->col + a->w) * GE_TILE
+                        : fabsf(p->pos.x - b->pos.x) < 150.0f && fabsf(p->pos.y - b->pos.y) < 60.0f;
+        if (p->active && inside) {
             g.boss_engaged = true;
             g.boss_state = B_INTRO; g.boss_timer = 70;
-            level_set_gate(w, true);
-            w->cam.locked = true;
-            w->cam.lock_x0 = (float)(BOSS_COL0 - 1) * GE_TILE;
-            w->cam.lock_x1 = (float)(BOSS_COL1 + 1) * GE_TILE;
+            arena_set_gate(true);
+            w->cam.locked = a != NULL;
+            if (a) {
+                w->cam.lock_x0 = (float)(a->col - 1) * GE_TILE;
+                w->cam.lock_x1 = (float)(a->col + a->w) * GE_TILE;
+            }
             say("THORNWARDEN", 150);
             LOG("boss engaged");
             ge_world_shake(w, 6.0f);
@@ -500,11 +604,15 @@ static void hero_intent(const GeInput *in) {
     g.model.ow[GE_OW_DASH] += it->dash_pressed;
 
     /* rest at a bench: full health, and it becomes your respawn point */
-    for (int i = 0; i < level_nbenches; i++) {
-        float bx = level_benches[i] * GE_TILE + 8.0f;
+    for (int i = room_find(room(), TH_BENCH, 0); i >= 0; i = room_find(room(), TH_BENCH, i + 1)) {
+        const Thing *t = thing(i);
+        float bx = thing_x(t);
+        if (fabsf(p->pos.y - thing_feet(t)) > 20.0f) continue;
         if (fabsf(p->pos.x - bx) < 18.0f && p->on_ground && (in->pressed & GE_BTN_UP)) {
             p->hp = p->max_hp;
-            g.bench_col = level_benches[i];
+            g.bench_col = t->col;
+            g.bench_row = t->row;
+            g.bench_room = g.room;
             say("RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
             respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
@@ -534,7 +642,7 @@ static uint32_t bot_buttons(void) {
         if (dx > -30.0f && fabsf(dx) < best && fabsf(dy) < 70.0f) { best = fabsf(dx); tgt = i; }
     }
     if (g.boss_engaged && g.boss_state != B_DEAD) {
-        GeEntity *bs = &w->ents[g.ent_of[g.boss_spawn]];
+        GeEntity *bs = &w->ents[boss_ent() >= 0 ? boss_ent() : g.player];
         float dx = bs->pos.x - p->pos.x;
         int toward = dx > 0 ? 1 : -1;
         b = 0;
@@ -562,8 +670,8 @@ static uint32_t bot_buttons(void) {
         }
     }
     if (p->hp <= 2 && p->meter >= 33 && (tgt < 0 || best > 120.0f) && p->on_ground) return GE_BTN_L;
-    for (int i = 0; i < level_nbenches; i++)
-        if (fabsf(p->pos.x - (level_benches[i] * GE_TILE + 8.0f)) < 10.0f && p->hp < p->max_hp && (g.tick & 8)) b |= GE_BTN_UP;
+    for (int i = room_find(room(), TH_BENCH, 0); i >= 0; i = room_find(room(), TH_BENCH, i + 1))
+        if (fabsf(p->pos.x - thing_x(thing(i))) < 10.0f && p->hp < p->max_hp && (g.tick & 8)) b |= GE_BTN_UP;
 
     /* walls: jump low ones, wall-jump up tall ones */
     float hw = p->def->body_w * 0.5f;
@@ -643,8 +751,8 @@ static void hero_bookkeeping(void) {
 static void check_duelists(void) {
     GeEntity *p = hero();
     if (!p->active || p->state == GE_ST_DEAD || g.duel_cd > 0 || g.warp_fade) return;
-    for (int i = 0; i < level_nspawns; i++) {
-        if (level_spawns[i].kind != EN_DUELIST || g.ent_of[i] < 0) continue;
+    for (int i = 0; i < room()->nthings; i++) {
+        if (thing(i)->kind != TH_DUELIST || g.ent_of[i] < 0) continue;
         GeEntity *e = &g.world.ents[g.ent_of[i]];
         if (!e->active) continue;
         float dx = p->pos.x - e->pos.x, dy = fabsf(p->pos.y - e->pos.y);
@@ -662,17 +770,20 @@ static unsigned earned_gifts(void) {
     static const struct { const char *name; unsigned gift; } T[] = {
         { "GROBB", GIFT_GROBB }, { "SILKE", GIFT_SILKE }, { "MOSSHIDE", GIFT_MOSSHIDE }, { "THE CHAMPION", GIFT_CHAMPION }, { "THORNWARDEN", GIFT_THORNWARDEN } };
     unsigned gifts = 0;
-    for (int i = 0; i < level_nspawns; i++)
-        if (g.beaten[i] && level_spawns[i].name)
-            for (unsigned k = 0; k < sizeof T / sizeof T[0]; k++) if (!strcmp(level_spawns[i].name, T[k].name)) gifts |= T[k].gift;
+    for (int r = 0; r < g.wd.nrooms; r++)          /* whichever room they were in */
+        for (int i = 0; i < g.wd.rooms[r].nthings; i++) {
+            const Thing *t = &g.wd.rooms[r].things[i];
+            if (g.beaten[r][i] && (t->kind == TH_DUELIST || t->kind == TH_BOSS))
+                for (unsigned k = 0; k < sizeof T / sizeof T[0]; k++) if (!strcmp(t->name, T[k].name)) gifts |= T[k].gift;
+        }
     return gifts;
 }
 
-static bool paragon_duel(void) { return level_spawns[g.duel].variant == DUEL_PARAGON && level_spawns[g.duel].kind == EN_DUELIST; }
+static bool paragon_duel(void) { return duel_thing()->kind == TH_DUELIST && duel_thing()->style == STYLE_PARAGON; }
 
 static void begin_battle(void) {
-    const Spawn *s = &level_spawns[g.duel];
-    bool fencer = s->variant == DUEL_FENCER;
+    const Thing *s = duel_thing();
+    bool fencer = s->style == STYLE_FENCER;
     bool final = paragon_duel();
     const GeFighterDef *opp = fencer ? &g.ch.f_fencer : &g.ch.f_brawler;
     if (final) {
@@ -680,7 +791,7 @@ static void begin_battle(void) {
         paragon_build_def(&g.ch, &g.spr, g.gifts, &g.paragon_def);
         opp = &g.paragon_def;
     }
-    ge_fight_init(&g.fight, &g.ch.f_hero, &g.spr.hero, opp, duel_sprite(s->variant), &g.world, 1000 + g.tick);
+    ge_fight_init(&g.fight, &g.ch.f_hero, &g.spr.hero, opp, duel_sprite(s->style), &g.world, 1000 + g.tick);
     g.fight.names[0] = "WREN";
     g.fight.names[1] = s->name;
     if (final) g.fight.world.backdrop_pattern = encounter_pattern(s->name);   /* only the Paragon fights inside its pattern */
@@ -740,9 +851,9 @@ static GeFightInput fight_input(const GeInput *in) {
 
 static void end_battle(void) {
     GeEntity *p = hero();
-    int ent = g.ent_of[g.duel];
+    int ent = duel_ent();
     LOG("duel over: %s vs WREN -> %s (rounds %d-%d), duel ran at %.1f fps avg, worst frame %.1f ms",
-        level_spawns[g.duel].name, g.duel_result == 0 ? "WON" : "LOST", g.fight.f[0].wins, g.fight.f[1].wins,
+        duel_thing()->name, g.duel_result == 0 ? "WON" : "LOST", g.fight.f[0].wins, g.fight.f[1].wins,
         g.duel_perf.dt_sum > 0 ? g.duel_perf.frames / (g.duel_perf.dt_sum / 1000.0) : 0.0, g.duel_perf.dt_max);
     LOG("  your defence: blocked %d, hit at the wrong height while blocking %d, hit while not blocking %d, thrown %d",
         g.fight.stat_blocked[0], g.fight.stat_wrong_height[0], g.fight.stat_hit[0], g.fight.stat_thrown[0]);
@@ -768,19 +879,22 @@ static void end_battle(void) {
             g.fight.finisher_seen ? "played" : "not seen", g.fight.fight_ticks / 60);
         for (int i = 0; i < g.nfacts; i++) LOG("  - %s", g.facts[i]);
         g.paragon_report = true;
-        g.bench_col = level_benches[level_nbenches - 1];     /* wake in the hall: the rematch is a few steps away */
+        int near = -1;                                    /* wake at the bench nearest to it: the rematch is a few steps away */
+        for (int i = room_find(room(), TH_BENCH, 0); i >= 0; i = room_find(room(), TH_BENCH, i + 1))
+            if (near < 0 || abs(thing(i)->col - duel_thing()->col) < abs(thing(near)->col - duel_thing()->col)) near = i;
+        if (near >= 0) { g.bench_col = thing(near)->col; g.bench_row = thing(near)->row; g.bench_room = g.room; }
         say("", 1);
         respawn_at_bench();
     } else if (g.duel_result == 0) {
         g.duels_won++;
-        g.beaten[g.duel] = true;
+        if (g.duel >= 0) BEATEN(g.duel) = true;
         if (ent >= 0) {
             GeEntity *e = &g.world.ents[ent];
             for (int i = 0; i < 24; i++)
                 ge_world_emit(&g.world, e->pos.x, e->pos.y - 12, ge_rng_range(&g.world.rng, -2, 2), ge_rng_range(&g.world.rng, -3, 0), 0.05f, 50,
                               GE_ARGB(255, 200, 140, 255), 2, GE_P_ADD);
             e->active = false;
-            g.ent_of[g.duel] = -1;
+            if (g.duel >= 0) g.ent_of[g.duel] = -1;
         }
         p->hp = p->max_hp;
         p->meter = p->def->meter_max;
@@ -800,9 +914,10 @@ static void end_battle(void) {
 
 static void draw_props(void *user, GeImage *fb, int camx, int camy) {
     (void)user;
-    paragon_draw_hall(fb, camx, camy, g.tick);
-    for (int i = 0; i < level_nbenches; i++)
-        art_draw_bench(fb, level_benches[i] * GE_TILE + 8 - camx, GROUND_ROW * GE_TILE - camy);
+    const Thing *h = find_thing(TH_HALL);
+    if (h) paragon_draw_hall(fb, camx, camy, g.tick, h->col, h->w, h->row - h->h + 1, h->row + 1);
+    for (int i = room_find(room(), TH_BENCH, 0); i >= 0; i = room_find(room(), TH_BENCH, i + 1))
+        art_draw_bench(fb, (int)thing_x(thing(i)) - camx, (int)thing_feet(thing(i)) - camy);
 }
 
 /* Every character: the built-in art and clips, then whatever the mods folder replaces, then the defs. */
@@ -874,15 +989,20 @@ static int demo_init(void *user) {
     } else {
         art_add_layers(w);
     }
-    level_build(w);
+    load_world();
+    room_build(0);
     if (g.beat_all)                                   /* dev: pretend every duelist and the boss are already beaten */
-        for (int i = 0; i < level_nspawns; i++)
-            if (level_spawns[i].name && !(level_spawns[i].kind == EN_DUELIST && level_spawns[i].variant == DUEL_PARAGON)) g.beaten[i] = true;
+        for (int i = 0; i < room()->nthings; i++)
+            if ((thing(i)->kind == TH_DUELIST && thing(i)->style != STYLE_PARAGON) || thing(i)->kind == TH_BOSS) BEATEN(i) = true;
     spawn_level();
-    if (g.warp_col >= HALL_COL0 || g.beat_all) level_set_exit(w, false);
-    g.bench_col = level_benches[0];
-    spawn_hero((g.warp_col > 0 ? g.warp_col : level_benches[0] + 1) * GE_TILE + 8.0f);
-    if (g.warp_col < HALL_COL0) say("THE GLOAMWOOD", 120);
+    const Thing *hall = find_thing(TH_HALL), *start = find_thing(TH_START);
+    int bench = room_find(room(), TH_BENCH, 0);
+    if ((hall && g.warp_col >= hall->col) || g.beat_all) arena_set_exit(false);
+    g.bench_room = 0;
+    g.bench_col = bench >= 0 ? thing(bench)->col : 0;
+    g.bench_row = bench >= 0 ? thing(bench)->row : room()->h - 2;
+    spawn_hero((g.warp_col > 0 ? g.warp_col : start ? start->col : 1) * GE_TILE + 8.0f);
+    if (!hall || g.warp_col < hall->col) say(room_title(), 120);
     return 0;
 }
 
@@ -890,11 +1010,33 @@ static void demo_update_inner(const GeInput *in);
 
 /* ---- dev menu ------------------------------------------------------------ */
 
-static const struct { const char *name; int col; } WARPS[] = {
-    { "START BENCH", 5 }, { "WALL SHAFT", 49 }, { "DUELIST 2", 80 }, { "BENCH 2", 106 }, { "CHAMPION", 141 }, { "BOSS", 150 },
-    { "PARAGON HALL", 183 }, { "PARAGON", 192 },
-};
-#define NWARPS ((int)(sizeof WARPS / sizeof WARPS[0]))
+/* Dev warps: the landmarks of the room you are in, from its things. */
+typedef struct { char name[28]; int col; } Warp;
+static Warp g_warps[32];
+static int g_nwarps;
+static void build_warps(void) {
+    g_nwarps = 0;
+    int benches = 0;
+    for (int i = 0; i < room()->nthings && g_nwarps < 32; i++) {
+        const Thing *t = thing(i);
+        Warp *wp = &g_warps[g_nwarps];
+        switch (t->kind) {
+        case TH_START:   snprintf(wp->name, sizeof wp->name, "START"); wp->col = t->col; break;
+        case TH_BENCH:   snprintf(wp->name, sizeof wp->name, "BENCH %d", ++benches); wp->col = t->col + 1; break;
+        case TH_DUELIST: snprintf(wp->name, sizeof wp->name, "%s", t->name); wp->col = t->col - 7; break;
+        case TH_ARENA:   snprintf(wp->name, sizeof wp->name, "BOSS ARENA"); wp->col = t->col - 4; break;
+        case TH_HALL:    snprintf(wp->name, sizeof wp->name, "THE HALL"); wp->col = t->col + 5; break;
+        case TH_DOOR:    snprintf(wp->name, sizeof wp->name, "DOOR %s", t->name); wp->col = t->col; break;
+        default: continue;
+        }
+        if (wp->col < 1) wp->col = 1;
+        g_nwarps++;
+    }
+    if (g_nwarps == 0) { snprintf(g_warps[0].name, sizeof g_warps[0].name, "LEFT EDGE"); g_warps[0].col = 1; g_nwarps = 1; }
+    if (g.warp_sel >= g_nwarps) g.warp_sel = 0;
+}
+#define NWARPS g_nwarps
+#define WARPS g_warps
 enum { MI_PERF, MI_DETAIL, MI_LOG, MI_GOD, MI_DUEL, MI_WARP, MI_PRACTICE, MI_MARK, MI_MODS, MI_EXPORT, MI_RESET, MI_CLOSE, MI_COUNT };
 
 static void apply_detail(void) {
@@ -920,8 +1062,9 @@ static void set_logging(bool on) {
 static void warp_to(int col) {
     GeEntity *p = hero();
     if (!p->active || g.mode != M_OVERWORLD) return;
-    if (g.boss_engaged && col < BOSS_COL0) reset_boss();
-    if (col >= HALL_COL0) level_set_exit(&g.world, false);
+    const Thing *a = find_thing(TH_ARENA), *h = find_thing(TH_HALL);
+    if (g.boss_engaged && a && col < a->col) reset_boss();
+    if (h && col >= h->col) arena_set_exit(false);
     float x = col * GE_TILE + 8.0f;
     p->pos = (GeVec2){ x, ground_at(x, 0) };
     p->vel = (GeVec2){ 0, 0 };
@@ -948,7 +1091,7 @@ static void apply_difficulty(void) {
     p->max_hp = hero_masks();
     if (p->max_hp > before) p->hp += p->max_hp - before;
     if (p->hp > p->max_hp) p->hp = p->max_hp;
-    int bi = g.ent_of[g.boss_spawn];
+    int bi = boss_ent();
     if (bi >= 0 && !g.boss_engaged) g.world.ents[bi].hp = g.world.ents[bi].max_hp = boss_hp();
     LOG("dev: difficulty now %s", g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
 }
@@ -1242,10 +1385,11 @@ static void demo_update_inner(const GeInput *in) {
             if (w->ents[i].kind == EN_BOSS) boss_ai(i);
             else enemy_ai(i);
         }
-        bool in_hall = p->pos.x >= (HALL_COL0 - 2) * GE_TILE;
-        w->foreground_off = p->pos.x >= (HALL_COL0 - 12) * GE_TILE;      /* indoors: no forest grass in front */
+        const Thing *hall = find_thing(TH_HALL);
+        bool in_hall = hall && p->pos.x >= (hall->col - 2) * GE_TILE;
+        w->foreground_off = hall && p->pos.x >= (hall->col - 12) * GE_TILE;   /* indoors: no forest grass in front */
         /* inside the hall its walls, ceiling and floor cover the whole view: don't paint the forest behind them */
-        int open_x = HALL_COL0 * GE_TILE - (int)w->cam.x;  /* screen column where the hall's solid art begins */
+        int open_x = hall ? hall->col * GE_TILE - (int)w->cam.x : SCREEN_W;   /* screen column where the hall's solid art begins */
         w->background_off = open_x <= 0;
         w->background_clip_x = open_x > 0 && open_x < SCREEN_W ? open_x : 0;
         if (in_hall && !g.hall_named) { g.hall_named = true; say("THE STILL HALL", 150); }
@@ -1269,7 +1413,7 @@ static void demo_update_inner(const GeInput *in) {
         if (g.autoplay) ge_fight_cpu(&g.fight, 0, 3, &fin[0]);
         else fin[0] = fight_input(in);
         if (paragon_duel()) ge_paragon_think(&g.brain, &g.fight, 1, &fin[1]);
-        else ge_fight_cpu(&g.fight, 1, g.practice ? -1 : duel_cpu_level(level_spawns[g.duel].cpu_level), &fin[1]);
+        else ge_fight_cpu(&g.fight, 1, g.practice ? -1 : duel_cpu_level(duel_thing()->level), &fin[1]);
         if (g.god && g.fight.phase == GE_FP_FIGHT) {     /* dev: you can't be beaten down (the Paragon's finisher still lands) */
             GeEntity *h = &g.fight.world.ents[g.fight.f[0].ent];
             h->hp = g.fight.f[0].def->max_hp;
@@ -1325,15 +1469,15 @@ static void draw_hud(GeImage *fb) {
     ge_text_outlined(fb, SCREEN_W - 8 - ge_text_width(buf, 1), 8, buf, GE_RGB(200, 170, 255), GE_RGB(20, 14, 30), 1);
 
     /* boss bar */
-    if (g.boss_engaged && g.boss_state != B_DEAD && g.ent_of[g.boss_spawn] >= 0) {
-        GeEntity *b = &w->ents[g.ent_of[g.boss_spawn]];
+    if (g.boss_engaged && g.boss_state != B_DEAD && boss_ent() >= 0) {
+        GeEntity *b = &w->ents[boss_ent()];
         ge_fill_rect(fb, 49, 221, 302, 7, GE_ARGB(220, 10, 8, 20), 0);
         ge_fill_rect(fb, 50, 222, 300 * b->hp / b->max_hp, 5, GE_RGB(200, 60, 50), 0);
-        ge_text_outlined(fb, 50, 211, "THORNWARDEN", GE_RGB(255, 210, 190), GE_RGB(20, 14, 30), 1);
+        ge_text_outlined(fb, 50, 211, thing(g.boss_spawn)->name, GE_RGB(255, 210, 190), GE_RGB(20, 14, 30), 1);
     }
     /* prompts */
-    for (int i = 0; i < level_nbenches; i++)
-        if (p->active && fabsf(p->pos.x - (level_benches[i] * GE_TILE + 8.0f)) < 18.0f && g.msg_timer == 0)
+    for (int i = room_find(room(), TH_BENCH, 0); i >= 0; i = room_find(room(), TH_BENCH, i + 1))
+        if (p->active && fabsf(p->pos.x - thing_x(thing(i))) < 18.0f && fabsf(p->pos.y - thing_feet(thing(i))) < 20.0f && g.msg_timer == 0)
             ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST   DOWN: PRACTICE", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST   DOWN: PRACTICE",
                              GE_WHITE, GE_RGB(20, 14, 30), 1);
     if (g.tick < 420 && !g.no_hints && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
@@ -1350,7 +1494,7 @@ static void draw_hud(GeImage *fb) {
 }
 
 static void draw_alert(GeImage *fb) {
-    int ent = g.ent_of[g.duel];
+    int ent = duel_ent();
     if (ent >= 0 && !g.practice) {                     /* the "!" over their head */
         GeEntity *e = &g.world.ents[ent];
         int x = (int)(e->pos.x - g.world.cam.x), y = (int)(e->pos.y - g.world.cam.y) - 46;
@@ -1359,9 +1503,9 @@ static void draw_alert(GeImage *fb) {
         ge_fill_rect(fb, x - 5, y - pop + 1, 11, 14, GE_WHITE, 0);
         ge_text(fb, x - 2, y - pop + 4, "!", GE_RGB(220, 40, 60), 1);
     }
-    const Spawn *s = &level_spawns[g.duel];
+    const Thing *s = duel_thing();
     char buf[64];
-    if (s->variant == DUEL_PARAGON) snprintf(buf, sizeof buf, "THE PARAGON HAS BEEN WATCHING YOU");
+    if (s->style == STYLE_PARAGON) snprintf(buf, sizeof buf, "THE PARAGON HAS BEEN WATCHING YOU");
     else if (g.practice) snprintf(buf, sizeof buf, "PRACTICE DUEL: %s WILL GO EASY ON YOU", s->name);
     else snprintf(buf, sizeof buf, "%s WANTS TO DUEL!", s->name);
     ge_text_outlined(fb, (SCREEN_W - ge_text_width(buf, 1)) / 2, 186, buf, GE_RGB(255, 220, 160), GE_RGB(20, 14, 30), 1);
@@ -1369,13 +1513,13 @@ static void draw_alert(GeImage *fb) {
 
 /* Pokemon-style: flash, flash, flash, then the duelist's own pattern floods out from where they stand. */
 static void draw_trans_in(GeImage *fb, int t) {
-    int ent = g.practice ? -1 : g.ent_of[g.duel];
+    int ent = g.practice ? -1 : duel_ent();
     int cx = SCREEN_W / 2, cy = SCREEN_H / 2;
     if (ent >= 0) {
         const GeEntity *e = &g.world.ents[ent];
         cx = (int)(e->pos.x - g.world.cam.x); cy = (int)(e->pos.y - g.world.cam.y) - 16;
     }
-    encounter_draw_transition(fb, encounter_pattern(level_spawns[g.duel].name), t, cx, cy, g.tick);
+    encounter_draw_transition(fb, encounter_pattern(duel_thing()->name), t, cx, cy, g.tick);
 }
 
 /* The Paragon speaks: its two lines while the round is introduced, and one word at the finisher. Each line
@@ -1476,7 +1620,7 @@ static void demo_draw_inner(GeImage *fb) {
         if (paragon_duel() && g.fight_live) draw_paragon_voice(fb);
         if (g.mode == M_BATTLE && g.mode_timer < 24) {   /* the pattern breaks up and the duel shows through */
             if (paragon_duel()) ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB((24 - g.mode_timer) * 10, 255, 255, 255), 0);
-            else encounter_draw_reveal(fb, encounter_pattern(level_spawns[g.duel].name), g.mode_timer, g.tick);
+            else encounter_draw_reveal(fb, encounter_pattern(duel_thing()->name), g.mode_timer, g.tick);
         }
         if (g.mode == M_BATTLE) {
             const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B THRUST  L BLOCK  R DASH  A+B SUPER";
@@ -1514,7 +1658,7 @@ static void demo_shutdown(void *user) {
                devlog_hms((uint64_t)g.ticks_duel / 60));
         devlog("  duels won %d, lost %d | deaths %d | enemies defeated %d | heals %d | boss %s",
                g.duels_won, g.duels_lost, g.deaths, g.kills, g.heals,
-               g.beaten[g.boss_spawn] ? "defeated" : (g.boss_engaged ? "fought, not beaten" : "not reached"));
+               boss_beaten_anywhere() ? "defeated" : (g.boss_engaged ? "fought, not beaten" : "not reached"));
         devlog("  overall %.1f fps avg, worst frame %.1f ms, %d%% of frames below 60 fps",
                g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0, g.tot.dt_max,
                g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
@@ -1524,7 +1668,7 @@ static void demo_shutdown(void *user) {
     GeEntity *p = hero();
     printf("mode=%d x=%.0f (col %d) masks=%d kills=%d duels_won=%d duels_lost=%d deaths=%d heals=%d boss=%s checksum=%08x\n",
            g.mode, p->pos.x, (int)(p->pos.x / GE_TILE), p->active ? p->hp : 0, g.kills, g.duels_won, g.duels_lost, g.deaths, g.heals,
-           g.beaten[g.boss_spawn] ? "defeated" : (g.boss_engaged ? "fighting" : "waiting"), ge_null_last_checksum());
+           boss_beaten_anywhere() ? "defeated" : (g.boss_engaged ? "fighting" : "waiting"), ge_null_last_checksum());
 #endif
     paragon_profile_save(&g.model);
     encounter_free();

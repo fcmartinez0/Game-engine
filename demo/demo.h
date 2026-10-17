@@ -32,7 +32,9 @@ enum {
 enum { FX_NEEDLE0, FX_NEEDLE1, FX_GLOB0, FX_GLOB1, FX_ROCK, FX_WAVE0, FX_WAVE1, FX_ORB0, FX_ORB1, FX_SPEAR, FX_DUST };
 
 /* tileset cells */
-enum { TV_GRASS = 0, TV_DIRT = 1, TV_PLANK = 2, TV_DIRT2 = 3, TV_SPIKE = 4, TV_STONE = 5, TV_STONE_TOP = 6, TV_COUNT = 7 };
+enum { TV_GRASS = 0, TV_DIRT = 1, TV_PLANK = 2, TV_DIRT2 = 3, TV_SPIKE = 4, TV_STONE = 5, TV_STONE_TOP = 6,
+       TV_CRACK = 7, TV_GATE = 8, TV_CRATE = 9, TV_LOCK = 10, TV_COUNT = 11 };
+#define TV_FIRST_PUZZLE TV_CRACK    /* cells from here on are drawn after the others, from their own random numbers */
 
 typedef struct {
     GeSprite hero, paragon, brawler, fencer, warden, crawler, bat, spitter, fx;
@@ -41,6 +43,7 @@ typedef struct {
 void art_make_sheets(Sprites *s);     /* images only; chars_init() parses the clips */
 void art_free(Sprites *s);
 void art_make_tileset(GeImage *tiles);
+void art_puzzle_tiles(GeImage *tiles);   /* the cells from TV_FIRST_PUZZLE on (called by art_make_tileset) */
 void art_add_layers(GeWorld *w);
 void art_draw_bench(GeImage *fb, int x, int y);   /* x = centre, y = floor */
 
@@ -73,7 +76,8 @@ void paragon_set_profile_path(const char *path);
 const char *paragon_profile_path(void);
 void paragon_profile_load(GePlayerModel *m);
 void paragon_profile_save(const GePlayerModel *m);
-void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick);   /* the final room's back wall */
+/* the final room's back wall: columns col .. col+w-1, its ceiling's underside at row top, its floor at row floor */
+void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick, int col, int w, int top, int floor);
 void paragon_draw_report(GeImage *fb, const char facts[][72], int nfacts, const GePlayerModel *m, int learn, unsigned gifts, int t);
 
 /* ---- encounters (encounter.c): each duelist's EarthBound-style pattern ---- */
@@ -90,33 +94,9 @@ void mods_apply_sprites(Sprites *s, ModReport *r);     /* after chars_parse, bef
 void mods_apply_moves(Chars *c, Sprites *s, ModReport *r); /* after chars_build */
 int  mods_export(Sprites *s, Chars *c);                /* built-in files into mods/_export/; returns files written */
 
-/* ---- level (level.c) ---------------------------------------------------- */
-#define LEVEL_W 214
-#define LEVEL_H 15
-#define GROUND_ROW 12
-#define BOSS_COL0 154               /* boss arena: columns BOSS_COL0..BOSS_COL1 */
-#define BOSS_COL1 175
-#define GATE_COL 153
-#define EXIT_COL 176                /* the arena's far door: opens when the boss falls */
-#define HALL_COL0 178               /* the Paragon's hall: columns HALL_COL0..LEVEL_W-3 */
-
-enum { EN_CRAWLER, EN_BAT, EN_SPITTER, EN_GRUNT, EN_DUELIST, EN_BOSS };
-enum { DUEL_BRAWLER, DUEL_FENCER, DUEL_PARAGON };
-
-typedef struct {
-    int kind, col, row;
-    int variant;                    /* duelists: DUEL_* */
-    int cpu_level, rounds;          /* duelists: CPU strength 0-3, rounds to win */
-    const char *name;
-} Spawn;
-
-extern const Spawn level_spawns[];
-extern const int level_nspawns;
-extern const int level_benches[];  /* columns */
-extern const int level_nbenches;
-
-void level_build(GeWorld *w);
-void level_set_gate(GeWorld *w, bool closed);
-void level_set_exit(GeWorld *w, bool closed);
+/* ---- the world (world.h / world.c): rooms, tiles and things as data ---- */
+#include "world.h"
+#define GROUND_ROW 12               /* the Gloamwood room's ground row (the --autoplay bot's landmarks use it) */
+enum { EN_CRAWLER, EN_BAT, EN_SPITTER, EN_GRUNT, EN_DUELIST, EN_BOSS };   /* entity kinds in the overworld */
 
 #endif

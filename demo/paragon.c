@@ -119,10 +119,11 @@ static void almond(GeImage *fb, GePattern *pat, int cx, int cy, int w, int h, ui
     }
 }
 
-void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick) {
-    int x0 = HALL_COL0 * GE_TILE - camx, x1 = (LEVEL_W - 2) * GE_TILE - camx;
+void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick, int col, int width, int top_row, int floor_row) {
+    /* everything is placed from the hall's first column, so the hall can be moved in the editor */
+    int x0 = col * GE_TILE - camx, x1 = (col + width) * GE_TILE - camx;
     if (x1 < 0 || x0 > fb->w) return;
-    int top = 6 * GE_TILE - camy, floor = GROUND_ROW * GE_TILE - camy, h = floor - top;
+    int top = top_row * GE_TILE - camy, floor = floor_row * GE_TILE - camy, h = floor - top;
     const uint32_t stone = GE_RGB(30, 26, 42), joint = GE_RGB(20, 17, 30), pillar = GE_RGB(62, 56, 80), gold = GE_RGB(200, 160, 80);
     GePattern *pat = encounter_pattern("PARAGON");
     ge_fill_rect(fb, x0, top, x1 - x0, h, stone, 0);
@@ -130,9 +131,9 @@ void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick) {
     for (int row = 0, y = top; y < floor; row++, y += 12)
         for (int x = x0 + (row & 1) * 12; x < x1; x += 24) ge_fill_rect(fb, x, y, 1, 11, joint, 0);  /* staggered joints */
     /* narrow windows onto the field of eyes */
-    static const int windows[] = { 184, 192, 208 };
+    static const int windows[] = { 6, 14, 30 };
     for (int i = 0; i < 3; i++) {
-        int wx = windows[i] * GE_TILE + 8 - camx;
+        int wx = (col + windows[i]) * GE_TILE + 8 - camx;
         if (wx < -20 || wx > fb->w + 20) continue;
         ge_fill_rect(fb, wx - 9, top + 14, 18, 52, gold, 0);
         ge_pattern_draw_rect(pat, fb, wx - 7, top + 18, 14, 46, (int)tick);
@@ -140,16 +141,16 @@ void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick) {
         ge_fill_rect(fb, wx - 1, top + 18, 2, 46, gold, 0);                                              /* mullion */
     }
     /* the great eye behind its place */
-    int ex = 200 * GE_TILE + 8 - camx;
+    int ex = (col + 22) * GE_TILE + 8 - camx;
     if (ex > -60 && ex < fb->w + 60) {
         almond(fb, pat, ex, top + 40, 40, 22, gold, tick);
         ge_fill_rect(fb, ex - 2, top + 22, 4, 37, GE_RGB(8, 4, 12), 0);   /* the slit, like its own mask */
         ge_fill_rect(fb, ex - 1, top + 26, 2, 29, GE_RGB(255, 210, 80), 0);
     }
     /* pillars, with candles at their feet */
-    static const int pillars[] = { 180, 188, 196, 204, 211 };
+    static const int pillars[] = { 2, 10, 18, 26, 33 };
     for (int i = 0; i < 5; i++) {
-        int px = pillars[i] * GE_TILE + 8 - camx;
+        int px = (col + pillars[i]) * GE_TILE + 8 - camx;
         if (px < -12 || px > fb->w + 12) continue;
         ge_fill_rect(fb, px - 6, top, 12, h, pillar, 0);
         ge_fill_rect(fb, px - 6, top, 2, h, GE_RGB(84, 76, 104), 0);
@@ -162,7 +163,7 @@ void paragon_draw_hall(GeImage *fb, int camx, int camy, uint32_t tick) {
         ge_fill_rect(fb, px + 10, floor - 12 - flick, 2, 3 + flick, flick ? GE_RGB(255, 200, 90) : GE_RGB(255, 240, 170), 0);
     }
     /* a gold threshold set in the floor where it stands */
-    int tx = 196 * GE_TILE - camx;
+    int tx = (col + 18) * GE_TILE - camx;
     ge_fill_rect(fb, tx, floor + 1, 9 * GE_TILE, 2, gold, 0);
     for (int k = 0; k <= 9; k++) ge_fill_rect(fb, tx + k * GE_TILE, floor + 1, 1, 5, gold, 0);
 }
