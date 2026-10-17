@@ -186,7 +186,8 @@ typedef enum {
     GE_EV_HAZARD,   /* a touched spikes */
     GE_EV_CHANNEL,  /* a finished channelling (e.g. heal) */
     GE_EV_POGO,     /* a bounced off something with a down-slash */
-    GE_EV_SHOOT     /* a fired shot b */
+    GE_EV_SHOOT,    /* a fired shot b */
+    GE_EV_SHOT_TILE /* a shot fired by entity a (-1: nobody) stopped against the solid cell b (row * map width + column) */
 } GeEventType;
 
 /* One hit, as applied to a victim. */
@@ -272,6 +273,7 @@ int   ge_entity_wall_contact(const GeWorld *w, const GeEntity *e); /* -1 wall on
 bool  ge_entity_physics(GeWorld *w, int idx);                  /* move + collide; false if it fell out */
 GeRect ge_entity_hurtbox(const GeEntity *e);
 bool  ge_entity_hitbox(const GeEntity *e, GeRect *out);         /* active hitbox of the current frame */
+void  ge_entity_pogo(GeWorld *w, int idx, float speed);         /* bounce up as off spikes: refreshes the air jump and dash */
 void  ge_world_apply_hit(GeWorld *w, int attacker, int victim, const GeHit *h);
 void  ge_world_event(GeWorld *w, GeEventType ev, int a, int b);
 

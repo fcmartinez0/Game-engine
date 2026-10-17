@@ -4,6 +4,7 @@
 
 #include "demo.h"
 #include "devlog.h"
+#include "puzzle.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
 #include "ge/ge_platform.h"
@@ -36,6 +37,14 @@ typedef struct {
 
     World wd;                     /* every room, as data (the built-in world or mods/world.txt) */
     char world_problem[96];       /* why mods/world.txt wasn't used, if it wasn't */
+    Puzzle pz;                    /* the room's levers, gates, crates... while it is played */
+    RoomProgress progress[WORLD_MAX_ROOMS];   /* what the session remembers about each room */
+    int keys;                     /* carried */
+    int bonus_masks, bonus_ammo;  /* from relics */
+    int door_fade, door_room;     /* going through a door: the fade, and where to */
+    char door_to[24];
+    GeParallaxLayer backdrops[BD_COUNT][GE_MAX_LAYERS];   /* each backdrop's layers, built once */
+    int nbackdrop[BD_COUNT];
     int room;                     /* the one being played */
     int player;
     int ent_of[ROOM_MAX_THINGS];  /* entity per thing of the room, -1 = none or gone */
@@ -148,7 +157,7 @@ static void calm_flush(void) { devlog_flush(); }
 /* ---- difficulty ------------------------------------------------------------
  * One setting for the whole game (the dev menu's DIFFICULTY), saved between sessions. Easy is meant to be
  * genuinely easy for someone new to fighting games; the Paragon ignores it (it is unbeatable by design). */
-static int hero_masks(void) { return g.difficulty < 0 ? 8 : g.difficulty > 0 ? 4 : 6; }
+static int hero_masks(void) { return (g.difficulty < 0 ? 8 : g.difficulty > 0 ? 4 : 6) + g.bonus_masks; }
 static int boss_hp(void) { return g.difficulty < 0 ? 100 : g.difficulty > 0 ? 200 : 150; }
 /* duelists' base levels: Grobb 0, Silke 1, Mosshide 2, Champion 3. Easy: all beginners but the Champion;
  * normal: one step gentler (Grobb is a beginner); hard: one step sharper. */
@@ -230,13 +239,15 @@ static float ground_at(float x, float y) {
     return gy < 0 ? (float)((room()->h - 3) * GE_TILE) : gy;
 }
 
-static void spawn_hero(float x) {
-    g.player = ge_world_spawn(&g.world, &g.ch.hero, &g.spr.hero, 0, x, ground_at(x, 0), hero_masks());
+static void spawn_hero_at(float x, float y_from) {
+    g.player = ge_world_spawn(&g.world, &g.ch.hero, &g.spr.hero, 0, x, ground_at(x, y_from), hero_masks());
     g.world.follow = g.player;
+    g.pz.hero = g.player;
     g.safe_x = x;
     g.safe_y = hero()->pos.y;
     g.world.cam.x = x - SCREEN_W * 0.5f;
 }
+static void spawn_hero(float x) { spawn_hero_at(x, 0); }
 
 static GeActorDef g_duel_defs[3];
 
@@ -329,12 +340,68 @@ static void reset_boss(void) {
 
 static void respawn_enemies(void);
 
+/* the backdrop's layers into the world (they stay owned by g.backdrops) */
+static void set_backdrop(int bd) {
+    bd = ge_clampi(bd, 0, BD_COUNT - 1);
+    if (g.nbackdrop[bd] == 0) bd = BD_FOREST;
+    for (int i = 0; i < g.nbackdrop[bd]; i++) { g.world.layers[i] = g.backdrops[bd][i]; g.world.layers[i].borrowed = true; }
+    g.world.nlayers = g.nbackdrop[bd];
+}
+
+static int count_relics(int r, bool found) {
+    int n = 0;
+    for (int i = 0; i < g.wd.rooms[r].nthings; i++)
+        if (g.wd.rooms[r].things[i].kind == TH_RELIC && (!found || g.progress[r].done[i])) n++;
+    return n;
+}
+
+/* Go into room r, at the door called `door` (NULL: its start, else its first bench). Everything but the
+ * hero is cleared; the room's enemies not beaten come back; its puzzles are as the session left them. */
+static void room_enter(int r, const char *door) {
+    GeWorld *w = &g.world;
+    for (int i = 0; i < GE_MAX_ENTS; i++) if (i != g.player) w->ents[i].active = false;
+    for (int i = 0; i < GE_MAX_SHOTS; i++) w->shots[i].active = false;
+    for (int i = 0; i < GE_MAX_PARTS; i++) w->parts[i].life = 0;
+    g.boss_engaged = false;
+    g.boss_state = B_SLEEP;
+    w->cam.locked = false;
+    room_build(r);
+    set_backdrop(room()->backdrop);
+    spawn_level();
+    if (boss_beaten()) arena_set_exit(false);
+    const Thing *at = NULL;
+    for (int i = room_find(room(), TH_DOOR, 0); door && i >= 0 && !at; i = room_find(room(), TH_DOOR, i + 1))
+        if (!strcmp(thing(i)->name, door)) at = thing(i);
+    if (!at) at = find_thing(TH_START);
+    if (!at) at = find_thing(TH_BENCH);
+    GeEntity *p = hero();
+    float x = at ? thing_x(at) : 2.5f * GE_TILE, y = at ? thing_feet(at) : (float)((room()->h - 1) * GE_TILE);
+    p->pos = (GeVec2){ x, y };
+    p->vel = (GeVec2){ 0, 0 };
+    p->state = GE_ST_IDLE;
+    g.safe_x = x; g.safe_y = y;
+    w->cam.x = x - SCREEN_W * 0.5f;
+    w->cam.y = y - SCREEN_H * 0.65f;
+    puzzle_enter(&g.pz, room(), &g.progress[r], w, g.player, &g.keys);
+    int relics = count_relics(r, false);
+    char buf[64];
+    if (relics) snprintf(buf, sizeof buf, "%s   RELICS %d/%d", room_title(), count_relics(r, true), relics);
+    else snprintf(buf, sizeof buf, "%s", room_title());
+    say(buf, 120);
+    LOG("entered room %s%s%s", room()->name, door ? " by door " : "", door ? door : "");
+}
+
+/* Back to the last bench: its room as you first find it (crates home, timed levers off), what the session
+ * remembers kept (pulled levers, broken stone, keys and relics). */
 static void respawn_at_bench(void) {
     if (hero()->active) hero()->active = false;
+    if (g.bench_room != g.room) room_enter(g.bench_room, NULL);
+    else { room_build_tilemap(room(), &g.world.map); arena_set_exit(true); }
     reset_boss();
     respawn_enemies();
-    spawn_hero(g.bench_col * GE_TILE + 8.0f);
+    spawn_hero_at(g.bench_col * GE_TILE + 8.0f, (float)((g.bench_row + 1) * GE_TILE - 20));
     hero()->invuln = 60;
+    puzzle_enter(&g.pz, room(), &g.progress[g.room], &g.world, g.player, &g.keys);
 }
 
 /* ---- events ------------------------------------------------------------ */
@@ -416,6 +483,8 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         if (p->hp <= 0) { p->hp = 0; g.hero_dying = true; }
         else g.warp_fade = 40;
         LOG("spikes at col %d, masks left %d", (int)(p->pos.x / GE_TILE), p->hp);
+    } else if (ev == GE_EV_SHOT_TILE) {
+        puzzle_shot_tile(&g.pz, a, b);
     } else if (ev == GE_EV_FELL && a == g.player) {
         g.deaths++;
     } else if (ev == GE_EV_CHANNEL && a == g.player) {
@@ -588,7 +657,7 @@ static void hero_intent(const GeInput *in) {
     GeEntity *p = hero();
     GeIntent *it = &g.world.intents[g.player];
     memset(it, 0, sizeof *it);
-    if (g.warp_fade > 0) return;
+    if (g.warp_fade > 0 || g.door_fade > 0) return;
     it->move_x = ((in->down & GE_BTN_RIGHT) ? 1.0f : 0.0f) - ((in->down & GE_BTN_LEFT) ? 1.0f : 0.0f);
     it->move_y = ((in->down & GE_BTN_DOWN) ? 1.0f : 0.0f) - ((in->down & GE_BTN_UP) ? 1.0f : 0.0f);
     it->jump_pressed = (in->pressed & GE_BTN_B) != 0;
@@ -732,7 +801,8 @@ static void hero_bookkeeping(void) {
         GeRect around = { p->pos.x - 40, p->pos.y - 18, 80, 60 };   /* no spikes nearby, above or below */
         int tx = (int)floorf(p->pos.x / GE_TILE), ty = (int)floorf(p->pos.y / GE_TILE);
         bool solid = true;
-        for (int k = -2; k <= 2; k++) solid = solid && ge_tilemap_get(&g.world.map, tx + k, ty) == GE_TILE_SOLID;
+        for (int k = -2; k <= 2; k++)   /* (gates, crates and breakable stone can vanish: not safe ground) */
+            solid = solid && ge_tilemap_get(&g.world.map, tx + k, ty) == GE_TILE_SOLID && !puzzle_owns_cell(&g.pz, tx + k, ty);
         if (solid && !ge_world_touches_tile(&g.world, around, GE_TILE_SPIKE)) {
             g.safe_x = p->pos.x; g.safe_y = p->pos.y;
         }
@@ -918,6 +988,7 @@ static void draw_props(void *user, GeImage *fb, int camx, int camy) {
     if (h) paragon_draw_hall(fb, camx, camy, g.tick, h->col, h->w, h->row - h->h + 1, h->row + 1);
     for (int i = room_find(room(), TH_BENCH, 0); i >= 0; i = room_find(room(), TH_BENCH, i + 1))
         art_draw_bench(fb, (int)thing_x(thing(i)) - camx, (int)thing_feet(thing(i)) - camy);
+    puzzle_draw(&g.pz, fb, camx, camy, g.tick);
 }
 
 /* Every character: the built-in art and clips, then whatever the mods folder replaces, then the defs. */
@@ -928,6 +999,7 @@ static int load_characters(void) {
     if (!g.no_mods) mods_apply_sprites(&g.spr, &g.mods);
     if (chars_build(&g.ch, &g.spr) != 0) return 1;
     if (!g.no_mods) mods_apply_moves(&g.ch, &g.spr, &g.mods);
+    g.ch.hero.ammo_max += g.bonus_ammo;                 /* relics found this session */
     for (int v = 0; v < 3; v++) {
         const GeSprite *sp = duel_sprite(v);
         g_duel_defs[v] = g.ch.duelist;
@@ -978,19 +1050,26 @@ static int demo_init(void *user) {
     w->vignette = 26;
     w->low_detail = g.low_detail;
     art_make_tileset(&w->tileset);
-    if (g.layers_path) {
-        int line = 0, rc = ge_world_load_layers(w, g.layers_path, &line);
-        if (rc != GE_LAYERS_OK) {
-            fprintf(stderr, "%s: %s (line %d)\n", g.layers_path,
-                    rc == GE_LAYERS_EOPEN ? "cannot open" : rc == GE_LAYERS_EIMAGE ? "cannot load image" :
-                    rc == GE_LAYERS_EFULL ? "too many layers" : "syntax error", line);
-            return 1;
-        }
-    } else {
-        art_add_layers(w);
+    /* each backdrop's layers are built once into a scratch world and lent to the world as rooms change */
+    static GeWorld scratch;
+    for (int bd = 0; bd < BD_COUNT; bd++) {
+        ge_world_init(&scratch, SCREEN_W, SCREEN_H, 1);
+        if (bd == BD_FOREST && g.layers_path) {
+            int line = 0, rc = ge_world_load_layers(&scratch, g.layers_path, &line);
+            if (rc != GE_LAYERS_OK) {
+                fprintf(stderr, "%s: %s (line %d)\n", g.layers_path,
+                        rc == GE_LAYERS_EOPEN ? "cannot open" : rc == GE_LAYERS_EIMAGE ? "cannot load image" :
+                        rc == GE_LAYERS_EFULL ? "too many layers" : "syntax error", line);
+                return 1;
+            }
+        } else if (bd == BD_FOREST) art_add_layers(&scratch);
+        else art_add_cave_layers(&scratch);
+        memcpy(g.backdrops[bd], scratch.layers, sizeof(GeParallaxLayer) * (size_t)scratch.nlayers);
+        g.nbackdrop[bd] = scratch.nlayers;
     }
     load_world();
     room_build(0);
+    set_backdrop(room()->backdrop);
     if (g.beat_all)                                   /* dev: pretend every duelist and the boss are already beaten */
         for (int i = 0; i < room()->nthings; i++)
             if ((thing(i)->kind == TH_DUELIST && thing(i)->style != STYLE_PARAGON) || thing(i)->kind == TH_BOSS) BEATEN(i) = true;
@@ -1002,6 +1081,7 @@ static int demo_init(void *user) {
     g.bench_col = bench >= 0 ? thing(bench)->col : 0;
     g.bench_row = bench >= 0 ? thing(bench)->row : room()->h - 2;
     spawn_hero((g.warp_col > 0 ? g.warp_col : start ? start->col : 1) * GE_TILE + 8.0f);
+    puzzle_enter(&g.pz, room(), &g.progress[0], w, g.player, &g.keys);
     if (!hall || g.warp_col < hall->col) say(room_title(), 120);
     return 0;
 }
@@ -1073,6 +1153,55 @@ static void warp_to(int col) {
     g.world.cam.x = x - SCREEN_W * 0.5f;
     g.duel_cd = 120;
     LOG("dev: warped to column %d", col);
+}
+
+/* What the room's puzzles did this tick: words on screen, the play log, rewards. */
+static void puzzle_events(void) {
+    for (int k = 0; k < g.pz.nev; k++) {
+        const PuzzleEvent *e = &g.pz.ev[k];
+        const Thing *t = e->thing >= 0 ? thing(e->thing) : NULL;
+        char buf[72];
+        switch (e->kind) {
+        case PZ_KEY: say("A KEY. IT OPENS A LOCKED GATE", 120); LOG("key taken in %s (carrying %d)", room()->name, g.keys); break;
+        case PZ_UNLOCK: say("UNLOCKED", 90); LOG("locked gate opened in %s", room()->name); break;
+        case PZ_SECRET: say("A WAY THROUGH", 90); LOG("breakable stone broken in %s", room()->name); break;
+        case PZ_LEVER: if (t) LOG("lever (wire %d, %s) %s in %s", t->ch, t->mode == LEVER_ONCE ? "once" : t->mode == LEVER_TOGGLE ? "toggle" : "timed",
+                                 g.pz.p[e->thing].on ? "on" : "off", room()->name); break;
+        case PZ_RELIC: {
+            GeEntity *p = hero();
+            const char *gift = "";
+            if (t && t->gives == GIVE_MASK) { g.bonus_masks++; p->max_hp++; p->hp++; gift = ": ONE MORE MASK"; }
+            else if (t && t->gives == GIVE_NEEDLE) { g.bonus_ammo++; g.ch.hero.ammo_max++; p->ammo++; gift = ": ONE MORE NEEDLE"; }
+            else if (t && t->gives == GIVE_SILK) { p->meter = p->def->meter_max; gift = ": SILK FULL"; }
+            snprintf(buf, sizeof buf, "FOUND %.24s%s", t ? t->name : "A RELIC", gift);
+            say(buf, 180);
+            LOG("relic found in %s: %s (%d of %d here)", room()->name, t ? t->name : "?", count_relics(g.room, true), count_relics(g.room, false));
+            break;
+        }
+        case PZ_DOOR:
+            if (t && g.door_fade == 0) {
+                char room_name[32] = "", door_name[24] = "";
+                const char *colon = strchr(t->target, ':');
+                size_t n = colon ? (size_t)(colon - t->target) : strlen(t->target);
+                if (n >= sizeof room_name) n = sizeof room_name - 1;
+                memcpy(room_name, t->target, n); room_name[n] = 0;
+                if (colon) snprintf(door_name, sizeof door_name, "%s", colon + 1);
+                int r = world_find_room(&g.wd, room_name);
+                if (r < 0) { say(t->target[0] ? "THIS DOOR LEADS NOWHERE YET" : "THIS DOOR ISN'T LINKED (EDITOR: LINK)", 120); break; }
+                g.door_room = r;
+                snprintf(g.door_to, sizeof g.door_to, "%s", door_name);
+                g.door_fade = 40;
+            }
+            break;
+        default: break;
+        }
+    }
+}
+
+/* Going through a door: fade to black, change room in the dark, fade back in. */
+static void door_update(void) {
+    if (g.door_fade <= 0) return;
+    if (--g.door_fade == 20) { calm_flush(); room_enter(g.door_room, g.door_to[0] ? g.door_to : NULL); }
 }
 
 /* Things that are hard to undo (switching the log off, wiping the Paragon's memory) need a second tap or A
@@ -1380,6 +1509,7 @@ static void demo_update_inner(const GeInput *in) {
             say("...", 60);
             respawn_at_bench();
         }
+        puzzle_pre_update(&g.pz, &w->intents[g.player]);
         for (int i = 0; i < GE_MAX_ENTS; i++) {
             if (!w->ents[i].active || w->ents[i].team != 1) continue;
             if (w->ents[i].kind == EN_BOSS) boss_ai(i);
@@ -1399,6 +1529,9 @@ static void demo_update_inner(const GeInput *in) {
                           in_hall ? GE_ARGB(255, 255, 214, 120) : GE_ARGB(255, 190, 255, 140), in_hall ? 1 : 2, GE_P_ADD | GE_P_WANDER | GE_P_TWINKLE);
         ge_world_update(w);
         hero_bookkeeping();
+        puzzle_update(&g.pz, in);
+        puzzle_events();
+        door_update();
         if (g.mode == M_OVERWORLD) check_duelists();
         break;
     }
@@ -1480,6 +1613,24 @@ static void draw_hud(GeImage *fb) {
         if (p->active && fabsf(p->pos.x - thing_x(thing(i))) < 18.0f && fabsf(p->pos.y - thing_feet(thing(i))) < 20.0f && g.msg_timer == 0)
             ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST   DOWN: PRACTICE", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST   DOWN: PRACTICE",
                              GE_WHITE, GE_RGB(20, 14, 30), 1);
+    if (p->active && g.msg_timer == 0 && g.pz.door_near >= 0 && g.door_fade == 0) {
+        const char *s = "UP: GO THROUGH";
+        ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width(s, 1) / 2, (int)(p->pos.y - w->cam.y) - 44, s, GE_WHITE, GE_RGB(20, 14, 30), 1);
+    }
+    if (p->active && g.pz.sign_near >= 0) {                     /* a sign's words, in a box */
+        const char *s = thing(g.pz.sign_near)->text;
+        int tw = ge_text_width(s, 1), x = (SCREEN_W - tw) / 2;
+        ge_fill_rect(fb, x - 6, 36, tw + 12, 15, GE_ARGB(220, 12, 8, 22), 0);
+        ge_fill_rect(fb, x - 6, 36, tw + 12, 1, GE_RGB(150, 140, 190), 0);
+        ge_text(fb, x, 40, s, GE_RGB(236, 230, 250), 1);
+    }
+    if (g.keys > 0) {                                             /* keys carried */
+        for (int k = 0; k < g.keys && k < 5; k++) {
+            int kx = 92 + k * 12;
+            ge_fill_circle(fb, kx + 2, 25, 2, GE_RGB(255, 214, 110), 0);
+            ge_fill_rect(fb, kx + 4, 24, 5, 2, GE_RGB(255, 214, 110), 0);
+        }
+    }
     if (g.tick < 420 && !g.no_hints && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
         const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   R DASH";
         const char *l2 = "X THROW NEEDLE   A SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
@@ -1644,8 +1795,9 @@ static void demo_draw_inner(GeImage *fb) {
         int t = g.mode_timer, a = t < 24 ? t * 255 / 24 : (48 - t) * 255 / 24;
         ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(ge_clampi(a, 0, 255), 10, 4, 18), 0);
     }
-    if (g.warp_fade > 0) {
-        int t = 40 - g.warp_fade, a = t < 20 ? t * 255 / 20 : (40 - t) * 255 / 20;
+    if (g.warp_fade > 0 || g.door_fade > 0) {
+        int f = g.warp_fade > 0 ? g.warp_fade : g.door_fade;
+        int t = 40 - f, a = t < 20 ? t * 255 / 20 : (40 - t) * 255 / 20;
         ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(ge_clampi(a, 0, 255), 0, 0, 0), 0);
     }
 }

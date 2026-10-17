@@ -33,7 +33,7 @@ enum { FX_NEEDLE0, FX_NEEDLE1, FX_GLOB0, FX_GLOB1, FX_ROCK, FX_WAVE0, FX_WAVE1, 
 
 /* tileset cells */
 enum { TV_GRASS = 0, TV_DIRT = 1, TV_PLANK = 2, TV_DIRT2 = 3, TV_SPIKE = 4, TV_STONE = 5, TV_STONE_TOP = 6,
-       TV_CRACK = 7, TV_GATE = 8, TV_CRATE = 9, TV_LOCK = 10, TV_COUNT = 11 };
+       TV_CRACK = 7, TV_GATE = 8, TV_CRATE = 9, TV_LOCK = 10, TV_BLANK = 11 /* see-through: a crate moving in */, TV_COUNT = 12 };
 #define TV_FIRST_PUZZLE TV_CRACK    /* cells from here on are drawn after the others, from their own random numbers */
 
 typedef struct {
@@ -44,7 +44,8 @@ void art_make_sheets(Sprites *s);     /* images only; chars_init() parses the cl
 void art_free(Sprites *s);
 void art_make_tileset(GeImage *tiles);
 void art_puzzle_tiles(GeImage *tiles);   /* the cells from TV_FIRST_PUZZLE on (called by art_make_tileset) */
-void art_add_layers(GeWorld *w);
+void art_add_layers(GeWorld *w);        /* the forest */
+void art_add_cave_layers(GeWorld *w);   /* the caves under it */
 void art_draw_bench(GeImage *fb, int x, int y);   /* x = centre, y = floor */
 
 /* ---- characters (chars.c): clips, platformer defs, fighter defs ---------- */

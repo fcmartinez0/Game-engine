@@ -21,8 +21,9 @@
 /* Tiles, one character per cell:
  *   .  empty            #  ground (grass on top, earth below)   S  stone (a dressed top edge where open above)
  *   T  stone, always the top edge (a floor under a wall)          =  plank: stand on it, jump up through it
- *   ^  spikes           C  cracked stone: breaks when slashed or hit by a needle */
-#define TILE_CHARS ".#ST=^C"
+ *   ^  spikes           C  cracked stone: breaks after two hits (slash any way, spin, needle)
+ *   H  hidden stone: looks like S, breaks like C (a real secret) */
+#define TILE_CHARS ".#ST=^CH"
 
 typedef enum {
     TH_START,       /* where the hero appears when the room is entered other than by a door */
@@ -34,15 +35,19 @@ typedef enum {
     TH_BOSS,        /* Thornwarden; fought inside an arena */
     TH_ARENA,       /* the boss room: w tiles wide from col; a = the gate's column, b = the far door's; h = door height */
     TH_HALL,        /* the Paragon's hall: indoors, w tiles wide from col, h tiles high above row */
-    TH_LEVER,       /* input: hit it to switch its channel on (time > 0: it springs back after that many ticks) */
-    TH_PLATE,       /* input: on while the hero, a crate or an enemy stands on it */
-    TH_GATE,        /* output: w x h solid tiles, gone while its channel is on (invert: the other way round) */
-    TH_CRATE,       /* push it by walking into it; it falls; it holds plates down; it rests on spikes */
-    TH_KEY,         /* pick it up... */
-    TH_LOCK,        /* ...and walk into this w x h door to open it */
-    TH_RELIC,       /* a collectible: found once, counted */
+    TH_LEVER,       /* input: hit it to switch its wire on (mode: once / toggle / timed) */
+    TH_PLATE,       /* input: on while the hero's feet or a crate are on it */
+    TH_GATE,        /* output: w x h solid tiles, gone while its wire is on (invert: a bridge that appears instead;
+                     * lock: opens for a key instead of a wire; plank: its cells are planks you can jump up through) */
+    TH_CRATE,       /* push it by walking into it, or knock it with a slash or a needle; it falls; it holds plates
+                     * down; it rests on spikes; it goes back to its place when you come back into the room */
+    TH_KEY,         /* pick it up, then walk into a locked gate */
+    TH_RELIC,       /* a collectible, found once: maybe a mask, a needle or a silk segment */
     TH_COUNT
 } ThingKind;
+
+enum { LEVER_ONCE, LEVER_TOGGLE, LEVER_TIMED };                    /* Thing.mode for levers */
+enum { GIVE_NONE, GIVE_MASK, GIVE_NEEDLE, GIVE_SILK, GIVE_COUNT };  /* Thing.gives for relics */
 
 enum { STYLE_BRAWLER, STYLE_FENCER, STYLE_PARAGON };
 typedef enum { BD_FOREST, BD_CAVE, BD_COUNT } Backdrop;
@@ -51,10 +56,14 @@ typedef struct {
     uint8_t kind;
     int16_t col, row;          /* the cell it stands in (its feet are on the bottom edge of the cell) */
     int16_t w, h;              /* gates, locks, arenas, halls */
-    int8_t ch;                 /* inputs and gates: channel 1-9 (0 = none) */
-    int8_t need;               /* gate: how many inputs on its channel must be on (default 1) */
-    bool invert;               /* gate: solid while the channel is on */
-    int16_t time;              /* lever: ticks it stays on (0 = it toggles) */
+    int8_t ch;                 /* inputs and gates: wire (channel) 1-9, 0 = none */
+    int8_t need;               /* gate: how many inputs on its wire must be on: 1 = any, 0 = all of them */
+    bool invert;               /* gate: solid while its wire is on (a bridge) */
+    bool lock;                 /* gate: opens (for good) when you walk into it carrying a key */
+    bool plank;                /* gate: its cells are planks, not bars */
+    int8_t mode;               /* lever: LEVER_* */
+    int16_t time;              /* lever: ticks a timed lever stays on */
+    int8_t gives;              /* relic: GIVE_* */
     int8_t style, level, rounds;   /* duelist */
     int16_t a, b;              /* arena: gate column, far-door column */
     char name[24];             /* duelist / boss / relic name, door id */

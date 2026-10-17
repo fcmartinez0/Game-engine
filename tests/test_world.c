@@ -45,20 +45,24 @@ static void test_round_trip(void) {
     snprintf(s.text, sizeof s.text, "A SIGN, WITH SPACES = AND EQUALS");
     room_add_thing(r, s);
     Thing gt = thing_default(TH_GATE, 9, 8);
-    gt.w = 2; gt.h = 4; gt.ch = 7; gt.need = 2; gt.invert = true;
+    gt.w = 2; gt.h = 4; gt.ch = 7; gt.need = 0; gt.invert = true; gt.plank = true;
     room_add_thing(r, gt);
     Thing lv = thing_default(TH_LEVER, 11, 10);
-    lv.ch = 7; lv.time = 300;
+    lv.ch = 7; lv.time = 300; lv.mode = LEVER_TIMED;
+    room_add_thing(r, lv);
+    Thing rl = thing_default(TH_RELIC, 12, 10);
+    rl.gives = GIVE_NEEDLE; snprintf(rl.name, sizeof rl.name, "SHARP THING");
     room_add_thing(r, lv);
     Thing d = thing_default(TH_DOOR, 1, 10);
     snprintf(d.name, sizeof d.name, "west"); snprintf(d.target, sizeof d.target, "hollow:entry");
     room_add_thing(r, d);
     room_set_tile(r, 2, 2, 'C');
+    room_set_tile(r, 3, 2, 'H');
     CHECK(world_save(&b, tmp_path("rt3")) == 0);
     static World c;
     CHECK(world_load(&c, tmp_path("rt3"), err, sizeof err) == 0);
     CHECK(world_equal(&b, &c));
-    CHECK(room_tile(&c.rooms[0], 2, 2) == 'C');
+    CHECK(room_tile(&c.rooms[0], 2, 2) == 'C' && room_tile(&c.rooms[0], 3, 2) == 'H');
     world_free(&a); world_free(&b); world_free(&c);
 }
 
@@ -123,6 +127,7 @@ static void test_editing_helpers(void) {
     ge_tilemap_free(&m);
     CHECK(world_find_room(&w, "test") == 0 && world_find_room(&w, "nope") == -1);
     CHECK(thing_kind_from_name("gate") == TH_GATE && thing_kind_from_name("??") == -1 && !strcmp(thing_kind_name(TH_RELIC), "relic"));
+    CHECK(thing_kind_from_name("lock") == TH_GATE);                    /* the old name for a locked gate */
     world_free(&w);
 }
 

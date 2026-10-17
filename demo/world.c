@@ -28,8 +28,10 @@
 
 static const char *const KIND_NAMES[TH_COUNT] = {
     "start", "bench", "door", "sign", "crawler", "bat", "spitter", "grunt", "duelist", "boss", "arena", "hall",
-    "lever", "plate", "gate", "crate", "key", "lock", "relic",
+    "lever", "plate", "gate", "crate", "key", "relic",
 };
+static const char *const LEVER_MODES[] = { "once", "toggle", "timed" };
+static const char *const GIVES[GIVE_COUNT] = { "none", "mask", "needle", "silk" };
 static const char *const STYLE_NAMES[] = { "brawler", "fencer", "paragon" };
 static const char *const BACKDROP_NAMES[BD_COUNT] = { "forest", "cave" };
 
@@ -37,6 +39,7 @@ const char *thing_kind_name(int kind) { return kind >= 0 && kind < TH_COUNT ? KI
 
 int thing_kind_from_name(const char *s) {
     for (int i = 0; i < TH_COUNT; i++) if (!strcmp(s, KIND_NAMES[i])) return i;
+    if (!strcmp(s, "lock")) return TH_GATE;    /* older name: a gate that opens with a key (the loader sets lock) */
     return -1;
 }
 
@@ -49,9 +52,9 @@ Thing thing_default(int kind, int col, int row) {
     t.need = 1;
     t.rounds = 1;
     switch (kind) {
-    case TH_LEVER: case TH_PLATE: t.ch = 1; break;
+    case TH_LEVER: t.ch = 1; t.time = 180; break;
+    case TH_PLATE: t.ch = 1; break;
     case TH_GATE:  t.ch = 1; t.h = 3; break;
-    case TH_LOCK:  t.h = 3; break;
     case TH_ARENA: t.w = 22; t.h = 3; t.a = (int16_t)(col - 1); t.b = (int16_t)(col + 22); break;
     case TH_HALL:  t.w = 34; t.h = 6; break;
     case TH_DUELIST: snprintf(t.name, sizeof t.name, "DUELIST"); t.level = 1; break;
@@ -154,6 +157,7 @@ void room_build_tilemap(const Room *r, GeTilemap *m) {
         case '=': type = GE_TILE_ONEWAY; vis = TV_PLANK; break;
         case '^': type = GE_TILE_SPIKE; vis = TV_SPIKE; break;
         case 'C': type = GE_TILE_SOLID; vis = TV_CRACK; break;
+        case 'H': type = GE_TILE_SOLID; vis = TV_STONE; break;   /* hidden: looks like stone (gets the top edge too) */
         default: break;
         }
         m->type[i] = type;
@@ -166,7 +170,7 @@ void room_build_tilemap(const Room *r, GeTilemap *m) {
             if (m->type[i] != GE_TILE_SOLID) continue;
             bool open_above = y == 0 || m->type[i - m->w] != GE_TILE_SOLID;
             if (m->vis[i] == AUTO) m->vis[i] = open_above ? TV_GRASS : ((x * 7 + y * 13) % 5 == 0 ? TV_DIRT2 : TV_DIRT);
-            else if (m->vis[i] == TV_STONE && open_above && r->tiles[i] == 'S') m->vis[i] = TV_STONE_TOP;
+            else if (m->vis[i] == TV_STONE && open_above && (r->tiles[i] == 'S' || r->tiles[i] == 'H')) m->vis[i] = TV_STONE_TOP;
         }
 }
 
@@ -270,7 +274,8 @@ int world_save(const World *w, const char *path) {
     setvbuf(f, buf, _IOFBF, sizeof buf);
     fprintf(f, "gloamwood-world 1\n");
     fprintf(f, "# Made with the world editor (dev menu > EDIT WORLD). Tiles: . empty  # ground  S stone  T stone top\n");
-    fprintf(f, "# = plank  ^ spikes  C cracked stone. Things: thing <kind> <column> <row> settings...\n");
+    fprintf(f, "# = plank  ^ spikes  C cracked stone  H hidden stone. Things: thing <kind> <column> <row> settings...\n");
+    fprintf(f, "# The game rewrites this whole file when you SAVE in the editor: notes you add by hand are not kept.\n");
     for (int i = 0; i < w->nrooms; i++) {
         const Room *r = &w->rooms[i];
         fprintf(f, "\nroom %s %d %d %s\ntiles\n", r->name, r->w, r->h, BACKDROP_NAMES[r->backdrop % BD_COUNT]);
@@ -280,17 +285,25 @@ int world_save(const World *w, const char *path) {
             const Thing *t = &r->things[k];
             fprintf(f, "thing %s %d %d", thing_kind_name(t->kind), t->col, t->row);
             switch (t->kind) {
-            case TH_LEVER: fprintf(f, " ch=%d", t->ch); if (t->time) fprintf(f, " time=%d", t->time); break;
+            case TH_LEVER:
+                fprintf(f, " ch=%d mode=%s", t->ch, LEVER_MODES[ge_clampi(t->mode, 0, 2)]);
+                if (t->mode == LEVER_TIMED) fprintf(f, " time=%d", t->time);
+                break;
             case TH_PLATE: fprintf(f, " ch=%d", t->ch); break;
-            case TH_GATE:  fprintf(f, " w=%d h=%d ch=%d need=%d invert=%d", t->w, t->h, t->ch, t->need, t->invert ? 1 : 0); break;
-            case TH_LOCK:  fprintf(f, " w=%d h=%d", t->w, t->h); break;
+            case TH_GATE:
+                fprintf(f, " w=%d h=%d ch=%d need=%d", t->w, t->h, t->ch, t->need);
+                if (t->invert) fprintf(f, " invert=1");
+                if (t->lock) fprintf(f, " lock=1");
+                if (t->plank) fprintf(f, " plank=1");
+                break;
             case TH_ARENA: fprintf(f, " w=%d h=%d gate=%d exit=%d", t->w, t->h, t->a, t->b); break;
             case TH_HALL:  fprintf(f, " w=%d h=%d", t->w, t->h); break;
             case TH_DUELIST:
                 put_str(f, "name", t->name);
                 fprintf(f, " style=%s level=%d rounds=%d", STYLE_NAMES[ge_clampi(t->style, 0, 2)], t->level, t->rounds);
                 break;
-            case TH_BOSS: case TH_RELIC: put_str(f, "name", t->name); break;
+            case TH_BOSS: put_str(f, "name", t->name); break;
+            case TH_RELIC: put_str(f, "name", t->name); if (t->gives) fprintf(f, " gives=%s", GIVES[ge_clampi(t->gives, 0, GIVE_COUNT - 1)]); break;
             case TH_DOOR: put_str(f, "id", t->name); put_str(f, "to", t->target); break;
             case TH_SIGN: put_str(f, "text", t->text); break;
             default: break;
@@ -331,6 +344,11 @@ static void copy_str(char *dst, size_t n, const char *src) {   /* cut to fit */
     size_t k = 0;
     for (; src[k] && k + 1 < n; k++) dst[k] = src[k];
     dst[k] = 0;
+}
+
+static int parse_named(const char *s, const char *const *names, int n) {
+    for (int i = 0; i < n; i++) if (!strcmp(s, names[i])) return i;
+    return atoi(s);
 }
 
 static int parse_style(const char *s) {
@@ -396,14 +414,19 @@ int world_load(World *w, const char *path, char *err, int errlen) {
             int col = atoi(sc), row = atoi(sr);
             if (col < 0 || row < 0 || col >= r->w || row >= r->h) FAIL("%s at %d,%d is outside room %s (%dx%d)", kind, col, row, r->name, r->w, r->h);
             Thing t = thing_default(k, col, row);
+            if (!strcmp(kind, "lock")) { t.lock = true; t.ch = 0; }
             char key[24], val[72];
             while (next_token(&p, key, sizeof key, val, sizeof val)) {
                 int iv = atoi(val);
                 if (!strcmp(key, "w")) t.w = (int16_t)ge_clampi(iv, 1, ROOM_MAX_W);
                 else if (!strcmp(key, "h")) t.h = (int16_t)ge_clampi(iv, 1, ROOM_MAX_H);
                 else if (!strcmp(key, "ch")) t.ch = (int8_t)ge_clampi(iv, 0, 9);
-                else if (!strcmp(key, "need")) t.need = (int8_t)ge_clampi(iv, 1, 9);
+                else if (!strcmp(key, "need")) t.need = (int8_t)ge_clampi(iv, 0, 9);
                 else if (!strcmp(key, "invert")) t.invert = iv != 0;
+                else if (!strcmp(key, "lock")) t.lock = iv != 0;
+                else if (!strcmp(key, "plank")) t.plank = iv != 0;
+                else if (!strcmp(key, "mode")) t.mode = (int8_t)ge_clampi(parse_named(val, LEVER_MODES, 3), 0, 2);
+                else if (!strcmp(key, "gives")) t.gives = (int8_t)ge_clampi(parse_named(val, GIVES, GIVE_COUNT), 0, GIVE_COUNT - 1);
                 else if (!strcmp(key, "time")) t.time = (int16_t)ge_clampi(iv, 0, 30000);
                 else if (!strcmp(key, "style")) t.style = (int8_t)ge_clampi(parse_style(val), 0, 2);
                 else if (!strcmp(key, "level")) t.level = (int8_t)ge_clampi(iv, -1, 4);
@@ -439,10 +462,14 @@ bool world_equal(const World *a, const World *b) {
             if (s->kind != t->kind || s->col != t->col || s->row != t->row || strcmp(s->name, t->name) || strcmp(s->target, t->target) || strcmp(s->text, t->text))
                 return false;
             switch (s->kind) {
-            case TH_LEVER: if (s->ch != t->ch || s->time != t->time) return false; break;
+            case TH_LEVER: if (s->ch != t->ch || s->mode != t->mode || (s->mode == LEVER_TIMED && s->time != t->time)) return false; break;
             case TH_PLATE: if (s->ch != t->ch) return false; break;
-            case TH_GATE:  if (s->w != t->w || s->h != t->h || s->ch != t->ch || s->need != t->need || s->invert != t->invert) return false; break;
-            case TH_LOCK: case TH_HALL: if (s->w != t->w || s->h != t->h) return false; break;
+            case TH_GATE:
+                if (s->w != t->w || s->h != t->h || s->ch != t->ch || s->need != t->need || s->invert != t->invert || s->lock != t->lock || s->plank != t->plank)
+                    return false;
+                break;
+            case TH_RELIC: if (s->gives != t->gives) return false; break;
+            case TH_HALL: if (s->w != t->w || s->h != t->h) return false; break;
             case TH_ARENA: if (s->w != t->w || s->h != t->h || s->a != t->a || s->b != t->b) return false; break;
             case TH_DUELIST: if (s->style != t->style || s->level != t->level || s->rounds != t->rounds) return false; break;
             default: break;

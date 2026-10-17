@@ -342,6 +342,8 @@ static void pogo(GeWorld *w, int ai, float speed) {
     ge_world_event(w, GE_EV_POGO, ai, -1);
 }
 
+void ge_entity_pogo(GeWorld *w, int idx, float speed) { pogo(w, idx, speed); }
+
 void ge_world_apply_hit(GeWorld *w, int ai, int vi, const GeHit *h) {
     GeEntity *v = &w->ents[vi];
 
@@ -432,7 +434,12 @@ void ge_shots_update(GeWorld *w) {
             s->pos.y += s->vel.y;
         }
         int t = ge_tilemap_get(&w->map, (int)floorf(s->pos.x / GE_TILE), (int)floorf(s->pos.y / GE_TILE));
-        if (s->def->solid_stops && t == GE_TILE_SOLID) { kill_shot(w, s); continue; }
+        if (s->def->solid_stops && t == GE_TILE_SOLID) {
+            int tx = (int)floorf(s->pos.x / GE_TILE), ty = (int)floorf(s->pos.y / GE_TILE);
+            ge_world_event(w, GE_EV_SHOT_TILE, s->owner, ty * w->map.w + tx);   /* games may care what it hit (a crack, a crate) */
+            kill_shot(w, s);
+            continue;
+        }
         if (s->pos.y > (float)(w->map.h * GE_TILE) + 32.0f) s->active = false;
     }
 }
