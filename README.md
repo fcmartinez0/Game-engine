@@ -116,6 +116,18 @@ layer hills.pam factor=0.3 drift=0.05 y=120
 layer grass.pam factor=1.4 y=220 alpha=200 front
 ```
 
+### The mods folder: change characters without rebuilding
+
+The game checks `mods/` (on a 3DS: `SD:/3ds/gloamwood/mods/`) at start-up and on **RELOAD MODS** in the dev menu. Per character (`hero` = Wren, `brawler` = Grobb and Mosshide, `fencer` = Silke and the Champion, `paragon`, `warden` = the boss, `fx` = projectiles):
+
+| File | What it changes |
+|---|---|
+| `NAME.anim` | animation clips and attack frame data: cells, timing, hitboxes, damage, stun, guard height, cancels |
+| `NAME.pam` | the sprite sheet (optional: without it your `.anim` uses the built-in sheet) |
+| `NAME.moves` | fighters only: which input does which clip, cancel level, what the CPU uses it for, and tuning (walk, jump, dash, health, throw) |
+
+**EXPORT CHARACTERS** in the dev menu writes the built-in versions of all of them to `mods/_export/` with a README; copy a file up into `mods/`, change it, reload. Open a `.pam` and `.anim` together in the asset tool to edit them visually. Keep every clip name the built-in file has (the game finds them by name); add as many new ones as you like. Problems (a missing clip, a frame pointing outside the sheet, an unknown move input) are listed on the bottom screen and in the play log, and the built-in version is kept, so a typo never breaks the game. `--no-mods` ignores the folder.
+
 ### Asset prep tool (drag and drop)
 
 `tools/asset-prep/index.html` is a standalone page, not part of the engine; open it in any browser.
@@ -135,6 +147,8 @@ ge_world_load_layers(&world, "forest.layers", &line);   // or: ./build/demo --la
 You need a 3DS with custom firmware (Luma3DS) and the Homebrew Launcher.
 
 **Ready-made package:** `3ds/package.sh` builds the game and writes `dist/gloamwood-3ds.zip`. Unzip it onto the SD card root to get `/3ds/gloamwood/gloamwood.3dsx` plus a readme with the controls.
+
+**Duel coach:** during a duel the bottom screen switches to a coach: the full move list for the 3DS buttons, and a running explanation of what just happened ("HIT MID-SWING. BLOCK FIRST, THEN HIT BACK", "GRABBED! PRESS Y+X AT ONCE TO BREAK IT"). Against the Paragon it shows what the Paragon currently believes about you. **PRACTICE DUEL** in the dev menu starts a no-stakes duel against a beginner Grobb anywhere in the overworld.
 
 **Dev menu and play log:** the dev menu lives on the **bottom screen**: on a 3DS that is the touch screen, and on a PC the window shows a 320×240 panel under the game, like an emulator, and you click it with the mouse. Tap a row to use it (speed readout, detail level, play log, god mode, duel level, warps, "mark this moment", wipe the Paragon's memory); it works while you play, and **Select** also pauses the game so the D-pad can drive it. The engine side is one optional callback, `GeGame.draw_bottom`, that returns whether the panel changed; it is only sent to the screen then, so a still panel costs nothing. On the 3DS the play log is on by default and goes to `/3ds/gloamwood/log.txt`. Each session is appended, with play time, a performance line every 10 seconds, duels, deaths, the boss, your markers, and a summary when you quit with Start + Select. On desktop, pass `--log` to write `gloamwood_log.txt`.
 

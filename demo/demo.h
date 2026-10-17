@@ -53,6 +53,8 @@ typedef struct {
 } Chars;
 
 int chars_init(Chars *c, Sprites *s);  /* 0, or prints what failed */
+int chars_parse(Sprites *s);           /* the two halves of chars_init: built-in clips, */
+int chars_build(Chars *c, Sprites *s);  /* then the defs (clip lookups by name)          */
 
 /* ---- the Paragon (paragon.c) ---------------------------------------------
  * The final boss: a fighter that has been watching the whole journey. See docs/PARAGON.md. */
@@ -64,6 +66,7 @@ enum { GIFT_GROBB = 1, GIFT_SILKE = 2, GIFT_MOSSHIDE = 4, GIFT_CHAMPION = 8, GIF
 
 /* The Paragon's fighter def: the hero's move list, undying, plus what it took from each duelist beaten. */
 void paragon_build_def(const Chars *c, Sprites *s, unsigned gifts, GeFighterDef *out);
+void paragon_forget_base(void);
 int  paragon_learn_level(const GePlayerModel *m, unsigned gifts);
 /* Cross-session memory: a text file next to the game. */
 void paragon_set_profile_path(const char *path);
@@ -78,6 +81,14 @@ GePattern *encounter_pattern(const char *duelist_name);   /* a default one for u
 void encounter_draw_transition(GeImage *fb, GePattern *p, int t, int cx, int cy, uint32_t tick);
 void encounter_draw_reveal(GeImage *fb, GePattern *p, int t, uint32_t tick);
 void encounter_free(void);
+
+/* ---- the mods folder (mods.c): art, clips and move lists from files ------ */
+#define MOD_REPORT_LINES 10
+typedef struct { char lines[MOD_REPORT_LINES][72]; int nlines, loaded, errors; } ModReport;
+const char *mods_dir(void);
+void mods_apply_sprites(Sprites *s, ModReport *r);     /* after chars_parse, before chars_build */
+void mods_apply_moves(Chars *c, Sprites *s, ModReport *r); /* after chars_build */
+int  mods_export(Sprites *s, Chars *c);                /* built-in files into mods/_export/; returns files written */
 
 /* ---- level (level.c) ---------------------------------------------------- */
 #define LEVEL_W 214

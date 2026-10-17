@@ -796,7 +796,7 @@ void ge_fight_update(GeFight *f, const GeFightInput in_[2]) {
 
     switch (f->phase) {
     case GE_FP_INTRO:
-        if (f->phase_timer >= INTRO_TICKS) { f->phase = GE_FP_FIGHT; f->phase_timer = 0; }
+        if (f->phase_timer >= (f->intro_ticks > 0 ? f->intro_ticks : INTRO_TICKS)) { f->phase = GE_FP_FIGHT; f->phase_timer = 0; }
         break;
     case GE_FP_FIGHT:
         if (ent(f, 0)->hp <= 0 || ent(f, 1)->hp <= 0) {
@@ -1019,7 +1019,7 @@ void ge_fight_draw(GeFight *f, GeImage *fb) {
     int scale = 3;
     switch (f->phase) {
     case GE_FP_INTRO:
-        if (f->phase_timer < 60) {
+        if (f->phase_timer < (f->intro_ticks > INTRO_TICKS ? f->intro_ticks : INTRO_TICKS) - 40) {
             bool final_round = f->f[0].wins == f->rounds_to_win - 1 && f->f[1].wins == f->rounds_to_win - 1 && f->rounds_to_win > 1;
             if (final_round) msg = "FINAL ROUND";
             else { snprintf(buf, sizeof buf, "ROUND %d", f->round); msg = buf; }

@@ -363,6 +363,24 @@ void ge_draw_bits_outline(GeImage *dst, int x, int y, const uint8_t rows[7], int
 
 /* Netpbm PAM (P7, 4-channel). Trivial to export from GIMP/ImageMagick and
  * needs no third-party decoder, which keeps the 3DS build dependency-free. */
+int ge_image_save_pam(const GeImage *img, const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    fprintf(f, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", img->w, img->h);
+    unsigned char row[4 * 512];
+    for (int y = 0; y < img->h; y++)
+        for (int x0 = 0; x0 < img->w; x0 += 512) {
+            int n = img->w - x0 < 512 ? img->w - x0 : 512;
+            for (int i = 0; i < n; i++) {
+                uint32_t p = img->px[y * img->w + x0 + i];
+                row[i * 4] = (unsigned char)(p >> 16); row[i * 4 + 1] = (unsigned char)(p >> 8);
+                row[i * 4 + 2] = (unsigned char)p; row[i * 4 + 3] = (unsigned char)(p >> 24);
+            }
+            fwrite(row, 4, (size_t)n, f);
+        }
+    return fclose(f) == 0 ? 0 : -2;
+}
+
 int ge_image_load_pam(GeImage *out, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;

@@ -171,8 +171,8 @@ static void clips_common(GeActorDef *d) {
     d->clip_skill = d->clip_tool = d->clip_channel = -1;
 }
 
-int chars_init(Chars *c, Sprites *s) {
-    memset(c, 0, sizeof *c);
+/* Step 1: every sprite's built-in clips (the mods folder may replace some of them after this). */
+int chars_parse(Sprites *s) {
     int rc = 0;
     const Style hero_style = { 0, 1.0f, 0, 1.0f }, brawler_style = { -4, 1.25f, 3, 1.2f }, fencer_style = { 8, 0.85f, -1, 0.9f };
 
@@ -222,7 +222,12 @@ int chars_init(Chars *c, Sprites *s) {
          "clip spear loop\n frame %d 99\nclip dust loop\n frame %d 99\n",
          FX_NEEDLE0, FX_NEEDLE1, FX_GLOB0, FX_GLOB1, FX_ROCK, FX_WAVE0, FX_WAVE1, FX_ORB0, FX_ORB1, FX_SPEAR, FX_DUST);
     rc |= parse(&s->fx, "fx");
-    if (rc) return rc;
+    return rc;
+}
+
+/* Step 2: the defs, which look clips up by name in whatever the sprites hold now. */
+int chars_build(Chars *c, Sprites *s) {
+    memset(c, 0, sizeof *c);
 
     /* shots */
     const GeSprite *fx = &s->fx;
@@ -325,4 +330,9 @@ int chars_init(Chars *c, Sprites *s) {
         return 1;
     }
     return 0;
+}
+
+int chars_init(Chars *c, Sprites *s) {
+    int rc = chars_parse(s);
+    return rc ? rc : chars_build(c, s);
 }

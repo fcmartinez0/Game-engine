@@ -25,6 +25,7 @@ enum {
 GeImage ge_image_create(int w, int h);
 void    ge_image_free(GeImage *img);
 int     ge_image_load_pam(GeImage *out, const char *path); /* P7 RGB_ALPHA; 0 on success */
+int     ge_image_save_pam(const GeImage *img, const char *path); /* the same format back out; 0 on success */
 int     ge_image_save_png(const GeImage *img, const char *path); /* screenshots; 0 on success */
 uint32_t ge_image_checksum(const GeImage *img);
 

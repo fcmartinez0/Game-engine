@@ -3,9 +3,11 @@
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
 #include "../platform/n3ds_blit.h"
+#include "../engine/src/ge_text.h"
 #include "ge/ge_world.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_checks, g_failed;
@@ -492,6 +494,33 @@ static void test_blit_fast_paths(void) {
     ge_image_free(&art); ge_image_free(&ts); ge_image_free(&a); ge_image_free(&b);
 }
 
+static void test_save_round_trip(void) {
+    puts("sprite and image round trips (for the mods folder)");
+    GeSprite a, b;
+    memset(&a, 0, sizeof a); memset(&b, 0, sizeof b);
+    a.sheet = ge_image_create(64, 32); b.sheet = ge_image_create(64, 32);
+    const char *text =
+        "cell 32 16\norigin 16 15\n"
+        "clip idle loop\n frame 0 10\n frame 1 12\n"
+        "clip hit once dmg=7 kb=1.5,-2 stop=4 stun=18 cancel=1 next=idle lunge=2.5 rise=0.5 pogo=6 recoil=1.25 shoot=1 inv=3 guard=low bstun=11 chip=2 kd=1\n"
+        "  frame 2 3\n  frame 3 4 hit=2,-20,36.5,12\n  frame 0 8\n";
+    CHECK(ge_sprite_parse(&a, text) == 0);
+    CHECK(ge_sprite_save_anim(&a, "/tmp/ge_rt.anim") == 0);
+    char *back = ge_read_file("/tmp/ge_rt.anim");
+    CHECK(back && ge_sprite_parse(&b, back) == 0);
+    free(back);
+    bool same = a.nclips == b.nclips && a.cell_w == b.cell_w && a.cell_h == b.cell_h && a.origin_x == b.origin_x && a.origin_y == b.origin_y;
+    for (int i = 0; same && i < a.nclips; i++) same = memcmp(&a.clips[i], &b.clips[i], sizeof a.clips[i]) == 0;
+    CHECK(same);
+    for (int i = 0; i < 64 * 32; i++) a.sheet.px[i] = (uint32_t)(i * 2654435761u);
+    CHECK(ge_image_save_pam(&a.sheet, "/tmp/ge_rt.pam") == 0);
+    GeImage img = { 0, 0, NULL };
+    CHECK(ge_image_load_pam(&img, "/tmp/ge_rt.pam") == 0 && img.w == 64 && img.h == 32 && memcmp(img.px, a.sheet.px, 64 * 32 * 4) == 0);
+    ge_image_free(&img);
+    remove("/tmp/ge_rt.anim"); remove("/tmp/ge_rt.pam");
+    ge_sprite_free(&a); ge_sprite_free(&b);
+}
+
 static void test_patterns(void) {
     puts("pattern backgrounds");
     const uint32_t pal[6] = { GE_RGB(1, 0, 0), GE_RGB(2, 0, 0), GE_RGB(3, 0, 0), GE_RGB(4, 0, 0), GE_RGB(5, 0, 0), GE_RGB(6, 0, 0) };
@@ -792,6 +821,7 @@ int main(void) {
     test_blit_fast_paths();
     test_gfx();
     test_patterns();
+    test_save_round_trip();
     test_tilemap();
     test_physics();
     test_combat();

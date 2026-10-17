@@ -159,6 +159,7 @@ typedef struct {
     /* teaching aids, per side (bit 0 = side 0): name what got through ("LOW: CROUCH TO BLOCK"), show which
      * attacks hit low or high, and prompt the throw break. The demo turns them on for the player. */
     unsigned hints;
+    int intro_ticks;         /* length of the "ROUND 1 ... FIGHT!" intro (0 = the default 100) */
     float damage_scale[2];   /* damage dealt BY each side is multiplied by this (1 by default): difficulty settings */
     /* per side, for play logs: attacks blocked, hits taken while trying to block at the wrong height, other hits, throws */
     int stat_blocked[2], stat_wrong_height[2], stat_hit[2], stat_thrown[2];

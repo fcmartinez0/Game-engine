@@ -53,8 +53,23 @@ DEV MENU - always on the BOTTOM (touch) screen
   WARP             jump to a section (shaft, duelists, benches, boss, the Paragon's hall)
   MARK THIS MOMENT puts a marker in the log - use it when something looks
                    wrong, stutters, or feels unfair, so it can be found later
+  PRACTICE DUEL    a no-stakes duel against a beginner
+  RELOAD MODS / EXPORT CHARACTERS   see MODS below
   WIPE PARAGON MEMORY forgets everything the final boss has learned about you
   UP/DOWN to choose, A or LEFT/RIGHT to change, SELECT or B to close.
+
+DURING A DUEL the bottom screen is a coach: your moves, and what just
+  happened and what to do about it. SELECT still opens the dev menu.
+
+PRACTICE DUEL (dev menu): a no-stakes duel against a beginner, any time.
+
+MODS - change characters without a new build
+  Dev menu > EXPORT CHARACTERS writes every character's files to
+  SD:/3ds/gloamwood/mods/_export/ (with a README). Copy one up into
+  SD:/3ds/gloamwood/mods/, edit it (on a computer: the asset tool in
+  tools/asset-prep edits .pam + .anim visually, .moves is plain text),
+  put it back and tap RELOAD MODS. Mistakes are listed on the bottom
+  screen and in the log; the built-in version is used instead.
 
 THE PLAY LOG - please send this back
   File:  SD:/3ds/gloamwood/log.txt   (always the latest session; the one

@@ -56,15 +56,22 @@ typedef struct {
     bool difficulty_set;                  /* given on the command line: don't load the saved one */
     char facts[6][72];
     int nfacts, learn_shown;
-    bool fresh_profile, paragon_report, beat_all, hall_named;
+    bool fresh_profile, paragon_report, beat_all, hall_named, no_mods;
+    ModReport mods;
+    bool practice;                        /* the current duel is a practice one: nothing is at stake */
+    char paragon_say[2][72];              /* its two lines before the fight */
     bool bottom_dirty;                    /* the bottom screen needs redrawing */
     int tap_flash, bottom_frames;
+    struct { char text[60]; uint32_t color; int count; } coach[4];   /* the duel coach's last lines, newest first */
+    int coach_prev[9], coach_nfacts, coach_facts_tick;
+    char coach_facts[5][72];
+    bool coach_was_showing;
     int confirm_item, confirm_timer;      /* a pending "tap again to confirm" */
 
     int boss_spawn, boss_state, boss_timer, boss_combo;
     bool boss_engaged, boss_was_air;
 
-    char msg[64];
+    char msg[80];
     int msg_timer;
 
     bool autoplay, low_detail, god;
@@ -228,6 +235,20 @@ static void respawn_at_bench(void) {
 static int spawn_of(int ent) {
     for (int i = 0; i < level_nspawns; i++) if (g.ent_of[i] == ent) return i;
     return -1;
+}
+
+static void start_duel_alert(int spawn, bool first_strike);
+
+/* A practice duel from the dev menu: Grobb at beginner strength, nothing won or lost. */
+static void start_practice(void) {
+    if (g.mode != M_OVERWORLD || !hero()->active) { say("PRACTICE STARTS FROM THE OVERWORLD", 90); return; }
+    int grobb = -1;
+    for (int i = 0; i < level_nspawns; i++) if (level_spawns[i].name && !strcmp(level_spawns[i].name, "GROBB")) grobb = i;
+    if (grobb < 0) return;
+    g.menu_open = false;
+    g.practice = true;
+    start_duel_alert(grobb, false);
+    LOG("practice duel");
 }
 
 static void start_duel_alert(int spawn, bool first_strike) {
@@ -625,6 +646,8 @@ static void check_duelists(void) {
     }
 }
 
+static void coach_reset(void);
+
 /* What the Paragon has taken so far: one technique per duelist (and the boss) beaten. */
 static unsigned earned_gifts(void) {
     static const struct { const char *name; unsigned gift; } T[] = {
@@ -655,8 +678,10 @@ static void begin_battle(void) {
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
     if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); }
+    if (g.practice) { g.fight.damage_scale[1] = 0.5f; g.fight.damage_scale[0] = 1.4f; g.fight.names[1] = "GROBB (PRACTICE)"; }
     g.fight.forgiving_guard = g.difficulty <= 0;      /* easy and normal: L also guards in the air and after your own swing */
     g.fight.hints = 1;                                 /* teaching aids for the player's side */
+    coach_reset();
     if (final) {
         int learn = paragon_learn_level(&g.model, g.gifts);
         ge_paragon_init(&g.brain, &g.model);
@@ -666,6 +691,16 @@ static void begin_battle(void) {
         g.fight.finisher_tick = PARAGON_CLOCK_TICKS;
         if (g.gifts & GIFT_CHAMPION) g.fight.f[1].meter = GE_FIGHT_METER;
         g.learn_shown = learn;
+        g.fight.intro_ticks = 230;                     /* time to hear what it says */
+        /* what it says before the fight: drawn from what it has learned. [story hook: its real voice] */
+        char facts[3][72];
+        int nf = ge_model_describe(&g.model, facts, 3);
+        if (g.model.finals == 0 && g.model.duels == 0) snprintf(g.paragon_say[0], sizeof g.paragon_say[0], "I HAVE BEEN WAITING FOR YOU.");
+        else if (g.model.finals == 0 && g.model.duels == 1) snprintf(g.paragon_say[0], sizeof g.paragon_say[0], "I WATCHED YOUR ONE DUEL.");
+        else if (g.model.finals == 0) snprintf(g.paragon_say[0], sizeof g.paragon_say[0], "I HAVE WATCHED ALL %u OF YOUR DUELS.", (unsigned)g.model.duels);
+        else snprintf(g.paragon_say[0], sizeof g.paragon_say[0], "AGAIN. THAT IS %u TIMES NOW.", (unsigned)g.model.finals + 1);
+        if (nf > 0) snprintf(g.paragon_say[1], sizeof g.paragon_say[1], "%s.", facts[g.model.finals % (unsigned)nf]);
+        else snprintf(g.paragon_say[1], sizeof g.paragon_say[1], "SHOW ME HOW YOU FIGHT.");
         GeTilemap *am = &g.fight.world.map;            /* its arena floor is the hall's dressed stone */
         for (int x = 0; x < am->w; x++)
             for (int y = 0; y < am->h; y++)
@@ -707,6 +742,14 @@ static void end_battle(void) {
     g.model.rounds += g.fight.f[0].wins + g.fight.f[1].wins;
     if (g.duel_result == 0) g.model.wins++; else g.model.losses++;
     g.model.absorbed = (uint32_t)__builtin_popcount(earned_gifts());
+    if (g.practice) {                                    /* nothing at stake: back where you were */
+        g.practice = false;
+        say(g.duel_result == 0 ? "PRACTICE WON. TRY IT ON HARD WHEN YOU'RE READY" : "PRACTICE OVER. NOTHING LOST", 150);
+        g.duel_cd = 120;
+        p->invuln = 60;
+        paragon_profile_save(&g.model);
+        return;
+    }
     if (paragon_duel()) {
         g.model.finals++;
         g.duels_lost++;
@@ -752,13 +795,14 @@ static void draw_props(void *user, GeImage *fb, int camx, int camy) {
         art_draw_bench(fb, level_benches[i] * GE_TILE + 8 - camx, GROUND_ROW * GE_TILE - camy);
 }
 
-static int demo_init(void *user) {
-    (void)user;
+/* Every character: the built-in art and clips, then whatever the mods folder replaces, then the defs. */
+static int load_characters(void) {
     art_make_sheets(&g.spr);
-    if (chars_init(&g.ch, &g.spr) != 0) return 1;
-    ge_model_init(&g.model);
-    if (!g.fresh_profile) paragon_profile_load(&g.model);
-    if (!g.fresh_profile && !g.difficulty_set) load_settings();
+    if (chars_parse(&g.spr) != 0) return 1;
+    memset(&g.mods, 0, sizeof g.mods);
+    if (!g.no_mods) mods_apply_sprites(&g.spr, &g.mods);
+    if (chars_build(&g.ch, &g.spr) != 0) return 1;
+    if (!g.no_mods) mods_apply_moves(&g.ch, &g.spr, &g.mods);
     for (int v = 0; v < 3; v++) {
         const GeSprite *sp = duel_sprite(v);
         g_duel_defs[v] = g.ch.duelist;
@@ -767,6 +811,40 @@ static int demo_init(void *user) {
         g_duel_defs[v].clip_hurt = ge_sprite_find_clip(sp, "hurt");
         g_duel_defs[v].clip_dead = ge_sprite_find_clip(sp, "dead");
     }
+    paragon_forget_base();
+    return 0;
+}
+
+static void log_mods(void) {
+    if (g.mods.nlines == 0) { LOG("mods: none in %s", mods_dir()); return; }
+    LOG("mods from %s: %d loaded, %d with problems", mods_dir(), g.mods.loaded, g.mods.errors);
+    for (int i = 0; i < g.mods.nlines; i++) LOG("  %s", g.mods.lines[i]);
+}
+
+static void reload_mods(void) {
+    if (g.mode != M_OVERWORLD && g.mode != M_VICTORY) { say("RELOAD MODS OUTSIDE A DUEL", 90); return; }
+    art_free(&g.spr);
+    if (load_characters() != 0) { say("RELOAD FAILED: SEE THE LOG", 120); return; }
+    for (int i = 0; i < GE_MAX_ENTS; i++) {           /* nothing may keep playing a clip that is gone */
+        GeEntity *e = &g.world.ents[i];
+        if (!e->active || !e->def) continue;
+        e->anim.clip = e->def->clip_idle >= 0 ? e->def->clip_idle : 0;
+        e->anim.frame = e->anim.timer = 0; e->anim.done = false;
+        if (e->state == GE_ST_ATTACK) e->state = GE_ST_IDLE;
+    }
+    for (int i = 0; i < GE_MAX_SHOTS; i++) g.world.shots[i].active = false;
+    log_mods();
+    char buf[64];
+    snprintf(buf, sizeof buf, "MODS RELOADED: %d LOADED, %d PROBLEMS", g.mods.loaded, g.mods.errors);
+    say(buf, 150);
+}
+
+static int demo_init(void *user) {
+    (void)user;
+    if (load_characters() != 0) return 1;
+    ge_model_init(&g.model);
+    if (!g.fresh_profile) paragon_profile_load(&g.model);
+    if (!g.fresh_profile && !g.difficulty_set) load_settings();
     GeWorld *w = &g.world;
     ge_world_init(w, SCREEN_W, SCREEN_H, 1234);
     w->on_event = on_event;
@@ -807,7 +885,7 @@ static const struct { const char *name; int col; } WARPS[] = {
     { "PARAGON HALL", 183 }, { "PARAGON", 192 },
 };
 #define NWARPS ((int)(sizeof WARPS / sizeof WARPS[0]))
-enum { MI_PERF, MI_DETAIL, MI_LOG, MI_GOD, MI_DUEL, MI_WARP, MI_MARK, MI_RESET, MI_CLOSE, MI_COUNT };
+enum { MI_PERF, MI_DETAIL, MI_LOG, MI_GOD, MI_DUEL, MI_WARP, MI_PRACTICE, MI_MARK, MI_MODS, MI_EXPORT, MI_RESET, MI_CLOSE, MI_COUNT };
 
 static void apply_detail(void) {
     bool low = g.detail_mode == 0 ? g.auto_low : g.detail_mode == 1;
@@ -892,6 +970,17 @@ static void menu_apply(int item, int dir, bool act) {
     case MI_MARK:
         if (act) { LOG("--- marked by the player (something worth looking at happened here) ---"); devlog_flush(); say("LOG MARKED", 60); g.menu_open = false; }
         break;
+    case MI_PRACTICE: if (act) start_practice(); break;
+    case MI_MODS:     if (act) { reload_mods(); g.menu_open = false; } break;
+    case MI_EXPORT:
+        if (act) {
+            int n = mods_export(&g.spr, &g.ch);
+            char buf[72];
+            snprintf(buf, sizeof buf, n ? "EXPORTED %d FILES TO MODS/_EXPORT" : "EXPORT FAILED (CAN'T WRITE THE FOLDER)", n);
+            say(buf, 180);
+            LOG("dev: exported %d character files to %s/_export", n, mods_dir());
+        }
+        break;
     case MI_CLOSE:  if (act || dir) g.menu_open = !g.menu_open; break;
     }
 }
@@ -910,14 +999,16 @@ static void menu_input(const GeInput *in) {
  * and the mouse taps it. It is always showing and always tappable; SELECT also
  * pauses the game and lets the D-pad drive it. */
 
-#define BM_ROW_Y 28
-#define BM_ROW_H 16
+#define BM_ROW_Y 26
+#define BM_ROW_H 13
 #define BM_ARROW_W 30
 
 static bool item_steps(int i) { return i == MI_DETAIL || i == MI_DUEL || i == MI_WARP; }
 
+static bool coach_showing(void);
+
 static void bottom_touch(const GeInput *in) {
-    if (!in->touch_pressed) return;
+    if (!in->touch_pressed || coach_showing()) return;   /* during a duel the bottom screen is the coach: no stray taps */
     int row = (in->touch_y - BM_ROW_Y) / BM_ROW_H;
     if (in->touch_y < BM_ROW_Y || row < 0 || row >= MI_COUNT) return;
     int dir = 0;
@@ -928,8 +1019,111 @@ static void bottom_touch(const GeInput *in) {
     menu_apply(row, dir, dir == 0);
 }
 
+/* ---- the duel coach: in duels the bottom screen shows the moves and explains what just happened ------ */
+
+static bool coach_showing(void) { return !g.menu_open && (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)); }
+
+static void coach_say(const char *msg, uint32_t col) {
+    if (!strncmp(g.coach[0].text, msg, strlen(msg))) {   /* the same thing again: count it instead of repeating */
+        g.coach[0].count++;
+        snprintf(g.coach[0].text, sizeof g.coach[0].text, "%s X%d", msg, g.coach[0].count);
+        g.bottom_dirty = true;
+        return;
+    }
+    memmove(&g.coach[1], &g.coach[0], sizeof g.coach[0] * 3);
+    g.coach[0].count = 1;
+    snprintf(g.coach[0].text, sizeof g.coach[0].text, "%s", msg);
+    g.coach[0].color = col;
+    g.bottom_dirty = true;
+}
+
+/* compare the fight's counters with last tick's and turn each change into a line of advice */
+static void coach_update(void) {
+    if (!g.fight_live) return;
+    const GeFight *f = &g.fight;
+    int now[9] = { f->stat_blocked[0], f->stat_wrong_height[0], f->stat_hit_attacking[0], f->stat_hit_air[0], f->stat_hit_open[0],
+                   f->stat_hit_guard_busy[0], f->stat_thrown[0], f->stat_hit[1] + f->stat_wrong_height[1], f->stat_blocked[1] };
+    const uint32_t good = GE_RGB(140, 230, 160), bad = GE_RGB(255, 170, 120), info = GE_RGB(200, 200, 230);
+    if (now[0] > g.coach_prev[0]) coach_say("BLOCKED! NOW HIT BACK WHILE THEY RECOVER", good);
+    if (now[1] > g.coach_prev[1]) coach_say("WRONG HEIGHT. HOLD L: IT BLOCKS EVERY HEIGHT", bad);
+    if (now[2] > g.coach_prev[2]) coach_say("HIT MID-SWING. BLOCK FIRST, THEN HIT BACK", bad);
+    if (now[3] > g.coach_prev[3])
+        coach_say(g.fight.forgiving_guard ? "HIT IN THE AIR. HOLD L WHILE JUMPING" : "HIT IN THE AIR. DON'T JUMP AT THEM", bad);
+    if (now[4] > g.coach_prev[4]) coach_say("HIT OPEN. HOLD L WHEN THEY START A SWING", bad);
+    if (now[5] > g.coach_prev[5]) coach_say("L HELD, BUT YOU WERE BUSY (ATTACK OR DASH)", bad);
+    if (now[6] > g.coach_prev[6]) coach_say("GRABBED! PRESS Y+X AT ONCE TO BREAK IT", bad);
+    if (now[7] > g.coach_prev[7]) coach_say("YOUR HIT LANDED", good);
+    if (now[8] > g.coach_prev[8]) coach_say("THEY BLOCKED. TRY DOWN+B (LOW) OR Y+X (THROW)", info);
+    memcpy(g.coach_prev, now, sizeof now);
+}
+
+static void coach_reset(void) {
+    memset(g.coach, 0, sizeof g.coach);
+    memset(g.coach_prev, 0, sizeof g.coach_prev);
+    g.coach_facts_tick = 0;
+    coach_say(g.difficulty <= 0 ? "TIP: HOLD L TO GUARD. BLOCKS LOW AND HIGH" : "TIP: HOLD BACK OR L TO BLOCK", GE_RGB(200, 200, 230));
+}
+
+static void draw_coach(GeImage *fb) {
+    const uint32_t ink = GE_RGB(20, 14, 30), dim = GE_RGB(150, 140, 180), hi = GE_RGB(255, 236, 160);
+    bool paragon = paragon_duel();
+    ge_clear(fb, GE_RGB(16, 10, 30));
+    ge_fill_rect(fb, 0, 0, fb->w, 20, paragon ? GE_RGB(46, 36, 20) : GE_RGB(34, 22, 58), 0);
+    ge_fill_rect(fb, 0, 20, fb->w, 1, paragon ? GE_RGB(240, 196, 90) : GE_RGB(190, 120, 255), 0);
+    char buf[96];
+    snprintf(buf, sizeof buf, "WREN VS %s", g.fight.names[1] ? g.fight.names[1] : "?");
+    ge_text_outlined(fb, 6, 6, buf, paragon ? GE_RGB(255, 220, 140) : GE_RGB(220, 190, 255), ink, 1);
+    ge_text(fb, fb->w - 6 - ge_text_width("SELECT: DEV MENU", 1), 7, "SELECT: DEV MENU", dim, 1);
+    int y = 26;
+    if (paragon) {   /* what it believes about you, right now */
+        ge_text(fb, 6, y, "IT IS WATCHING. WHAT IT BELIEVES:", GE_RGB(255, 214, 120), 1);
+        y += 12;
+        for (int i = 0; i < g.coach_nfacts && i < 5; i++, y += 11) ge_text(fb, 10, y, g.coach_facts[i], GE_RGB(240, 230, 200), 1);
+        if (g.coach_nfacts == 0) { ge_text(fb, 10, y, "NOTHING YET. IT IS STILL LEARNING YOU.", GE_RGB(240, 230, 200), 1); y += 11; }
+        y += 4;
+        ge_text(fb, 6, y, "IT CANNOT BE BEATEN. SURVIVE AND SEE WHAT IT DOES.", dim, 1);
+        y += 14;
+    } else {
+        static const char *const MOVES[] = {
+            "Y LIGHT    X MEDIUM    A HEAVY",
+            "B THRUST: SLOW, LONGEST REACH (DOWN+B: LOW)",
+            "HOLD L: GUARD (STOPS ALL BUT THROWS)",
+            "R DASH (BACK+R: BACKDASH)   UP: JUMP",
+            "Y+X: THROW, UP CLOSE (ALSO BREAKS A THROW)",
+            "A+B: SUPER, WHEN THE BLUE BAR IS FULL",
+            "DOWN, DOWN-FWD, FWD + ATTACK: SHOT",
+            "FWD, DOWN, DOWN-FWD + ATTACK: RISING CUT",
+            "DOWN, DOWN-BACK, BACK + X OR A: RUSH",
+        };
+        ge_text(fb, 6, y, "YOUR MOVES", hi, 1);
+        y += 12;
+        for (unsigned i = 0; i < sizeof MOVES / sizeof MOVES[0]; i++, y += 10) ge_text(fb, 10, y, MOVES[i], GE_RGB(220, 214, 236), 1);
+        y += 4;
+    }
+    ge_fill_rect(fb, 0, y, fb->w, 1, GE_RGB(60, 46, 90), 0);
+    y += 5;
+    ge_text(fb, 6, y, "WHAT JUST HAPPENED", hi, 1);
+    y += 12;
+    for (int i = 0; i < 4 && y < fb->h - 8; i++, y += 11)
+        if (g.coach[i].text[0]) ge_text(fb, 10, y, g.coach[i].text, i == 0 ? g.coach[i].color : dim, 1);
+}
+
 static bool draw_bottom(void *user, GeImage *fb) {
     (void)user;
+    if (coach_showing()) {
+        coach_update();
+        if (paragon_duel() && g.tick >= (uint32_t)g.coach_facts_tick) {   /* refresh its beliefs every two seconds */
+            g.coach_nfacts = ge_model_describe(&g.model, g.coach_facts, 5);
+            g.coach_facts_tick = (int)g.tick + 120;
+            g.bottom_dirty = true;
+        }
+        if (!g.bottom_dirty && (g.bottom_frames++ % 30) != 0) return false;
+        g.bottom_dirty = false;
+        draw_coach(fb);
+        g.coach_was_showing = true;
+        return true;
+    }
+    if (g.coach_was_showing) { g.coach_was_showing = false; g.bottom_dirty = true; }   /* back to the dev menu */
     if (g.tap_flash > 0 && --g.tap_flash == 0) g.bottom_dirty = true;
     if (g.confirm_timer > 0 && --g.confirm_timer == 0) { g.confirm_item = -1; g.bottom_dirty = true; }
     /* only send it when something changed, plus a refresh twice a second for the live numbers */
@@ -947,11 +1141,11 @@ static bool draw_bottom(void *user, GeImage *fb) {
     const char *detail = g.detail_mode == 0 ? (g.auto_low ? "AUTO (LOW)" : "AUTO (FULL)") : g.detail_mode == 1 ? "LOW" : "FULL";
     const char *val[MI_COUNT] = { g.show_perf ? "ON" : "OFF", detail, devlog_is_open() ? "ON" : (g.log_wanted ? "NO SD?" : "OFF"),
                                   g.god ? "ON" : "OFF", g.difficulty < 0 ? "EASY" : g.difficulty > 0 ? "HARD" : "NORMAL",
-                                  WARPS[g.warp_sel].name, "TAP", g.confirm_item == MI_RESET ? "TAP AGAIN TO WIPE" : "TAP",
-                                  g.menu_open ? "RESUME" : "PAUSE" };
+                                  WARPS[g.warp_sel].name, "TAP", "TAP", "TAP", "TAP",
+                                  g.confirm_item == MI_RESET ? "TAP AGAIN TO WIPE" : "TAP", g.menu_open ? "RESUME" : "PAUSE" };
     if (g.confirm_item == MI_LOG) val[MI_LOG] = "TAP AGAIN: OFF";
-    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DIFFICULTY", "WARP (TAP TO GO)", "MARK THIS MOMENT",
-                                    "WIPE PARAGON MEMORY", "GAME" };
+    const char *label[MI_COUNT] = { "SPEED READOUT", "DETAIL", "PLAY LOG", "GOD MODE", "DIFFICULTY", "WARP (TAP TO GO)", "PRACTICE DUEL",
+                                    "MARK THIS MOMENT", "RELOAD MODS", "EXPORT CHARACTERS", "WIPE PARAGON MEMORY", "GAME" };
     for (int i = 0; i < MI_COUNT; i++) {
         int y = BM_ROW_Y + i * BM_ROW_H;
         bool sel = i == g.menu_sel && (g.menu_open || g.tap_flash > 0);
@@ -961,24 +1155,24 @@ static bool draw_bottom(void *user, GeImage *fb) {
         if (item_steps(i)) {
             ge_fill_rect(fb, 2, y, BM_ARROW_W - 4, BM_ROW_H - 2, GE_RGB(46, 32, 76), 0);
             ge_fill_rect(fb, fb->w - BM_ARROW_W + 2, y, BM_ARROW_W - 4, BM_ROW_H - 2, GE_RGB(46, 32, 76), 0);
-            ge_text(fb, 12, y + 4, "<", c, 1);
-            ge_text(fb, fb->w - 18, y + 4, ">", c, 1);
+            ge_text(fb, 12, y + 3, "<", c, 1);
+            ge_text(fb, fb->w - 18, y + 3, ">", c, 1);
             tx = BM_ARROW_W + 4;
         }
-        ge_text(fb, tx, y + 4, label[i], c, 1);
+        ge_text(fb, tx, y + 3, label[i], c, 1);
         int vx = (item_steps(i) ? fb->w - BM_ARROW_W - 4 : fb->w - 10) - ge_text_width(val[i], 1);
-        ge_text(fb, vx, y + 4, val[i], i == MI_GOD && g.god ? GE_RGB(255, 140, 120) : c, 1);
+        ge_text(fb, vx, y + 3, val[i], i == MI_GOD && g.god ? GE_RGB(255, 140, 120) : c, 1);
     }
-    int y = BM_ROW_Y + MI_COUNT * BM_ROW_H + 4;
+    int y = BM_ROW_Y + MI_COUNT * BM_ROW_H + 3;
     uint64_t secs = (g.now_us - g.start_us) / 1000000u;
     snprintf(buf, sizeof buf, "PLAY TIME %s   %s", devlog_hms(secs), g.console);
     ge_text(fb, 6, y, buf, GE_RGB(160, 230, 170), 1);
     snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%dMS  DRAW %d.%dMS", (int)(g.fps + 0.5f), (int)g.update_ms, (int)(g.update_ms * 10) % 10,
              (int)g.draw_ms, (int)(g.draw_ms * 10) % 10);
     ge_text(fb, 6, y + 11, buf, GE_RGB(120, 255, 140), 1);
-    snprintf(buf, sizeof buf, "AVG %.0f FPS, %d%% OF FRAMES BELOW 60", g.tot.dt_sum > 0 ? g.tot.frames / (g.tot.dt_sum / 1000.0) : 0.0,
-             g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
-    ge_text(fb, 6, y + 22, buf, dim, 1);
+    if (g.mods.nlines == 0) snprintf(buf, sizeof buf, "MODS: NONE IN %s", mods_dir());
+    else snprintf(buf, sizeof buf, "MODS: %d LOADED, %d PROBLEMS (DETAILS IN THE LOG)", g.mods.loaded, g.mods.errors);
+    ge_text(fb, 6, y + 22, buf, g.mods.errors ? GE_RGB(255, 130, 110) : dim, 1);
     if (devlog_is_open()) snprintf(buf, sizeof buf, "LOG WRITING TO %s", devlog_path());
     else snprintf(buf, sizeof buf, g.log_wanted ? "LOG NOT WRITING: CAN'T OPEN THE FILE" : "LOG OFF");
     ge_text(fb, 6, y + 33, buf, devlog_is_open() ? GE_RGB(160, 230, 170) : GE_RGB(255, 130, 110), 1);
@@ -1061,7 +1255,7 @@ static void demo_update_inner(const GeInput *in) {
         if (g.autoplay) ge_fight_cpu(&g.fight, 0, 3, &fin[0]);
         else fin[0] = fight_input(in);
         if (paragon_duel()) ge_paragon_think(&g.brain, &g.fight, 1, &fin[1]);
-        else ge_fight_cpu(&g.fight, 1, duel_cpu_level(level_spawns[g.duel].cpu_level), &fin[1]);
+        else ge_fight_cpu(&g.fight, 1, g.practice ? -1 : duel_cpu_level(level_spawns[g.duel].cpu_level), &fin[1]);
         if (g.god && g.fight.phase == GE_FP_FIGHT) {     /* dev: you can't be beaten down (the Paragon's finisher still lands) */
             GeEntity *h = &g.fight.world.ents[g.fight.f[0].ent];
             h->hp = g.fight.f[0].def->max_hp;
@@ -1143,29 +1337,55 @@ static void draw_hud(GeImage *fb) {
 
 static void draw_alert(GeImage *fb) {
     int ent = g.ent_of[g.duel];
-    if (ent < 0) return;
-    GeEntity *e = &g.world.ents[ent];
-    int x = (int)(e->pos.x - g.world.cam.x), y = (int)(e->pos.y - g.world.cam.y) - 46;
-    int pop = g.mode_timer < 6 ? g.mode_timer : 6;
-    ge_fill_rect(fb, x - 6, y - pop, 13, 16, GE_RGB(20, 14, 30), 0);
-    ge_fill_rect(fb, x - 5, y - pop + 1, 11, 14, GE_WHITE, 0);
-    ge_text(fb, x - 2, y - pop + 4, "!", GE_RGB(220, 40, 60), 1);
+    if (ent >= 0 && !g.practice) {                     /* the "!" over their head */
+        GeEntity *e = &g.world.ents[ent];
+        int x = (int)(e->pos.x - g.world.cam.x), y = (int)(e->pos.y - g.world.cam.y) - 46;
+        int pop = g.mode_timer < 6 ? g.mode_timer : 6;
+        ge_fill_rect(fb, x - 6, y - pop, 13, 16, GE_RGB(20, 14, 30), 0);
+        ge_fill_rect(fb, x - 5, y - pop + 1, 11, 14, GE_WHITE, 0);
+        ge_text(fb, x - 2, y - pop + 4, "!", GE_RGB(220, 40, 60), 1);
+    }
     const Spawn *s = &level_spawns[g.duel];
     char buf[64];
     if (s->variant == DUEL_PARAGON) snprintf(buf, sizeof buf, "THE PARAGON HAS BEEN WATCHING YOU");
+    else if (g.practice) snprintf(buf, sizeof buf, "PRACTICE DUEL: %s WILL GO EASY ON YOU", s->name);
     else snprintf(buf, sizeof buf, "%s WANTS TO DUEL!", s->name);
     ge_text_outlined(fb, (SCREEN_W - ge_text_width(buf, 1)) / 2, 186, buf, GE_RGB(255, 220, 160), GE_RGB(20, 14, 30), 1);
 }
 
 /* Pokemon-style: flash, flash, flash, then the duelist's own pattern floods out from where they stand. */
 static void draw_trans_in(GeImage *fb, int t) {
-    int ent = g.ent_of[g.duel];
+    int ent = g.practice ? -1 : g.ent_of[g.duel];
     int cx = SCREEN_W / 2, cy = SCREEN_H / 2;
     if (ent >= 0) {
         const GeEntity *e = &g.world.ents[ent];
         cx = (int)(e->pos.x - g.world.cam.x); cy = (int)(e->pos.y - g.world.cam.y) - 16;
     }
     encounter_draw_transition(fb, encounter_pattern(level_spawns[g.duel].name), t, cx, cy, g.tick);
+}
+
+/* The Paragon speaks: its two lines while the round is introduced, and one word at the finisher. Each line
+ * types itself out a letter at a time, in a box with its gold trim. */
+static void draw_paragon_voice(GeImage *fb) {
+    const GeFight *f = &g.fight;
+    const char *lines[2] = { NULL, NULL };
+    int t = f->phase_timer;
+    if (f->phase == GE_FP_INTRO) { lines[0] = g.paragon_say[0]; lines[1] = t > 40 ? g.paragon_say[1] : NULL; }
+    else if (f->phase == GE_FP_FINISHER && t < 44) lines[0] = "ENOUGH.";
+    else return;
+    int y = 40;
+    for (int i = 0; i < 2 && lines[i]; i++) {
+        char buf[72];
+        int shown = (i == 0 ? t : t - 40) * 2;   /* two letters a tick */
+        snprintf(buf, sizeof buf, "%.*s", shown < 0 ? 0 : shown, lines[i]);
+        int w = ge_text_width(lines[i], 1);
+        int x = (fb->w - w) / 2;
+        ge_fill_rect(fb, x - 6, y - 4, w + 12, 15, GE_ARGB(220, 8, 4, 14), 0);
+        ge_fill_rect(fb, x - 6, y - 4, w + 12, 1, GE_RGB(200, 160, 80), 0);
+        ge_fill_rect(fb, x - 6, y + 10, w + 12, 1, GE_RGB(200, 160, 80), 0);
+        ge_text(fb, x, y, buf, GE_RGB(255, 228, 160), 1);
+        y += 18;
+    }
 }
 
 static void demo_draw_inner(GeImage *fb);
@@ -1176,6 +1396,7 @@ static void demo_draw(void *user, GeImage *fb) {
     if (!g.start_us) {
         g.start_us = g.next_sample_us = t0;
         if (g.log_wanted) set_logging(true);
+        log_mods();
     }
     g.now_us = t0;
     devlog_set_clock(g.start_us, t0);
@@ -1232,6 +1453,7 @@ static void demo_draw(void *user, GeImage *fb) {
 static void demo_draw_inner(GeImage *fb) {
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
+        if (paragon_duel() && g.fight_live) draw_paragon_voice(fb);
         if (g.mode == M_BATTLE && g.mode_timer < 24) {   /* the pattern breaks up and the duel shows through */
             if (paragon_duel()) ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB((24 - g.mode_timer) * 10, 255, 255, 255), 0);
             else encounter_draw_reveal(fb, encounter_pattern(level_spawns[g.duel].name), g.mode_timer, g.tick);
@@ -1352,6 +1574,7 @@ int main(int argc, char **argv) {
 #endif
         else if (!strcmp(argv[i], "--beat-all")) g.beat_all = true;                               /* dev: Paragon starts with every technique */
         else if (!strcmp(argv[i], "--difficulty") && i + 1 < argc) { g.difficulty = ge_clampi(atoi(argv[++i]), -1, 1); g.difficulty_set = true; }
+        else if (!strcmp(argv[i], "--no-mods")) g.no_mods = true;                                  /* ignore the mods folder */
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc) paragon_set_profile_path(argv[++i]);
         else if (!strcmp(argv[i], "--paragon")) g.warp_col = 188;                                 /* straight to its hall */

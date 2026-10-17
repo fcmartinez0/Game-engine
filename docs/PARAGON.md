@@ -100,6 +100,10 @@ Past Thornwarden's far door: a long, low, symmetrical stone hall, the only indoo
 
 **The duel itself** uses the eye pattern as its background. Its irises breathe outward (one palette group) while the dark tide around them flows separately (a second group), so the eyes never wash out. **[story hook: what the hall was before the Paragon took it.]**
 
+## 6c-bis. Its voice (placeholder)
+
+Before the fight it says two lines, typed out a letter at a time in a gold-trimmed box: how long it has watched ("I HAVE WATCHED ALL 16 OF YOUR DUELS", or on a rematch "AGAIN. THAT IS 3 TIMES NOW") and one of the habits it learned about you, read back in its own words. At the finisher it says one word: "ENOUGH." During the fight the bottom screen shows what it currently believes about you, refreshed every two seconds, so you can watch it change its mind. **[story hook: the real script replaces these lines; the hooks are in `begin_battle` and `draw_paragon_voice`.]**
+
 ## 6d. Encounter patterns (all duels)
 
 Every duel opens with an EarthBound-style pattern of the duelist's own: three white flashes, then their pattern floods the screen in a wave of diamonds starting from where they stand (the Pokemon wipe), then breaks up from the middle to show the duel, which keeps the forest backdrop. The Paragon is the exception: its duel takes place inside its pattern, the field of eyes. The engine side is `ge_pattern`: a 64x64 picture of palette indices, shown with palette cycling, a per-row sideways ripple (optionally alternating rows, the classic EarthBound shimmer), a vertical ripple and a scroll. Each row is a straight copy from a cached tile, so it costs about the same as one opaque background layer on the 3DS.

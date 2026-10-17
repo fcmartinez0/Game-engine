@@ -13,9 +13,12 @@
 
 static int popcount(unsigned v) { int n = 0; for (; v; v >>= 1) n += (int)(v & 1u); return n; }
 
+static int base_dmg[GE_SPRITE_MAX_CLIPS];
+static bool have_base;
+
+void paragon_forget_base(void) { have_base = false; }   /* its clips were reloaded (mods) */
+
 void paragon_build_def(const Chars *c, Sprites *s, unsigned gifts, GeFighterDef *out) {
-    static int base_dmg[GE_SPRITE_MAX_CLIPS];
-    static bool have_base;
     GeSprite *spr = &s->paragon;
     if (!have_base) {
         for (int i = 0; i < spr->nclips; i++) base_dmg[i] = spr->clips[i].damage;
