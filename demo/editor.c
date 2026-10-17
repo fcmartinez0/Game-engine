@@ -103,7 +103,7 @@ static const Brush BRUSHES[] = {
 static struct {
     EditorHost h;
     bool ready;
-    GeImage tiles8;                  /* the tileset at 8 px a tile, for the map */
+    GeImage tiles8[BD_COUNT];        /* the tileset at 8 px a tile, over each backdrop's sky, for the map; the last cell is sky */
     int room;
     int mx, my;                      /* the map's top-left tile */
     float cx, cy;                    /* the centre of the top screen's view, in world pixels */
@@ -237,21 +237,33 @@ static void thing_cells(const Thing *t, int *c0, int *r0, int *c1, int *r1) {
 
 /* ---- the half-size tiles and the icons ----------------------------------------------------------- */
 
+static uint32_t sky_color(int backdrop) { return backdrop == BD_CAVE ? GE_RGB(26, 20, 40) : GE_RGB(28, 40, 62); }
+
+/* Each tile shrunk to 8 px (a pixel is the average of four) and laid over the sky once, here, so the map can
+ * copy cells instead of blending them: it is redrawn every frame the stylus is down. */
 static void build_tiles8(void) {
     const GeImage *src = &E.h.w->tileset;
     int n = src->w / GE_TILE;
-    E.tiles8 = ge_image_create(n * MT, MT);
-    if (!E.tiles8.px) return;
-    for (int t = 0; t < n; t++)
-        for (int y = 0; y < MT; y++)
-            for (int x = 0; x < MT; x++) {                      /* each pixel the average of four */
-                unsigned a = 0, r = 0, gc = 0, b = 0;
-                for (int k = 0; k < 4; k++) {
-                    uint32_t p = src->px[(y * 2 + (k >> 1)) * src->w + t * GE_TILE + x * 2 + (k & 1)];
-                    a += p >> 24; r += (p >> 16) & 255u; gc += (p >> 8) & 255u; b += p & 255u;
+    for (int bd = 0; bd < BD_COUNT; bd++) {
+        GeImage *img = &E.tiles8[bd];
+        *img = ge_image_create((n + 1) * MT, MT);
+        if (!img->px) return;
+        uint32_t sky = sky_color(bd);
+        unsigned sr = (sky >> 16) & 255u, sg = (sky >> 8) & 255u, sb = sky & 255u;
+        for (int t = 0; t <= n; t++)
+            for (int y = 0; y < MT; y++)
+                for (int x = 0; x < MT; x++) {
+                    unsigned r = 0, gc = 0, b = 0;
+                    for (int k = 0; k < 4 && t < n; k++) {
+                        uint32_t p = src->px[(y * 2 + (k >> 1)) * src->w + t * GE_TILE + x * 2 + (k & 1)];
+                        unsigned a = p >> 24;
+                        r += (((p >> 16) & 255u) * a + sr * (255u - a)) / 255u;
+                        gc += (((p >> 8) & 255u) * a + sg * (255u - a)) / 255u;
+                        b += ((p & 255u) * a + sb * (255u - a)) / 255u;
+                    }
+                    img->px[y * img->w + t * MT + x] = t < n ? GE_RGB(r / 4, gc / 4, b / 4) : sky;
                 }
-                E.tiles8.px[y * E.tiles8.w + t * MT + x] = GE_ARGB(a / 4, r / 4, gc / 4, b / 4);
-            }
+    }
 }
 
 static GeImage *g_fb;
@@ -1577,20 +1589,23 @@ static void draw_toolbar(GeImage *fb) {
 static void draw_map(GeImage *fb) {
     const Room *r = R();
     const GeTilemap *m = &E.h.w->map;
-    uint32_t sky = r->backdrop == BD_CAVE ? GE_RGB(26, 20, 40) : GE_RGB(28, 40, 62);
-    ge_fill_rect(fb, 0, MAP_Y, BW, MAP_ROWS * MT, sky, 0);
-    bool ok = m->w == r->w && m->h == r->h;
-    for (int row = 0; row < MAP_ROWS; row++)
-        for (int col = 0; col < MAP_COLS; col++) {
-            int c = E.mx + col, rr = E.my + row, x = col * MT, y = MAP_Y + row * MT;
-            if (c >= r->w || rr >= r->h) { ge_fill_rect(fb, x, y, MT, MT, GE_RGB(8, 6, 12), 0); continue; }   /* past the room's edge */
-            if (!ok) continue;
-            int i = rr * m->w + c;
-            if (m->type[i] == GE_TILE_EMPTY && m->vis[i] == 0) {
-                if (c % 5 == 0 && rr % 5 == 0) ge_fill_rect(fb, x, y, 1, 1, GE_RGB(70, 70, 100), 0);   /* a dot every 5 tiles */
-                continue;
+    const GeImage *t8 = &E.tiles8[r->backdrop % BD_COUNT];
+    int sky = t8->w / MT - 1;                                        /* the sky cell */
+    bool ok = m->w == r->w && m->h == r->h && t8->px;
+    int cols = r->w - E.mx < MAP_COLS ? r->w - E.mx : MAP_COLS, rows = r->h - E.my < MAP_ROWS ? r->h - E.my : MAP_ROWS;
+    if (cols < MAP_COLS) ge_fill_rect(fb, cols * MT, MAP_Y, BW - cols * MT, MAP_ROWS * MT, GE_RGB(8, 6, 12), 0);   /* past the room's edge */
+    if (rows < MAP_ROWS) ge_fill_rect(fb, 0, MAP_Y + rows * MT, cols * MT, (MAP_ROWS - rows) * MT, GE_RGB(8, 6, 12), 0);
+    for (int row = 0; row < rows && ok; row++)
+        for (int col = 0; col < cols; col++) {
+            int c = E.mx + col, rr = E.my + row, i = rr * m->w + c;
+            int v = (m->type[i] == GE_TILE_EMPTY && m->vis[i] == 0) || m->vis[i] >= sky ? sky : m->vis[i];
+            const uint32_t *src = t8->px + v * MT;                   /* an 8 x 8 copy: no blit setup for each of 840 cells */
+            uint32_t *dst = fb->px + (MAP_Y + row * MT) * fb->w + col * MT;
+            for (int y = 0; y < MT; y++, src += t8->w, dst += fb->w) {
+                dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
+                dst[4] = src[4]; dst[5] = src[5]; dst[6] = src[6]; dst[7] = src[7];
             }
-            if (m->vis[i] < E.tiles8.w / MT) ge_blit(fb, &E.tiles8, (GeIRect){ m->vis[i] * MT, 0, MT, MT }, x, y, 0, GE_WHITE);
+            if (v == sky && c % 5 == 0 && rr % 5 == 0) fb->px[(MAP_Y + row * MT) * fb->w + col * MT] = GE_RGB(70, 70, 100);   /* a dot every 5 tiles */
         }
     /* the pieces */
     int sel_wire = E.sel >= 0 && E.sel < r->nthings ? r->things[E.sel].ch : 0;
@@ -1722,15 +1737,33 @@ static void draw_slots(GeImage *fb) {
     }
 }
 
+/* What the toolbar and the brushes (or the settings) show. While the stylus paints or drags only the map
+ * changes, so the rest is drawn again only when this does: it saves a third of the bottom screen's time. */
+typedef struct { int tab, brush, sel, room, w, h, last_wire, confirm; bool eraser, unsaved, can_undo; Thing t; } Chrome;
+static Chrome g_chrome;
+static bool g_chrome_ok;
+
 bool editor_draw_bottom(GeImage *fb) {
     if (!E.bottom_dirty && !G.down) return false;
     E.bottom_dirty = false;
-    if (E.panel == P_ROOM) { draw_toolbar(fb); draw_room_panel(fb); return true; }
-    if (E.panel == P_KEYS) { draw_keys(fb); return true; }
-    draw_toolbar(fb);
+    if (E.panel != P_NONE) {
+        g_chrome_ok = false;
+        if (E.panel == P_ROOM) draw_room_panel(fb); else draw_keys(fb);
+        return true;
+    }
+    bool selected = E.sel >= 0 && E.sel < R()->nthings;
+    Chrome c;
+    memset(&c, 0, sizeof c);
+    c.tab = E.tab; c.brush = E.brush; c.sel = selected ? E.sel : -1; c.room = E.room; c.w = R()->w; c.h = R()->h;
+    c.last_wire = E.last_wire; c.confirm = E.confirm; c.eraser = E.eraser; c.unsaved = E.unsaved; c.can_undo = g_nundo > 0;
+    if (selected) c.t = R()->things[E.sel];
+    if (!g_chrome_ok || memcmp(&c, &g_chrome, sizeof c)) {
+        draw_toolbar(fb);
+        if (selected) draw_slots(fb); else draw_palette(fb);
+        g_chrome = c;
+        g_chrome_ok = true;
+    }
     draw_map(fb);
-    if (E.sel >= 0 && E.sel < R()->nthings) draw_slots(fb);
-    else draw_palette(fb);
     return true;
 }
 
@@ -1759,7 +1792,7 @@ static void draw_idle(GeImage *fb, const GeSprite *sp, int x, int y, bool flip, 
 }
 
 static void top_line(GeImage *fb, int y, const char *s, uint32_t c) {
-    ge_fill_rect(fb, 0, y, fb->w, 12, GE_ARGB(210, 12, 8, 22), 0);
+    ge_fill_rect(fb, 0, y, fb->w, 12, GE_RGB(12, 8, 22), 0);       /* (solid: blending a strip this wide costs more than it shows) */
     ge_text(fb, (fb->w - ge_text_width(s, 1)) / 2, y + 3, s, c, 1);
 }
 
