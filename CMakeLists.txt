@@ -53,6 +53,7 @@ add_test(NAME fight_tests COMMAND fight_tests)
 
 add_test(NAME scenes COMMAND sh ${CMAKE_SOURCE_DIR}/tests/scenes.sh $<TARGET_FILE:demo_headless>)
 add_test(NAME scenes_from_file COMMAND sh ${CMAKE_SOURCE_DIR}/tests/scenes.sh $<TARGET_FILE:demo_headless> --from-file)
+add_test(NAME editor COMMAND sh ${CMAKE_SOURCE_DIR}/tests/editor.sh $<TARGET_FILE:demo_headless>)
 add_executable(world_tests tests/test_world.c demo/world.c)
 target_link_libraries(world_tests ge)
 add_test(NAME world_tests COMMAND world_tests)

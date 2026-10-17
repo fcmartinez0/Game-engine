@@ -1213,6 +1213,7 @@ static void puzzle_events(void) {
         case PZ_KEY: say("A KEY. IT OPENS A LOCKED GATE", 120); LOG("key taken in %s (carrying %d)", room()->name, g.keys); break;
         case PZ_UNLOCK: say("UNLOCKED", 90); LOG("locked gate opened in %s", room()->name); break;
         case PZ_SECRET: say("A WAY THROUGH", 90); LOG("breakable stone broken in %s", room()->name); break;
+        case PZ_GATE: if (t) LOG("%s at %d,%d open in %s", t->invert ? "bridge" : "gate", t->col, t->row, room()->name); break;
         case PZ_LEVER: if (t) LOG("lever (wire %d, %s) %s in %s", t->ch, t->mode == LEVER_ONCE ? "once" : t->mode == LEVER_TOGGLE ? "toggle" : "timed",
                                  g.pz.p[e->thing].on ? "on" : "off", room()->name); break;
         case PZ_RELIC: {

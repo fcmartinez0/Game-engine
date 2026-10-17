@@ -151,7 +151,10 @@ static void gate_update(Puzzle *pz, int i) {
     }
     if (g->alert > 0) g->alert--;
     if (want && g->open_rows < t->h) {
-        if (--g->step <= 0) { g->open_rows++; g->step = 2; gate_apply(pz, i); }       /* opens quickly */
+        if (--g->step <= 0) {                                                          /* opens quickly */
+            g->open_rows++; g->step = 2; gate_apply(pz, i);
+            if (g->open_rows == t->h) push_event(pz, PZ_GATE, i);
+        }
     } else if (!want && g->open_rows > 0) {
         int y = gate_top(t) + (t->h - g->open_rows);                                   /* the next row down to close */
         bool blocked = false;

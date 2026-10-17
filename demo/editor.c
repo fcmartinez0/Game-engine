@@ -705,10 +705,17 @@ static void new_room(void) {
     char name[24];
     for (int n = 1; n < 100; n++) { snprintf(name, sizeof name, "room%d", n); if (world_find_room(wd, name) < 0) break; }
     int from = E.room;
-    /* the way back: a door where the marker is, if there is space for one */
+    /* the way back: a door at the marker, or the nearest free cell beside it (not next to a bench) */
     Thing back = thing_default(TH_DOOR, E.marker_col, E.marker_row);
     new_door_id(R(), back.name, sizeof back.name);
-    bool linked = E.marker_room == from && !problem(R(), &back, -1) && R()->nthings < ROOM_MAX_THINGS;
+    bool linked = false;
+    for (int k = 0; k <= 12 && !linked && E.marker_room == from && R()->nthings < ROOM_MAX_THINGS; k++) {
+        back.col = (int16_t)(E.marker_col + ((k & 1) ? (k + 1) / 2 : -(k / 2)));   /* 0, +1, -1, +2, -2... */
+        bool by_bench = false;
+        for (int i = 0; i < R()->nthings; i++)
+            by_bench |= R()->things[i].kind == TH_BENCH && R()->things[i].row == back.row && abs(R()->things[i].col - back.col) < 2;
+        linked = !by_bench && !problem(R(), &back, -1);
+    }
     begin_step();
     if (linked) snap_room(from);
     int to = wd->nrooms;
@@ -797,9 +804,9 @@ static bool save(void) {
     const char *world = mods_path("world.txt"), *tmp = mods_path("world.tmp"), *bak = mods_path("world.bak");
     mods_make_dir();
     if (*E.h.world_broken) {                 /* never over the one that didn't load: it is kept beside it */
-        const char *broken = mods_path("world_broken.txt");
+        const char *broken = mods_path("world-broken.txt");
         remove(broken);
-        if (rename(world, broken) == 0) say("YOUR OLD WORLD.TXT DIDN'T LOAD: KEPT AS WORLD_BROKEN.TXT", WARN);
+        if (rename(world, broken) == 0) say("YOUR OLD WORLD.TXT DIDN'T LOAD: KEPT AS WORLD-BROKEN.TXT", WARN);
         *E.h.world_broken = false;
     }
     int n = custom_rooms();

@@ -40,7 +40,7 @@ typedef struct {
 } Piece;
 
 /* What happened this tick, for the game to show, log and reward. */
-typedef enum { PZ_LEVER, PZ_KEY, PZ_UNLOCK, PZ_RELIC, PZ_CRACK, PZ_SECRET, PZ_DOOR } PuzzleEventKind;
+typedef enum { PZ_LEVER, PZ_KEY, PZ_UNLOCK, PZ_RELIC, PZ_CRACK, PZ_SECRET, PZ_DOOR, PZ_GATE /* one finished opening */ } PuzzleEventKind;
 typedef struct { PuzzleEventKind kind; int thing; } PuzzleEvent;
 
 #define PZ_MAX_CRACKS 32
