@@ -52,7 +52,11 @@ bool devlog_open(void) {
 bool devlog_is_open(void) { return g_open; }
 const char *devlog_path(void) { return g_path; }
 
-void devlog_set_clock(uint64_t start_us, uint64_t now_us) { g_start_us = start_us; g_now_us = now_us; }
+void devlog_set_clock(uint64_t start_us, uint64_t now_us) {
+    if (g_flushed_us == 0) g_flushed_us = now_us;   /* opened before the clock was first set */
+    g_start_us = start_us;
+    g_now_us = now_us;
+}
 
 const char *devlog_hms(uint64_t s) {
     static char bufs[4][16];   /* a few in rotation, so one log line can format several */

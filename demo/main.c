@@ -909,7 +909,7 @@ static void set_logging(bool on) {
     if (on && !devlog_is_open() && devlog_open()) {
         devlog("session start: Gloamwood, built %s %s, console %s, detail %s, difficulty %s", __DATE__, __TIME__, g.console,
                g.low_detail ? "low" : "full", g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
-        devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw/present ms (present = sending the picture to the screen; vsync wait = time to spare)");
+        devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw/present ms (present = sending the picture to the screen; vsync wait = waiting for the screen's next refresh: time to spare when the frame was on time)");
         devlog_flush();
     } else if (!on && devlog_is_open()) {
         devlog("play log switched off from the dev menu");
@@ -1455,7 +1455,8 @@ static void demo_draw(void *user, GeImage *fb) {
                    g.win.update_sum / g.win.frames, g.win.draw_sum / g.win.frames, g.win.draw_max,
                    g.win.present_sum / g.win.frames, g.win.bottom_sum / g.win.frames, g.win.wait_sum / g.win.frames, where,
                    (int)(hero()->pos.x / GE_TILE), hero()->active ? hero()->hp : 0, g.low_detail ? "low" : "full");
-            devlog_flush_if_due(60000000u);   /* a backstop: usually a calm moment came sooner */
+            bool fighting = g.mode == M_ALERT || g.mode == M_TRANS_IN || g.mode == M_BATTLE || g.mode == M_TRANS_OUT || g.boss_engaged;
+            if (!fighting) devlog_flush_if_due(60000000u);   /* a backstop, never mid-fight: the fade after a duel writes */
         }
         memset(&g.win, 0, sizeof g.win);
     }

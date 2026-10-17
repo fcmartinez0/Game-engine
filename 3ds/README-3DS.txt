@@ -85,7 +85,8 @@ THE PLAY LOG - please send this back
          MARK THIS MOMENT when something odd happens, which also saves.
   It records play time, a performance line every 10 seconds (fps, slow
   frames, and where each frame's time went: update, draw, present = sending
-  the picture to the screen, bottom screen, and vsync wait = time to spare),
+  the picture to the screen, bottom screen, and vsync wait = waiting for the
+  screen's next refresh, which is time to spare when the frame was on time),
   duels won/lost, deaths, benches, the boss, your markers, and a summary
   when you quit.
   Copy it to a computer and upload it.

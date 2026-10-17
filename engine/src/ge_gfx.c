@@ -1,5 +1,6 @@
 #include "ge/ge_gfx.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,8 @@
 GeImage ge_image_create(int w, int h) {
     GeImage img = { 0, 0, NULL };
     if (w <= 0 || h <= 0) return img;
+    /* too big to address (a 3DS's size_t is 32 bits: a mod's huge image header must fail, not wrap around) */
+    if ((size_t)w > (SIZE_MAX - GE_IMAGE_ALIGN - sizeof(void *)) / sizeof(uint32_t) / (size_t)h) return img;
     size_t bytes = (size_t)w * (size_t)h * sizeof(uint32_t);
     unsigned char *raw = (unsigned char *)calloc(1, bytes + GE_IMAGE_ALIGN + sizeof(void *));
     if (!raw) return img;

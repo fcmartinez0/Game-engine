@@ -595,6 +595,8 @@ static void test_3ds_rotate(void) {
     ge_3ds_rotate_bgr8(rag.px, 37, 24, (uint8_t *)f3w + 1);
     CHECK(memcmp((uint8_t *)f3w + 1, s3, sizeof s3) == 0);
     CHECK(((uintptr_t)rag.px & 31) == 0 && ((uintptr_t)img.px & 31) == 0);   /* images are cache-line aligned */
+    GeImage huge = ge_image_create(2147483647, 2147483647);              /* a size that can't be addressed fails cleanly */
+    CHECK(huge.px == NULL && huge.w == 0 && huge.h == 0);
     ge_image_free(&rag);
     ge_image_free(&odd);
     ge_image_free(&img);
