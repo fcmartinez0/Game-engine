@@ -28,7 +28,9 @@ CONTROLS - duels (when a duelist spots you)
                        say what got through (LOW! / HIGH!), arrows on an
                        attack show if it hits low or high, and a blue shield
                        shows when you are blocking.
-  Y + X when grabbed   break the throw (you have about a quarter second)
+  Y + X when grabbed   break the throw (you have about a quarter second).
+                       On EASY and NORMAL a tap of L breaks it too, and you
+                       get a little longer.
   R                    dash (hold back + R = backdash)
   Y / X / A            light / medium / heavy
   B                    sword thrust: slow but the longest reach (DOWN + B low, in the air too)
@@ -75,11 +77,17 @@ THE PLAY LOG - please send this back
   File:  SD:/3ds/gloamwood/log.txt   (always the latest session; the one
          before it is log_previous.txt). The bottom screen says whether the
          log is being written. Switching it off needs two taps.
-         It is saved every few seconds, so it survives quitting with HOME
-         or the power button (START + SELECT still adds a summary).
+         It is written to the card at calm moments - the black middle of a
+         fade, a bench, opening the menu, a marker - and at least once a
+         minute (each write stalls the 3DS for a moment, so not mid-fight).
+         Quitting with START + SELECT or from the HOME menu writes the rest.
+         If the game ever crashes, the last minute may be missing: use
+         MARK THIS MOMENT when something odd happens, which also saves.
   It records play time, a performance line every 10 seconds (fps, slow
-  frames, CPU time), duels won/lost, deaths, benches, the boss, your
-  markers, and a summary when you quit with START + SELECT.
+  frames, and where each frame's time went: update, draw, present = sending
+  the picture to the screen, bottom screen, and vsync wait = time to spare),
+  duels won/lost, deaths, benches, the boss, your markers, and a summary
+  when you quit.
   Copy it to a computer and upload it.
 
 THE PARAGON (final boss, past Thornwarden's far door)

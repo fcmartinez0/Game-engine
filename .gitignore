@@ -4,3 +4,4 @@ build/
 screenshot.png
 ge_test_out.png
 dist/
+build-*/
