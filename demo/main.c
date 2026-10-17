@@ -56,7 +56,7 @@ typedef struct {
     bool difficulty_set;                  /* given on the command line: don't load the saved one */
     char facts[6][72];
     int nfacts, learn_shown;
-    bool fresh_profile, paragon_report, beat_all, hall_named, no_mods;
+    bool fresh_profile, paragon_report, beat_all, hall_named, no_mods, no_hints;
     ModReport mods;
     bool practice;                        /* the current duel is a practice one: nothing is at stake */
     char paragon_say[2][72];              /* its two lines before the fight */
@@ -1324,7 +1324,7 @@ static void draw_hud(GeImage *fb) {
         if (p->active && fabsf(p->pos.x - (level_benches[i] * GE_TILE + 8.0f)) < 18.0f && g.msg_timer == 0)
             ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST   DOWN: PRACTICE", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST   DOWN: PRACTICE",
                              GE_WHITE, GE_RGB(20, 14, 30), 1);
-    if (g.tick < 420 && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
+    if (g.tick < 420 && !g.no_hints && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
         const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   R DASH";
         const char *l2 = "X THROW NEEDLE   A SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
         int a = g.tick > 360 ? (420 - (int)g.tick) * 255 / 60 : 255;
@@ -1577,6 +1577,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--beat-all")) g.beat_all = true;                               /* dev: Paragon starts with every technique */
         else if (!strcmp(argv[i], "--difficulty") && i + 1 < argc) { g.difficulty = ge_clampi(atoi(argv[++i]), -1, 1); g.difficulty_set = true; }
         else if (!strcmp(argv[i], "--no-mods")) g.no_mods = true;                                  /* ignore the mods folder */
+        else if (!strcmp(argv[i], "--no-hints")) g.no_hints = true;                                /* benchmarks: skip the opening controls text */
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc) paragon_set_profile_path(argv[++i]);
         else if (!strcmp(argv[i], "--paragon")) g.warp_col = 188;                                 /* straight to its hall */
