@@ -55,14 +55,26 @@ void ge_pattern_make(GePattern *p, int kind, const uint32_t *pal, int npal) {
 }
 
 static void build_tile(GePattern *p, int step) {
-    int sc = p->scale == 2 ? 2 : 1, tw = N * sc;
-    for (int y = 0; y < tw; y++)
-        for (int x = 0; x < tw; x++) {
-            int i = p->idx[(y / sc) * N + x / sc], c0 = p->cycle_from, c1 = p->npal;
-            if (p->cycle_split > c0) { if (i < p->cycle_split) c1 = p->cycle_split; else c0 = p->cycle_split; }
-            int nc = c1 - c0;
-            p->tile[y * tw + x] = p->pal[i < c0 || nc <= 0 ? i : c0 + (i - c0 + step) % nc];
+    /* each palette index's colour at this step of the cycle, worked out once rather than per pixel (the
+     * 3DS's ARM11 divides in software, and a 128x128 tile is 16384 pixels) */
+    uint32_t map[GE_PAT_MAX_COLORS];
+    for (int i = 0; i < GE_PAT_MAX_COLORS; i++) {
+        int c0 = p->cycle_from, c1 = p->npal;
+        if (p->cycle_split > c0) { if (i < p->cycle_split) c1 = p->cycle_split; else c0 = p->cycle_split; }
+        int nc = c1 - c0;
+        map[i] = p->pal[i < c0 || nc <= 0 ? i : c0 + (i - c0 + step) % nc];
+    }
+    if (p->scale == 2) {
+        int tw = 2 * N;
+        for (int y = 0; y < N; y++) {
+            uint32_t *r0 = p->tile + (size_t)(2 * y) * (size_t)tw;
+            const uint8_t *src = p->idx + y * N;
+            for (int x = 0; x < N; x++) r0[2 * x] = r0[2 * x + 1] = map[src[x] & (GE_PAT_MAX_COLORS - 1)];
+            memcpy(r0 + tw, r0, sizeof(uint32_t) * (size_t)tw);
         }
+    } else {
+        for (int i = 0; i < N * N; i++) p->tile[i] = map[p->idx[i] & (GE_PAT_MAX_COLORS - 1)];
+    }
     p->tile_step = step;
 }
 

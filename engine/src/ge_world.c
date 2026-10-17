@@ -276,13 +276,15 @@ static void draw_tiles(GeWorld *w, GeImage *fb, int camx, int camy, int z) {
 /* ---- the background compositor ----------------------------------------------------------------------
  * Painting the parallax layers back to front writes most screen pixels two or three times (sky, then
  * mountains over it, then hills, then trees), and on the original 3DS (16 KB of cache, no L2) that memory
- * traffic is most of the frame. So the background is composed one screen row at a time, nearest layer
- * first: each row keeps a short sorted list of covered intervals, a farther layer only copies the parts of
- * its opaque spans that are still uncovered, and pixels that something drawn later will cover anyway
- * (opaque tiles, the foreground layers' opaque spans, the game's art beyond background_clip_x) are never
- * painted at all. Translucent and additive spans are then applied back to front, each only where the pixel
- * belongs to a farther layer, which gives exactly the same result as painting everything in order.
- * Analogy: hanging pictures on a wall from the front row back, and never painting wall that a frame hides. */
+ * traffic is a large part of the frame. So the background is composed one screen row at a time, skipping
+ * what can't show: layers hidden behind a nearer one, and pixels that opaque tiles or the game's own art
+ * (past background_clip_x) will cover anyway. The result is exactly what painting everything in order
+ * gives (the tests compare the two).
+ *
+ * Two versions. The usual one (compose_background, below) handles layers whose pixels are each either
+ * solid or empty. The other (compose_owned, next) also handles translucent and additive layers: it
+ * tracks which layer owns each covered piece, so a see-through span can be blended over exactly the
+ * pixels of the layers behind it. */
 
 #define COV_MAX 96
 #define OWN_FRONT 32767      /* covered by something drawn later this frame */
@@ -500,50 +502,19 @@ static bool compose_owned(GeWorld *w, GeImage *fb, int camx, int camy, int z, bo
 }
 
 
-/* ---- the fast path: no translucent background spans (the usual case, and always in low detail) -------
- * Nobody needs to know which layer owns a pixel, so a row's coverage is a bitmask, one bit per screen
- * pixel (13 words for 400 pixels), and each layer row's opaque pixels are a bitmask too (built with its
- * spans). "What of this layer still shows" is then (layer & ~covered), 32 pixels per operation however
- * busy the art is, and only the runs of set bits in that are copied. Analogy: a stencil held over the
- * picture instead of a written list of which bits of wall are already painted. */
+/* ---- the usual case: every background pixel solid or empty (always so in low detail) -----------------
+ * Each screen row starts at the nearest layer whose row is solid all the way across. Everything behind it
+ * is hidden, so it is copied once, straight, and the layers behind aren't touched; the layers in front of
+ * it are then painted over it span by span, back to front, as before. Pixels under opaque tiles are left
+ * for the tiles, and a row the tiles cover completely is skipped. Analogy: hang the nearest poster that
+ * covers the whole wall, skip the ones it hides, then pin the cut-outs in front on top.
+ * (Also masking the nearer layers against each other halves the memory traffic again, but on the 3DS's
+ * ARM11 that bookkeeping cost more instructions than the traffic saved: measured, not guessed.) */
 
-#define NW_MAX 32   /* screens up to 1024 pixels wide */
+typedef struct { int16_t a, b; } Run;
 
-static inline int bit_ctz(uint32_t v) {   /* index of the lowest set bit; v != 0 */
-#if defined(__GNUC__) || defined(__clang__)
-    return __builtin_ctz(v);
-#else
-    int n = 0;
-    while (!(v & 1u)) { v >>= 1; n++; }
-    return n;
-#endif
-}
-
-static void set_bits(uint32_t *m, int a, int b) {   /* bits [a, b) */
-    while (a < b) {
-        int k = a >> 5, s = a & 31, n = b - a < 32 - s ? b - a : 32 - s;
-        m[k] |= (n == 32 ? ~0u : ((1u << n) - 1u)) << s;
-        a += n;
-    }
-}
-
-/* The screen's view of one wrapping layer row: screen pixel x shows image pixel (x + off) % img_w
- * (0 <= off < img_w, img_w >= 32). Words the cover already fills are skipped: nothing there can show. */
-static void row_window(const uint32_t *m, int img_w, int off, int nw, const uint32_t *cov, uint32_t *out) {
-    int p = off;
-    for (int k = 0; k < nw; k++, p += 32) {
-        if (p >= img_w) p -= img_w;
-        if (cov[k] == ~0u) { out[k] = 0; continue; }
-        int wi = p >> 5, s = p & 31;
-        uint32_t v = s ? (m[wi] >> s) | (m[wi + 1] << (32 - s)) : m[wi];   /* bits past img_w read as 0 */
-        if (img_w - p < 32) v |= m[0] << (img_w - p);                       /* the row starts over mid-word */
-        out[k] = v;
-    }
-}
-
-/* screen pixels [a, b) from the wrapping layer row (src != NULL), or the clear colour */
-static void put_run(uint32_t *drow, const uint32_t *src, int img_w, int off, int a, int b) {
-    if (!src) { for (int x = a; x < b; x++) drow[x] = GE_RGB(8, 6, 16); return; }
+/* screen pixels [a, b) of a wrapping layer row: screen x shows image x (x + off) % img_w */
+static void copy_wrapped(uint32_t *drow, const uint32_t *src, int img_w, int off, int a, int b) {
     int ix = a + off;
     while (ix >= img_w) ix -= img_w;
     while (a < b) {
@@ -554,132 +525,100 @@ static void put_run(uint32_t *drow, const uint32_t *src, int img_w, int off, int
     }
 }
 
-/* put_run for every run of set bits in need[0..nw) */
-static void put_runs(const uint32_t *need, int nw, uint32_t *drow, const uint32_t *src, int img_w, int off) {
-    int start = -1;
-    for (int k = 0; k < nw; k++) {
-        uint32_t v = need[k];
-        int base = k << 5;
-        if (start >= 0) {                              /* a run carried over from the last word */
-            if (v == ~0u) continue;
-            int e = bit_ctz(~v);
-            put_run(drow, src, img_w, off, start, base + e);
-            start = -1;
-            v &= ~0u << e;
-        }
-        while (v) {
-            int s = bit_ctz(v);
-            uint32_t rest = ~v & (~0u << s);
-            if (!rest) { start = base + s; break; }  /* runs on into the next word */
-            int e = bit_ctz(rest);
-            put_run(drow, src, img_w, off, base + s, base + e);
-            v &= ~0u << e;
-        }
-    }
-    if (start >= 0) put_run(drow, src, img_w, off, start, nw << 5);
-}
-
-static bool row_full(const uint32_t *cov, int nw) {
-    for (int k = 0; k < nw; k++) if (cov[k] != ~0u) return false;
-    return true;
-}
-
 static bool compose_background(GeWorld *w, GeImage *fb, int camx, int camy, int z, bool covers) {
-    BgLayer L[MAX_BG], F[MAX_BG];
-    int nl = 0, nf = 0;
+    BgLayer L[MAX_BG];
+    int nl = 0;
     int lcamy = z > 1 ? 0 : camy;
-    int W = fb->w, nw = (W + 31) >> 5;
-    if (nw > NW_MAX) return false;
+    int W = fb->w;
     for (int i = 0; i < w->nlayers; i++) {
         const GeParallaxLayer *l = &w->layers[i];
-        if (w->low_detail && l->optional) continue;
-        if (!l->spans.spans || l->img.w <= 0) { if (!l->foreground) return false; continue; }
-        if (!l->foreground && (l->additive || l->translucent)) return compose_owned(w, fb, camx, camy, z, covers);
-        if (!l->spans.mask || l->img.w < 32) { if (!l->foreground) return false; continue; }
+        if (l->foreground || (w->low_detail && l->optional)) continue;
+        if (!l->spans.spans || !l->spans.row_kind || l->img.w <= 0) return false;
+        if (l->additive || l->translucent) return compose_owned(w, fb, camx, camy, z, covers);
+        if (nl >= MAX_BG) return false;
         int sx = (int)((camx * z) * l->factor_x + l->auto_x * (float)w->tick);
         int off = sx % l->img.w;
         if (off < 0) off += l->img.w;
-        BgLayer b = { l, off, l->y - (int)(lcamy * l->factor_y), 0, false };
-        if (!l->foreground) { if (nl >= MAX_BG) return false; L[nl++] = b; }
-        else if (!w->backdrop_pattern && !w->foreground_off && !l->additive && nf < MAX_BG) F[nf++] = b;
+        L[nl++] = (BgLayer){ l, off, l->y - (int)(lcamy * l->factor_y), 0, false };
     }
     int cw = w->background_clip_x > 0 && w->background_clip_x < W ? w->background_clip_x : W;
 
-    /* what something drawn later covers anyway, the same on every row: past the clip column and past the
-     * screen's right edge (the bits of the last word beyond W) */
-    uint32_t base_cov[NW_MAX] = { 0 };
-    set_bits(base_cov, cw, nw << 5);
-
-    /* opaque tiles, one mask per visible tile row */
+    /* opaque tile runs left of cw, once per visible tile row */
     const GeTilemap *m = &w->map;
     bool tiles = w->tileset.px && m->type;
-    enum { TROWS = 32 };
-    uint32_t tmask[TROWS][NW_MAX];
-    bool thas[TROWS] = { false };
+    enum { TROWS = 32, TRUNS = 24 };
+    Run truns[TROWS][TRUNS];
+    int ntruns[TROWS];
     int ty0 = 0;
     if (tiles) {
         tile_opacity(w);
         int tx0 = ge_clampi((int)floorf((float)camx / GE_TILE), 0, m->w), tx1 = ge_clampi((camx + W / z) / GE_TILE + 2, 0, m->w);
         ty0 = camy >= 0 ? camy / GE_TILE : -((-camy + GE_TILE - 1) / GE_TILE);
-        int rows = (fb->h / z) / GE_TILE + 2;
-        for (int r = 0; r < TROWS && r < rows; r++) {
-            int ty = ty0 + r;
+        for (int r = 0; r < TROWS; r++) {
+            int ty = ty0 + r, n = 0;
+            ntruns[r] = 0;
             if (ty < 0 || ty >= m->h) continue;
-            memset(tmask[r], 0, sizeof(uint32_t) * (size_t)nw);
             for (int tx = tx0; tx < tx1; tx++) {
                 int t = ty * m->w + tx;
                 if (m->type[t] == GE_TILE_EMPTY || !w->tile_opaque[m->vis[t]]) continue;
                 int a = (tx * GE_TILE - camx) * z, b = a + GE_TILE * z;
                 if (a < 0) a = 0;
-                if (b > W) b = W;
-                if (a < b) { set_bits(tmask[r], a, b); thas[r] = true; }
+                if (b > cw) b = cw;
+                if (a >= b) continue;
+                if (n > 0 && truns[r][n - 1].b == a) { truns[r][n - 1].b = (int16_t)b; continue; }
+                if (n >= TRUNS) { n = 0; break; }                 /* too broken up: just paint under them */
+                truns[r][n++] = (Run){ (int16_t)a, (int16_t)b };
             }
+            ntruns[r] = n;
         }
     }
 
-    uint32_t cov[NW_MAX], lm[NW_MAX], need[NW_MAX];
     for (int y = 0; y < fb->h; y++) {
         uint32_t *drow = fb->px + (size_t)y * W;
-        memcpy(cov, base_cov, sizeof(uint32_t) * (size_t)nw);
-        /* 1. what something drawn later covers anyway */
+        const Run *tr = NULL;
+        int nt = 0;
         if (tiles) {
             int wy = camy + y / z, r = (wy >= 0 ? wy / GE_TILE : -((-wy + GE_TILE - 1) / GE_TILE)) - ty0;
-            if (r >= 0 && r < TROWS && thas[r])
-                for (int k = 0; k < nw; k++) cov[k] |= tmask[r][k];
+            if (r >= 0 && r < TROWS) { tr = truns[r]; nt = ntruns[r]; }
         }
-        for (int f = 0; f < nf; f++) {
-            const GeSpans *sp = &F[f].l->spans;
-            int ly = y - F[f].dy;
-            if (ly < 0 || ly >= F[f].l->img.h || sp->row_kind[ly] == GE_ROW_NONE) continue;
-            row_window(sp->mask + (size_t)ly * (size_t)sp->mask_words, F[f].l->img.w, F[f].off, nw, cov, lm);
-            for (int k = 0; k < nw; k++) cov[k] |= lm[k];
-        }
-        if (row_full(cov, nw)) continue;                   /* e.g. ground, all tiles: no background at all */
-        /* 2. opaque pixels, nearest layer first: put what still shows, then add it to the cover */
-        bool full = false;
-        for (int i = nl - 1; i >= 0; i--) {
-            const GeParallaxLayer *l = L[i].l;
-            const GeSpans *sp = &l->spans;
+        if (nt == 1 && tr[0].a == 0 && tr[0].b == cw) continue;   /* ground: the tiles cover it all */
+        /* the nearest layer that is solid across this row hides everything behind it */
+        int f = -1;
+        for (int i = nl - 1; i >= 0 && f < 0; i--) {
             int ly = y - L[i].dy;
-            if (ly < 0 || ly >= l->img.h || sp->row_kind[ly] == GE_ROW_NONE) continue;
-            const uint32_t *srow = l->img.px + (size_t)ly * (size_t)l->img.w;
-            if (sp->row_kind[ly] == GE_ROW_ALL) {          /* solid all the way across: everything left shows */
-                for (int k = 0; k < nw; k++) need[k] = ~cov[k];
-                put_runs(need, nw, drow, srow, l->img.w, L[i].off);
-                full = true;
-                break;
-            }
-            row_window(sp->mask + (size_t)ly * (size_t)sp->mask_words, l->img.w, L[i].off, nw, cov, lm);
-            for (int k = 0; k < nw; k++) need[k] = lm[k] & ~cov[k];
-            put_runs(need, nw, drow, srow, l->img.w, L[i].off);
-            if (i == 0 && covers) { full = true; break; }   /* nothing farther and no gaps to clear: done */
-            for (int k = 0; k < nw; k++) cov[k] |= lm[k];
-            if (row_full(cov, nw)) { full = true; break; }   /* farther layers can't show on this row */
+            if (ly >= 0 && ly < L[i].l->img.h && L[i].l->spans.row_kind[ly] == GE_ROW_ALL) f = i;
         }
-        /* 3. whatever is left gets the clear colour (with a full-screen sky there is nothing left) */
-        if (!full && (nl == 0 || !covers)) {
-            for (int k = 0; k < nw; k++) need[k] = ~cov[k];
-            put_runs(need, nw, drow, NULL, 0, 0);
+        if (f >= 0 || nl == 0 || !covers) {   /* it (or the clear colour) goes wherever no tile will */
+            const GeParallaxLayer *l = f >= 0 ? L[f].l : NULL;
+            const uint32_t *src = l ? l->img.px + (size_t)(y - L[f].dy) * (size_t)l->img.w : NULL;
+            int pos = 0;
+            for (int t = 0; t <= nt; t++) {
+                int ge = t < nt ? tr[t].a : cw;
+                if (ge > pos) {
+                    if (src) copy_wrapped(drow, src, l->img.w, L[f].off, pos, ge);
+                    else for (int x = pos; x < ge; x++) drow[x] = GE_RGB(8, 6, 16);
+                }
+                if (t < nt) pos = tr[t].b;
+            }
+        }
+        /* the layers in front of it, span by span */
+        for (int i = f + 1; i < nl; i++) {
+            const GeParallaxLayer *l = L[i].l;
+            int ly = y - L[i].dy;
+            if (ly < 0 || ly >= l->img.h || l->spans.row_kind[ly] == GE_ROW_NONE) continue;
+            const uint32_t *srow = l->img.px + (size_t)ly * (size_t)l->img.w;
+            uint32_t s0 = l->spans.row_start[ly], s1 = l->spans.row_start[ly + 1];
+            for (int base = -L[i].off; base < cw; base += l->img.w)
+                for (uint32_t k = s0; k < s1; k++) {
+                    const GeSpan *g = &l->spans.spans[k];
+                    int a = base + g->x, b = a + g->len;
+                    if (b <= 0) continue;
+                    if (a >= cw) break;
+                    int from = a < 0 ? -a : 0;
+                    if (a < 0) a = 0;
+                    if (b > cw) b = cw;
+                    memcpy(drow + a, srow + g->x + from, sizeof(uint32_t) * (size_t)(b - a));
+                }
         }
     }
     return true;

@@ -440,6 +440,16 @@ static void test_text_outline(void) {
     for (int y = 0; y < 11; y++)
         for (int x = 0; x < 39; x++) if (a.px[(y + 1) * 40 + x + 1] != b.px[y * 40 + x]) same = false;
     CHECK(same);
+    /* the same at scale 2 */
+    GeImage a2 = ge_image_create(70, 24), b2 = ge_image_create(70, 24);
+    ge_clear(&a2, 0); ge_clear(&b2, 0);
+    ge_text_outlined(&a2, 2, 2, "E1W?", col, ink, 2);
+    ge_text_outlined(&b2, 0, 0, "E1W?", col, ink, 2);
+    same = true;
+    for (int y = 0; y < 22; y++)
+        for (int x = 0; x < 68; x++) if (a2.px[(y + 2) * 70 + x + 2] != b2.px[y * 70 + x]) same = false;
+    CHECK(same);
+    ge_image_free(&a2); ge_image_free(&b2);
     GeImage e = ge_image_create(12, 12);
     ge_clear(&e, 0);
     ge_text_outlined(&e, 2, 2, "E", col, ink, 1);   /* E's top bar spans columns 0..4 */
