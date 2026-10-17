@@ -53,7 +53,7 @@ DEV MENU - always on the BOTTOM (touch) screen
   WARP             jump to a section (shaft, duelists, benches, boss, the Paragon's hall)
   MARK THIS MOMENT puts a marker in the log - use it when something looks
                    wrong, stutters, or feels unfair, so it can be found later
-  PRACTICE DUEL    a no-stakes duel against a beginner
+  PRACTICE DUEL    a no-stakes duel against a beginner (or press DOWN at any bench)
   RELOAD MODS / EXPORT CHARACTERS   see MODS below
   WIPE PARAGON MEMORY forgets everything the final boss has learned about you
   UP/DOWN to choose, A or LEFT/RIGHT to change, SELECT or B to close.

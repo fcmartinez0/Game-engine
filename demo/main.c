@@ -503,6 +503,8 @@ static void hero_intent(const GeInput *in) {
             say("RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
             respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
+        } else if (fabsf(p->pos.x - bx) < 18.0f && p->on_ground && (in->pressed & GE_BTN_DOWN)) {
+            start_practice();                       /* DOWN at a bench: a no-stakes practice duel */
         }
     }
 }
@@ -1320,7 +1322,7 @@ static void draw_hud(GeImage *fb) {
     /* prompts */
     for (int i = 0; i < level_nbenches; i++)
         if (p->active && fabsf(p->pos.x - (level_benches[i] * GE_TILE + 8.0f)) < 18.0f && g.msg_timer == 0)
-            ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST",
+            ge_text_outlined(fb, (int)(p->pos.x - w->cam.x) - ge_text_width("UP: REST   DOWN: PRACTICE", 1) / 2, (int)(p->pos.y - w->cam.y) - 44, "UP: REST   DOWN: PRACTICE",
                              GE_WHITE, GE_RGB(20, 14, 30), 1);
     if (g.tick < 420 && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
         const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   R DASH";
