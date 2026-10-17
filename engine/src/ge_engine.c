@@ -2,6 +2,9 @@
 
 #include <string.h>
 
+static GeFrameTimes g_times;
+GeFrameTimes ge_frame_times(void) { return g_times; }
+
 int ge_run(const GeGame *game, const GePlatformConfig *cfg) {
     GePlatformConfig c = *cfg;
     c.two_screens = game->draw_bottom != NULL;
@@ -39,8 +42,16 @@ int ge_run(const GeGame *game, const GePlatformConfig *cfg) {
             acc -= step;
         }
         game->draw(game->user, &fb);
+        uint64_t t0 = ge_plat_time_us();
         if (c.two_screens && game->draw_bottom(game->user, &bottom)) ge_plat_present_bottom(&bottom);
+        uint64_t t1 = ge_plat_time_us();
         ge_plat_present(&fb);
+        uint64_t t2 = ge_plat_time_us();
+        ge_plat_wait_frame();
+        uint64_t t3 = ge_plat_time_us();
+        g_times.bottom_ms = (float)(t1 - t0) / 1000.0f;
+        g_times.present_ms = (float)(t2 - t1) / 1000.0f;
+        g_times.wait_ms = (float)(t3 - t2) / 1000.0f;
     }
 
     if (game->shutdown) game->shutdown(game->user);

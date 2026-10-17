@@ -128,6 +128,8 @@ void ge_plat_present(const GeImage *fb) {
     SDL_RenderPresent(g_ren);
 }
 
+void ge_plat_wait_frame(void) {}   /* SDL_RenderPresent already waits for vsync when it is on */
+
 uint64_t ge_plat_time_us(void) {
     return (uint64_t)((double)SDL_GetPerformanceCounter() * 1e6 / (double)SDL_GetPerformanceFrequency());
 }

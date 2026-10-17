@@ -28,7 +28,8 @@ typedef struct {
 int      ge_plat_init(const GePlatformConfig *cfg);        /* 0 on success */
 void     ge_plat_shutdown(void);
 int      ge_plat_poll(uint32_t *buttons);                  /* fills GE_BTN_* mask; 0 = quit requested */
-void     ge_plat_present(const GeImage *fb);
+void     ge_plat_present(const GeImage *fb);                /* show the frame (copy it out, request the flip) */
+void     ge_plat_wait_frame(void);                         /* wait for the display to take it (vsync), if the backend does */
 void     ge_plat_present_bottom(const GeImage *fb);        /* only called when the bottom screen changed */
 int      ge_plat_touch(int *x, int *y);                    /* 1 while the bottom screen is touched (or clicked) */
 uint64_t ge_plat_time_us(void);                            /* monotonic */

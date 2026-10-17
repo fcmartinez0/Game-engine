@@ -4,14 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Pixels start on a 32-byte boundary (one cache line on the 3DS's ARM11): a row of the 400-wide screen is
+ * then exactly 50 lines, and an 8-pixel run never straddles two of them. malloc only promises 8 or 16, so
+ * the block is over-allocated and the real start is kept just before the pixels for ge_image_free. */
+#define GE_IMAGE_ALIGN 32
+
 GeImage ge_image_create(int w, int h) {
-    GeImage img = { w, h, (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t)) };
-    if (!img.px) img.w = img.h = 0;
+    GeImage img = { 0, 0, NULL };
+    if (w <= 0 || h <= 0) return img;
+    size_t bytes = (size_t)w * (size_t)h * sizeof(uint32_t);
+    unsigned char *raw = (unsigned char *)calloc(1, bytes + GE_IMAGE_ALIGN + sizeof(void *));
+    if (!raw) return img;
+    uintptr_t at = ((uintptr_t)(raw + sizeof(void *)) + GE_IMAGE_ALIGN - 1) & ~(uintptr_t)(GE_IMAGE_ALIGN - 1);
+    ((void **)at)[-1] = raw;
+    img.w = w; img.h = h; img.px = (uint32_t *)at;
     return img;
 }
 
 void ge_image_free(GeImage *img) {
-    free(img->px);
+    if (img->px) free(((void **)img->px)[-1]);
     img->px = NULL;
     img->w = img->h = 0;
 }
@@ -281,12 +292,36 @@ int ge_spans_build(GeSpans *out, const GeImage *img) {
     }
     out->row_start[img->h] = (uint32_t)n;
     out->rows = img->h;
+    /* the opaque-pixel masks (optional: without them the compositor just isn't used) */
+    out->mask_words = (img->w + 31) / 32 + 1;
+    out->mask = (uint32_t *)calloc((size_t)out->mask_words * (size_t)img->h, sizeof(uint32_t));
+    out->row_kind = (uint8_t *)malloc((size_t)img->h);
+    if (!out->mask || !out->row_kind) {
+        free(out->mask); free(out->row_kind);
+        out->mask = NULL; out->row_kind = NULL; out->mask_words = 0;
+        return 0;
+    }
+    for (int y = 0; y < img->h; y++) {
+        uint32_t *m = out->mask + (size_t)y * (size_t)out->mask_words;
+        int count = 0;
+        for (uint32_t k = out->row_start[y]; k < out->row_start[y + 1]; k++) {
+            const GeSpan *g = &out->spans[k];
+            if (!g->opaque) continue;
+            for (int x = g->x; x < g->x + g->len; x++) m[x >> 5] |= 1u << (x & 31);
+            count += g->len;
+        }
+        out->row_kind[y] = count == 0 ? GE_ROW_NONE : count == img->w ? GE_ROW_ALL : GE_ROW_SOME;
+    }
     return 0;
 }
 
 void ge_spans_free(GeSpans *s) {
-    free(s->spans); free(s->row_start);
+    free(s->spans); free(s->row_start); free(s->mask); free(s->row_kind);
     memset(s, 0, sizeof *s);
+}
+
+void ge_blend_row(uint32_t *dst, const uint32_t *src, int n, int flags) {
+    for (int i = 0; i < n; i++) dst[i] = px_blend(dst[i], src[i], flags);
 }
 
 void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags) {
@@ -338,6 +373,20 @@ static inline void block(GeImage *dst, int x, int y, int scale, uint32_t color) 
 
 void ge_draw_bits(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, uint32_t color) {
     if (x >= dst->w || y >= dst->h || x + 5 * scale <= 0 || y + 7 * scale <= 0) return;
+    if (scale == 1 && (color >> 24) == 255 && x >= 0 && x + 5 <= dst->w && y >= 0 && y + 7 <= dst->h) {
+        /* the usual HUD case: plain stores, no clipping (one call per pixel was most of the cost) */
+        uint32_t *row = dst->px + (size_t)y * dst->w + x;
+        for (int r = 0; r < 7; r++, row += dst->w) {
+            int bits = rows[r];
+            if (!bits) continue;
+            if (bits & 0x10) row[0] = color;
+            if (bits & 0x08) row[1] = color;
+            if (bits & 0x04) row[2] = color;
+            if (bits & 0x02) row[3] = color;
+            if (bits & 0x01) row[4] = color;
+        }
+        return;
+    }
     for (int r = 0; r < 7; r++) {
         int bits = rows[r];
         if (!bits) continue;
@@ -349,13 +398,25 @@ void ge_draw_bits(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, 
 /* the glyph grown by one pixel in every direction: the outline, drawn before the glyph itself */
 void ge_draw_bits_outline(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, uint32_t color) {
     if (x >= dst->w + scale || y >= dst->h + scale || x + 6 * scale <= 0 || y + 8 * scale <= 0) return;
+    if (scale == 1 && (color >> 24) == 255 && x >= 1 && x + 6 <= dst->w && y >= 1 && y + 8 <= dst->h) {
+        uint32_t *row = dst->px + (size_t)(y - 1) * dst->w + (x - 1);   /* as below, without the clipping */
+        for (int r = -1; r <= 7; r++, row += dst->w) {
+            int bits = 0;
+            for (int k = r - 1; k <= r + 1; k++)
+                if (k >= 0 && k < 7) bits |= (rows[k] << 2) | (rows[k] << 1) | rows[k];
+            if (!bits) continue;
+            for (int col = 0; col < 7; col++)
+                if (bits & (0x40 >> col)) row[col] = color;
+        }
+        return;
+    }
     for (int r = -1; r <= 7; r++) {
-        int bits = 0;
+        int bits = 0;   /* 7 columns, -1 .. 5: bit 0x40 is column -1 */
         for (int k = r - 1; k <= r + 1; k++)
-            if (k >= 0 && k < 7) bits |= (rows[k] << 1) | rows[k] | (rows[k] >> 1);   /* 7 columns: -1 .. 5 */
+            if (k >= 0 && k < 7) bits |= (rows[k] << 2) | (rows[k] << 1) | rows[k];
         if (!bits) continue;
         for (int col = 0; col < 7; col++)
-            if (bits & (0x20 >> col)) block(dst, x + (col - 1) * scale, y + r * scale, scale, color);
+            if (bits & (0x40 >> col)) block(dst, x + (col - 1) * scale, y + r * scale, scale, color);
     }
 }
 

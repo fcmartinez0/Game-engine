@@ -65,8 +65,9 @@ void ge_plat_present(const GeImage *fb) {
     if (dst && fw == fb->h && fh == fb->w) ge_3ds_rotate_bgr8(fb->px, fb->w, fb->h, dst);
     gfxFlushBuffers();
     gfxSwapBuffers();
-    gspWaitForVBlank();
 }
+
+void ge_plat_wait_frame(void) { gspWaitForVBlank(); }
 
 /* The system tick runs at SYSCLOCK_ARM11 (~268 MHz) on every model: fine-grained
  * enough to time a frame, unlike osGetTime's milliseconds. */

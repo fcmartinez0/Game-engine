@@ -94,7 +94,8 @@ typedef struct {
     bool log_wanted;
     const char *console;
     uint64_t start_us, now_us, next_sample_us;
-    struct { int frames, slow; double dt_sum, dt_max, draw_sum, draw_max, update_sum; } win, tot, duel_perf;
+    struct { int frames, slow; double dt_sum, dt_max, draw_sum, draw_max, update_sum, present_sum, bottom_sum, wait_sum; } win, tot, duel_perf;
+    float present_ms;                     /* smoothed: sending the top screen (the 3DS's rotate copy) */
     int ticks_world, ticks_duel;
     uint32_t tick;
 } Demo;
@@ -901,7 +902,7 @@ static void set_logging(bool on) {
     if (on && !devlog_is_open() && devlog_open()) {
         devlog("session start: Gloamwood, built %s %s, console %s, detail %s, difficulty %s", __DATE__, __TIME__, g.console,
                g.low_detail ? "low" : "full", g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
-        devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw ms");
+        devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw/present ms (present = sending the picture to the screen; vsync wait = time to spare)");
         devlog_flush();
     } else if (!on && devlog_is_open()) {
         devlog("play log switched off from the dev menu");
@@ -1169,8 +1170,8 @@ static bool draw_bottom(void *user, GeImage *fb) {
     uint64_t secs = (g.now_us - g.start_us) / 1000000u;
     snprintf(buf, sizeof buf, "PLAY TIME %s   %s", devlog_hms(secs), g.console);
     ge_text(fb, 6, y, buf, GE_RGB(160, 230, 170), 1);
-    snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%dMS  DRAW %d.%dMS", (int)(g.fps + 0.5f), (int)g.update_ms, (int)(g.update_ms * 10) % 10,
-             (int)g.draw_ms, (int)(g.draw_ms * 10) % 10);
+    snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%d  DRAW %d.%d  PRESENT %d.%d MS", (int)(g.fps + 0.5f), (int)g.update_ms,
+             (int)(g.update_ms * 10) % 10, (int)g.draw_ms, (int)(g.draw_ms * 10) % 10, (int)g.present_ms, (int)(g.present_ms * 10) % 10);
     ge_text(fb, 6, y + 11, buf, GE_RGB(120, 255, 140), 1);
     if (g.mods.nlines == 0) snprintf(buf, sizeof buf, "MODS: NONE IN %s", mods_dir());
     else snprintf(buf, sizeof buf, "MODS: %d LOADED, %d PROBLEMS (DETAILS IN THE LOG)", g.mods.loaded, g.mods.errors);
@@ -1413,6 +1414,7 @@ static void demo_draw(void *user, GeImage *fb) {
     }
     double draw = (double)(ge_plat_time_us() - t0) / 1000.0;
     g.draw_ms += ((float)draw - g.draw_ms) * 0.1f;
+    g.present_ms += (ge_frame_times().present_ms - g.present_ms) * 0.1f;
 
     /* frame statistics for the play log (menu time excluded) */
     if (dt_ms > 0 && dt_ms < 1000 && !g.menu_open) {
@@ -1425,6 +1427,8 @@ static void demo_draw(void *user, GeImage *fb) {
         g.win.draw_sum += draw;
         if (draw > g.win.draw_max) g.win.draw_max = draw;
         g.win.update_sum += g.update_ms;
+        GeFrameTimes ft = ge_frame_times();   /* the previous frame's: this one hasn't been sent yet */
+        g.win.present_sum += ft.present_ms; g.win.bottom_sum += ft.bottom_ms; g.win.wait_sum += ft.wait_ms;
         if (g.mode == M_BATTLE) {
             g.duel_perf.frames++; g.duel_perf.dt_sum += dt_ms;
             if (dt_ms > g.duel_perf.dt_max) g.duel_perf.dt_max = dt_ms;
@@ -1434,9 +1438,11 @@ static void demo_draw(void *user, GeImage *fb) {
         g.next_sample_us = t0;
         if (g.win.frames > 0 && devlog_is_open()) {
             const char *where = g.mode == M_BATTLE ? "duel" : (g.boss_engaged ? "boss fight" : "exploring");
-            devlog("perf: %.1f fps avg, worst frame %.1f ms, %d%% of frames below 60 fps | update %.1f ms, draw %.1f ms (max %.1f) | %s, column %d, masks %d | detail %s",
+            devlog("perf: %.1f fps avg, worst frame %.1f ms, %d%% of frames below 60 fps | update %.1f ms, draw %.1f ms (max %.1f), "
+                   "present %.1f ms, bottom screen %.1f ms, vsync wait %.1f ms | %s, column %d, masks %d | detail %s",
                    g.win.frames / (g.win.dt_sum / 1000.0), g.win.dt_max, g.win.slow * 100 / g.win.frames,
-                   g.win.update_sum / g.win.frames, g.win.draw_sum / g.win.frames, g.win.draw_max, where,
+                   g.win.update_sum / g.win.frames, g.win.draw_sum / g.win.frames, g.win.draw_max,
+                   g.win.present_sum / g.win.frames, g.win.bottom_sum / g.win.frames, g.win.wait_sum / g.win.frames, where,
                    (int)(hero()->pos.x / GE_TILE), hero()->active ? hero()->hp : 0, g.low_detail ? "low" : "full");
             devlog_flush();
         }
@@ -1444,9 +1450,9 @@ static void demo_draw(void *user, GeImage *fb) {
     }
     if (g.show_perf) {
         char buf[80];
-        snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%dMS  DRAW %d.%dMS  %s", (int)(g.fps + 0.5f),
+        snprintf(buf, sizeof buf, "FPS %d  UPDATE %d.%d  DRAW %d.%d  PRESENT %d.%d MS  %s", (int)(g.fps + 0.5f),
                  (int)g.update_ms, (int)(g.update_ms * 10) % 10, (int)g.draw_ms, (int)(g.draw_ms * 10) % 10,
-                 g.low_detail ? "LOW DETAIL" : "FULL DETAIL");
+                 (int)g.present_ms, (int)(g.present_ms * 10) % 10, g.low_detail ? "LOW" : "FULL");
         ge_fill_rect(fb, 0, 230, fb->w, 10, GE_ARGB(200, 0, 0, 0), 0);
         ge_text(fb, 3, 231, buf, GE_RGB(120, 255, 140), 1);
     }

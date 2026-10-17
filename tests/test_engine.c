@@ -427,6 +427,27 @@ static void test_armor_grounded_zoom_font(void) {
     ge_sprite_free(&s);
 }
 
+/* Outlined text: the direct path (scale 1, opaque, fully on screen) must draw exactly what the general
+ * clipped path draws, and the outline goes all the way round, the right side included. */
+static void test_text_outline(void) {
+    puts("outlined text");
+    GeImage a = ge_image_create(40, 12), b = ge_image_create(40, 12);
+    uint32_t ink = GE_RGB(1, 2, 3), col = GE_RGB(200, 100, 50);
+    ge_clear(&a, 0); ge_clear(&b, 0);
+    ge_text_outlined(&a, 1, 1, "E1W?", col, ink, 1);   /* direct path */
+    ge_text_outlined(&b, 0, 0, "E1W?", col, ink, 1);   /* touches the edge: the general path */
+    bool same = true;
+    for (int y = 0; y < 11; y++)
+        for (int x = 0; x < 39; x++) if (a.px[(y + 1) * 40 + x + 1] != b.px[y * 40 + x]) same = false;
+    CHECK(same);
+    GeImage e = ge_image_create(12, 12);
+    ge_clear(&e, 0);
+    ge_text_outlined(&e, 2, 2, "E", col, ink, 1);   /* E's top bar spans columns 0..4 */
+    CHECK(e.px[2 * 12 + 2] == col && e.px[2 * 12 + 6] == col);
+    CHECK(e.px[2 * 12 + 1] == ink && e.px[2 * 12 + 7] == ink && e.px[1 * 12 + 4] == ink);
+    ge_image_free(&a); ge_image_free(&b); ge_image_free(&e);
+}
+
 /* The 3DS screen copy is tiled for speed; it must match the plain per-pixel rule exactly. */
 static void test_3ds_rotate(void) {
     puts("3DS screen rotation");
@@ -434,8 +455,10 @@ static void test_3ds_rotate(void) {
     GeRng r;
     ge_rng_seed(&r, 3);
     for (int i = 0; i < 400 * 240; i++) img.px[i] = ge_rng_next(&r) | 0xFF000000u;
-    static uint8_t fast[400 * 240 * 3], slow[400 * 240 * 3];
-    memset(fast, 0xAB, sizeof fast);
+    static uint32_t fastw[400 * 240 * 3 / 4];   /* word aligned, like the real framebuffer */
+    static uint8_t slow[400 * 240 * 3];
+    uint8_t *fast = (uint8_t *)fastw;
+    memset(fast, 0xAB, sizeof fastw);
     ge_3ds_rotate_bgr8(img.px, 400, 240, fast);
     for (int x = 0; x < 400; x++)
         for (int y = 0; y < 240; y++) {
@@ -443,7 +466,7 @@ static void test_3ds_rotate(void) {
             uint8_t *o = slow + ((size_t)x * 240 + (239 - y)) * 3;
             o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
         }
-    CHECK(memcmp(fast, slow, sizeof fast) == 0);
+    CHECK(memcmp(fast, slow, sizeof slow) == 0);
     /* odd sizes take the byte-wise leftovers path; the result must still match */
     GeImage odd = ge_image_create(37, 21);
     for (int i = 0; i < 37 * 21; i++) odd.px[i] = ge_rng_next(&r) | 0xFF000000u;
@@ -456,6 +479,25 @@ static void test_3ds_rotate(void) {
             o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
         }
     CHECK(memcmp(f2, s2, sizeof f2) == 0);
+    /* the word-wise path with a ragged last column block (37 wide, 24 tall), and the byte-wise one for a
+     * destination that isn't word aligned */
+    GeImage rag = ge_image_create(37, 24);
+    for (int i = 0; i < 37 * 24; i++) rag.px[i] = ge_rng_next(&r) | 0xFF000000u;
+    static uint32_t f3w[37 * 24 + 4];
+    static uint8_t s3[37 * 24 * 3];
+    for (int x = 0; x < 37; x++)
+        for (int y = 0; y < 24; y++) {
+            uint32_t p = rag.px[y * 37 + x];
+            uint8_t *o = s3 + ((size_t)x * 24 + (23 - y)) * 3;
+            o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
+        }
+    ge_3ds_rotate_bgr8(rag.px, 37, 24, (uint8_t *)f3w);
+    CHECK(memcmp(f3w, s3, sizeof s3) == 0);
+    memset(f3w, 0, sizeof f3w);
+    ge_3ds_rotate_bgr8(rag.px, 37, 24, (uint8_t *)f3w + 1);
+    CHECK(memcmp((uint8_t *)f3w + 1, s3, sizeof s3) == 0);
+    CHECK(((uintptr_t)rag.px & 31) == 0 && ((uintptr_t)img.px & 31) == 0);   /* images are cache-line aligned */
+    ge_image_free(&rag);
     ge_image_free(&odd);
     ge_image_free(&img);
 }
@@ -818,6 +860,7 @@ int main(void) {
     test_contact_shots_meter();
     test_armor_grounded_zoom_font();
     test_3ds_rotate();
+    test_text_outline();
     test_blit_fast_paths();
     test_gfx();
     test_patterns();

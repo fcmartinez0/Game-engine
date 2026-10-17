@@ -44,8 +44,15 @@ void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy
  * Each row becomes a list of runs: fully opaque runs are copied as plain memory,
  * runs with any partial alpha are blended per pixel, transparent gaps cost nothing. */
 typedef struct { uint16_t x, len; uint8_t opaque; } GeSpan;
-typedef struct { GeSpan *spans; uint32_t *row_start; int rows; } GeSpans;
+/* Also kept per row: which pixels are fully opaque, as a bitmask (bit x % 32 of word x / 32; mask_words
+ * words per row, the last one always zero so a 32-bit window can be read at any x), and whether the row
+ * has no opaque pixel (GE_ROW_NONE), only some (GE_ROW_SOME) or nothing else (GE_ROW_ALL). The background
+ * compositor (ge_world.c) works out what is hidden from these. NULL if they couldn't be allocated. */
+enum { GE_ROW_NONE, GE_ROW_SOME, GE_ROW_ALL };
+typedef struct { GeSpan *spans; uint32_t *row_start; int rows; uint32_t *mask; uint8_t *row_kind; int mask_words; } GeSpans;
 int  ge_spans_build(GeSpans *out, const GeImage *img);   /* 0 on success */
+/* blend n source pixels over n destination pixels (GE_ADDITIVE or 0), as the span drawer does */
+void ge_blend_row(uint32_t *dst, const uint32_t *src, int n, int flags);
 /* as ge_spans_draw_wrap_x, but only the screen columns left of clip_x1 */
 void ge_spans_draw_wrap_x_clip(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags, int clip_x1);
 void ge_spans_free(GeSpans *s);

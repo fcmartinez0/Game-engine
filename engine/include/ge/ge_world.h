@@ -156,6 +156,7 @@ typedef struct {
     bool borrowed;            /* image owned by someone else: not freed with this world */
     uint8_t alpha;            /* baked into the image when the layer is added, then reads as 255 */
     GeSpans spans;            /* built by ge_world_add_layer */
+    bool translucent;         /* has partly see-through pixels (set by ge_world_add_layer) */
 } GeParallaxLayer;
 
 /* ---- particles ---- */
@@ -219,6 +220,7 @@ typedef struct GeWorld {
     bool foreground_off;      /* skip the foreground layers (e.g. indoors) */
     bool background_off;      /* skip the clear and the background layers: the game's own art covers the view */
     int background_clip_x;    /* if > 0: the background is only needed left of this screen column (the rest is covered) */
+    bool reference_background; /* tests: paint the background layers the plain back-to-front way */
     GePattern *backdrop_pattern;  /* when set, drawn instead of the background layers (fight screens) */
     bool custom_combat;       /* another module resolves hits (ge_fight) */
     int zoom;                 /* draw tiles/entities/effects magnified (parallax stays native); 0 or 1 = none.
