@@ -217,6 +217,7 @@ static void load_world(void) {
     fclose(f);
     static World file;                     /* (far too big for the 3DS's stack) */
     char err[120];
+    uint64_t t0 = ge_plat_time_us();
     int rc = world_load(&file, path, err, sizeof err);
     if (rc) {
         LOG("world: %s line %d: %s (playing the built-in world)", path, rc, err);
@@ -225,7 +226,7 @@ static void load_world(void) {
         return;
     }
     int added = 0, replaced = world_overlay(&g.wd, &file, &added);
-    LOG("world: %s: %d rooms replaced, %d added", path, replaced, added);
+    LOG("world: %s: %d rooms replaced, %d added (%d ms)", path, replaced, added, (int)((ge_plat_time_us() - t0) / 1000u));
 }
 
 static const char *room_title(void) {

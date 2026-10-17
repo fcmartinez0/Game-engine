@@ -2,6 +2,7 @@
 
 #include "editor.h"
 #include "ge/ge_font.h"
+#include "ge/ge_platform.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -813,6 +814,7 @@ static int custom_rooms(void) { int n = 0; for (int i = 0; i < E.h.wd->nrooms; i
 /* World.txt is written to world.tmp first, the old one kept as world.bak, then the new one renamed into place:
  * pulling the card (or the power) halfway through never leaves you without a world. */
 static bool save(void) {
+    uint64_t t0 = ge_plat_time_us();
     const char *world = mods_path("world.txt"), *tmp = mods_path("world.tmp"), *bak = mods_path("world.bak");
     mods_make_dir();
     if (*E.h.world_broken) {                 /* never over the one that didn't load: it is kept beside it */
@@ -845,20 +847,21 @@ static bool save(void) {
     char m[80];
     snprintf(m, sizeof m, "SAVED %d ROOM%s TO WORLD.TXT", n, n == 1 ? "" : "S");
     say(m, GOOD);
-    elog("editor: saved %d rooms to %s", n, world);
+    elog("editor: saved %d rooms to %s (%d ms)", n, world, (int)((ge_plat_time_us() - t0) / 1000u));
     E.bottom_dirty = true;
     return true;
 }
 
 void editor_autosave(void) {
     if (!E.ready || !E.since_autosave) return;
+    uint64_t t0 = ge_plat_time_us();
     const char *path = mods_path("world.autosave.txt");
     mods_make_dir();
     if (custom_rooms() == 0) remove(path);
     else if (world_save(E.h.wd, path, true) != 0) { elog("editor: autosave failed (%s)", path); return; }
     E.since_autosave = false;
     E.autosaved = true;
-    elog("editor: autosaved to %s", path);
+    elog("editor: autosaved to %s (%d ms)", path, (int)((ge_plat_time_us() - t0) / 1000u));
 }
 
 static void restore_autosave(void) {
