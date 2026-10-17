@@ -58,7 +58,54 @@ DEV MENU - always on the BOTTOM (touch) screen
   PRACTICE DUEL    a no-stakes duel against a beginner (or press DOWN at any bench)
   RELOAD MODS / EXPORT CHARACTERS   see MODS below
   WIPE PARAGON MEMORY forgets everything the final boss has learned about you
+  EDIT WORLD       the world editor (or just press START): see below
   UP/DOWN to choose, A or LEFT/RIGHT to change, SELECT or B to close.
+
+THE CAVES - walk LEFT from the start to the stone door at the forest's edge
+  and press UP: the Hollow, then (its door "down") the Deep. Puzzle pieces:
+  levers (slash them, or throw a needle), gates and bridges that follow
+  them, plates, crates (push, knock, drop them), cracked stone (two hits),
+  keys and locked gates, relics. A gate that opens out of sight shows a
+  blinking arrow at the screen's edge.
+
+THE WORLD EDITOR - press START while exploring (or dev menu > EDIT WORLD)
+  Think of it as a model railway's table: the BOTTOM screen is the table
+  seen from above (the map, 8 pixels a tile), the TOP screen is a camera
+  at the trains' height, START runs a train over what you just laid.
+  Below the map: four tabs of brushes. GROUND paints tiles; PUZZLE,
+  EXPLORE and FOES place pieces.
+    - Tap a brush, then tap or drag on the map. Tap the brush again (or B)
+      to put it down. Hold R while dragging a tile brush: fill a box.
+    - Tap a piece to select it: its settings replace the brushes
+      (< > change them). Drag a piece to move it. Drop it on ERASER, or
+      tap it with ERASER on, to remove it. B or a tap on empty map lets
+      go of it.
+    - Wires are like coloured extension cords: a gate opens while a
+      switch on the same wire is on. A new gate joins the switch you
+      placed or picked last, so LEVER, tap the map, GATE, tap the map,
+      PLAY already works. A gate's OPENS WHEN: ANY (a doorbell: any
+      button rings it) or ALL (a vault: every key turned).
+    - D-pad scrolls the map. L undoes (a whole stroke or drag at once).
+    - The green TEST FROM HERE figure is where PLAY puts you: drag it.
+    - ROOM: other rooms, WIDER / NARROWER / TALLER / SHORTER, the
+      backdrop, a NEW ROOM (its door leads back to the marker), BACK TO
+      BUILT-IN, RESTORE AUTOSAVE, and an overview to tap and jump to.
+    - Doors: select one, < > on LEADS TO links it (both ends at once),
+      GO THROUGH shows the other side.
+    - The line at the bottom of the top screen warns about a gate with
+      no switch, a door that goes nowhere, and the like.
+  START (or PLAY) tests it. Testing costs nothing: each test starts from
+  the game as it was when you began editing. START again: back to the
+  editor. The bottom screen while testing: BACK TO EDITING, RESTART ROOM,
+  STOP EDITING (carry on playing from here, for real), the wires' lights.
+  SAVE writes your rooms to SD:/3ds/gloamwood/mods/world.txt (the one
+  before is kept as world.bak). Each test and quitting also write
+  world.autosave.txt: ROOM > RESTORE AUTOSAVE brings it back.
+  world.txt is plain text: you can also edit it on a computer.
+  Every stone wall can be climbed (wall-jump). The hero's reach, for
+  building: a jump goes 3 tiles up and 4 across; a double jump 5 up;
+  with the air dash about 10 across; a dash 3 tiles; the needle flies
+  20 tiles straight.
 
 DURING A DUEL the bottom screen is a coach: your moves, and what just
   happened and what to do about it. SELECT still opens the dev menu.
