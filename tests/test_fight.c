@@ -165,6 +165,21 @@ static void test_buffer_and_tech(void) {
     for (int i = 0; i < 12; i++) step(NONE, NONE);
     step(NONE, btn(0, 0, GE_FB_L | GE_FB_M));
     CHECK(F.f[1].state != GE_FS_THROWN && E(1)->hp == 100);
+    /* forgiving: a tap of the guard button breaks it too, a little later still; not for the other side */
+    fresh(); close_in(20);
+    F.forgiving_tech = 2u;
+    step(btn(0, 0, GE_FB_L | GE_FB_M), NONE);
+    CHECK(F.f[1].state == GE_FS_THROWN);
+    for (int i = 0; i < 18; i++) step(NONE, NONE);
+    step(NONE, btn(0, 0, GE_FB_BLOCK));
+    CHECK(F.f[1].state != GE_FS_THROWN && E(1)->hp == 100);
+    fresh(); close_in(20);
+    F.forgiving_tech = 1u;                                          /* only side 0 is forgiven */
+    step(btn(0, 0, GE_FB_L | GE_FB_M), NONE);
+    for (int i = 0; i < 4; i++) step(NONE, NONE);
+    step(NONE, btn(0, 0, GE_FB_BLOCK));
+    for (int i = 0; i < 40; i++) step(NONE, NONE);
+    CHECK(E(1)->hp < 100);
 }
 
 static void test_blocking(void) {

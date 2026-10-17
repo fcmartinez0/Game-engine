@@ -167,6 +167,8 @@ typedef struct {
      * standing open (no guard), or holding the guard button while busy */
     int stat_hit_attacking[2], stat_hit_air[2], stat_hit_combo[2], stat_hit_open[2], stat_hit_guard_busy[2];
     bool forgiving_guard;    /* the guard button also blocks in the air, mid-dash and in your own move's recovery */
+    unsigned forgiving_tech; /* bit s: side s can also break a throw with a fresh press of the guard button, over a
+                              * longer window (22 ticks instead of 16): one button newcomers already reach for */
 } GeFight;
 
 /* Set up a match. `backdrop` (may be NULL) lends its parallax layers and tileset. */

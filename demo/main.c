@@ -104,9 +104,13 @@ static Demo g;
 static bool g_log;
 /* events go to stderr with GLOAM_LOG=1, and to the play log file when it's on */
 #define LOG(...) do { if (g_log) { fprintf(stderr, "[%6u] ", (unsigned)g.tick); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } \
-                      devlog(__VA_ARGS__); devlog_flush(); } while (0)   /* flushed at once: a crash or a power-off keeps it */
+                      devlog(__VA_ARGS__); } while (0)   /* written to the card at calm moments: see calm_flush */
 
 static GeEntity *hero(void) { return &g.world.ents[g.player]; }
+
+/* Writing to the SD card stalls the game for tens of milliseconds on a 3DS, so the play log is written at
+ * moments nobody is playing through: a black fade, a bench, the menu (and at least once a minute). */
+static void calm_flush(void) { devlog_flush(); }
 
 /* ---- difficulty ------------------------------------------------------------
  * One setting for the whole game (the dev menu's DIFFICULTY), saved between sessions. Easy is meant to be
@@ -504,6 +508,7 @@ static void hero_intent(const GeInput *in) {
             say("RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
             respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
+            calm_flush();
         } else if (fabsf(p->pos.x - bx) < 18.0f && p->on_ground && (in->pressed & GE_BTN_DOWN)) {
             start_practice();                       /* DOWN at a bench: a no-stakes practice duel */
         }
@@ -624,7 +629,8 @@ static void hero_bookkeeping(void) {
             g.safe_x = p->pos.x; g.safe_y = p->pos.y;
         }
     }
-    if (g.warp_fade > 0 && --g.warp_fade == 20) {
+    if (g.warp_fade > 0 && --g.warp_fade == 20) {   /* the screen is black */
+        calm_flush();
         p->pos = (GeVec2){ g.safe_x, g.safe_y };
         p->vel = (GeVec2){ 0, 0 };
         p->state = GE_ST_IDLE;
@@ -683,6 +689,7 @@ static void begin_battle(void) {
     if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); }
     if (g.practice) { g.fight.damage_scale[1] = 0.5f; g.fight.damage_scale[0] = 1.4f; g.fight.names[1] = "GROBB (PRACTICE)"; }
     g.fight.forgiving_guard = g.difficulty <= 0;      /* easy and normal: L also guards in the air and after your own swing */
+    g.fight.forgiving_tech = g.difficulty <= 0 ? 1u : 0u;   /* ...and a tap of L breaks a throw (logs: 0% of throws escaped) */
     g.fight.hints = 1;                                 /* teaching aids for the player's side */
     coach_reset();
     if (final) {
@@ -1054,7 +1061,7 @@ static void coach_update(void) {
         coach_say(g.fight.forgiving_guard ? "HIT IN THE AIR. HOLD L WHILE JUMPING" : "HIT IN THE AIR. DON'T JUMP AT THEM", bad);
     if (now[4] > g.coach_prev[4]) coach_say("HIT OPEN. HOLD L WHEN THEY START A SWING", bad);
     if (now[5] > g.coach_prev[5]) coach_say("L HELD, BUT YOU WERE BUSY (ATTACK OR DASH)", bad);
-    if (now[6] > g.coach_prev[6]) coach_say("GRABBED! PRESS Y+X AT ONCE TO BREAK IT", bad);
+    if (now[6] > g.coach_prev[6]) coach_say(g.fight.forgiving_tech & 1u ? "GRABBED! TAP L RIGHT AWAY TO BREAK IT" : "GRABBED! PRESS Y+X AT ONCE TO BREAK IT", bad);
     if (now[7] > g.coach_prev[7]) coach_say("YOUR HIT LANDED", good);
     if (now[8] > g.coach_prev[8]) coach_say("THEY BLOCKED. TRY DOWN+B (LOW) OR Y+X (THROW)", info);
     memcpy(g.coach_prev, now, sizeof now);
@@ -1090,7 +1097,7 @@ static void draw_coach(GeImage *fb) {
         static const char *const MOVES[] = {
             "Y LIGHT    X MEDIUM    A HEAVY",
             "B THRUST: SLOW, LONGEST REACH (DOWN+B: LOW)",
-            "HOLD L: GUARD (STOPS ALL BUT THROWS)",
+            "HOLD L: GUARD. GRABBED? TAP L TO BREAK IT",
             "R DASH (BACK+R: BACKDASH)   UP: JUMP",
             "Y+X: THROW, UP CLOSE (ALSO BREAKS A THROW)",
             "A+B: SUPER, WHEN THE BLUE BAR IS FULL",
@@ -1100,7 +1107,11 @@ static void draw_coach(GeImage *fb) {
         };
         ge_text(fb, 6, y, "YOUR MOVES", hi, 1);
         y += 12;
-        for (unsigned i = 0; i < sizeof MOVES / sizeof MOVES[0]; i++, y += 10) ge_text(fb, 10, y, MOVES[i], GE_RGB(220, 214, 236), 1);
+        for (unsigned i = 0; i < sizeof MOVES / sizeof MOVES[0]; i++, y += 10) {
+            const char *line = MOVES[i];
+            if (i == 2 && !(g.fight.forgiving_tech & 1u)) line = "HOLD L: GUARD (STOPS ALL BUT THROWS)";   /* hard: Y+X only */
+            ge_text(fb, 10, y, line, GE_RGB(220, 214, 236), 1);
+        }
         y += 4;
     }
     ge_fill_rect(fb, 0, y, fb->w, 1, GE_RGB(60, 46, 90), 0);
@@ -1189,7 +1200,7 @@ static void demo_update(void *user, const GeInput *in) {
     uint64_t t0 = ge_plat_time_us();
     bottom_touch(in);                                      /* the bottom screen works paused or not */
     if (g.menu_open) menu_input(in);                       /* the game is paused underneath */
-    else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; g.bottom_dirty = true; }
+    else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; g.bottom_dirty = true; calm_flush(); }
     else {
         demo_update_inner(in);
         if (g.mode == M_BATTLE) g.ticks_duel++; else g.ticks_world++;
@@ -1268,7 +1279,7 @@ static void demo_update_inner(const GeInput *in) {
         break;
     }
     case M_TRANS_OUT:
-        if (g.mode_timer == 24) { ge_fight_free(&g.fight); g.fight_live = false; end_battle(); }
+        if (g.mode_timer == 24) { ge_fight_free(&g.fight); g.fight_live = false; end_battle(); calm_flush(); }   /* the screen is black */
         if (g.mode_timer >= 48) {
             if (g.paragon_report) { g.paragon_report = false; g.mode = M_REPORT; g.mode_timer = 0; }
             else { g.mode = M_OVERWORLD; g.mode_timer = 0; }
@@ -1444,7 +1455,7 @@ static void demo_draw(void *user, GeImage *fb) {
                    g.win.update_sum / g.win.frames, g.win.draw_sum / g.win.frames, g.win.draw_max,
                    g.win.present_sum / g.win.frames, g.win.bottom_sum / g.win.frames, g.win.wait_sum / g.win.frames, where,
                    (int)(hero()->pos.x / GE_TILE), hero()->active ? hero()->hp : 0, g.low_detail ? "low" : "full");
-            devlog_flush();
+            devlog_flush_if_due(60000000u);   /* a backstop: usually a calm moment came sooner */
         }
         memset(&g.win, 0, sizeof g.win);
     }

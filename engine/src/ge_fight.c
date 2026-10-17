@@ -440,10 +440,15 @@ static void fighter_step(GeFight *f, int s) {
         GeEntity *te = ent(f, 1 - s);
         e->pos.x = ge_clampf(te->pos.x + (float)te->facing * 18.0f, d->body.body_w, (float)f->arena_w - d->body.body_w);
         e->pos.y = te->pos.y;
-        if (F->timer == 25 && ((f->hints >> s) & 1u)) { F->pop = "THROW! PRESS Y+X TO BREAK"; F->pop_timer = 40; F->pop_color = GE_RGB(255, 236, 160); }
+        bool easy_tech = (f->forgiving_tech >> s) & 1u;
+        if (F->timer == 25 && ((f->hints >> s) & 1u)) {
+            F->pop = easy_tech ? "THROW! TAP L TO BREAK" : "THROW! PRESS Y+X TO BREAK";
+            F->pop_timer = 40; F->pop_color = GE_RGB(255, 236, 160);
+        }
         bool tech_press = buttons_hit(F, GE_FB_L | GE_FB_M) ||
-                          (F->buf_timer > 0 && (F->buf_btn & (GE_FB_L | GE_FB_M)) == (GE_FB_L | GE_FB_M));
-        if (F->timer > 10 && tech_press) {                           /* throw tech: a 16-tick window, presses buffered */
+                          (F->buf_timer > 0 && (F->buf_btn & (GE_FB_L | GE_FB_M)) == (GE_FB_L | GE_FB_M)) ||
+                          (easy_tech && (F->in.pressed & GE_FB_BLOCK));
+        if (F->timer > (easy_tech ? 4 : 10) && tech_press) {         /* throw tech: a 16-tick window (22 forgiving), presses buffered */
             to_neutral(F, e); to_neutral(T, te);
             if (f->model) ge_model_on_throw(f->model, s, true, f->model_side);
             e->vel.x = (float)te->facing * 3.0f;

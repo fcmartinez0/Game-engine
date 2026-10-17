@@ -203,6 +203,8 @@ void ge_fight_observe(GeFight *f, GePlayerModel *m, int side) {
 int ge_model_save(const GePlayerModel *m, const char *path) {
     FILE *f = fopen(path, "w");
     if (!f) return -1;
+    static char buf[32768];                      /* the whole file in one write: each small write to a 3DS's card is slow */
+    setvbuf(f, buf, _IOFBF, sizeof buf);
     GePlayerModel *mm = (GePlayerModel *)m;      /* arrays() only takes addresses */
     Arr a[16];
     int n = arrays(mm, a);
