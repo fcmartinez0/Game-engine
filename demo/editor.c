@@ -28,7 +28,7 @@
 #define ARROW_W 24
 
 #define TAP_PX 4                     /* moved less than this: a tap, not a drag */
-#define PICK_PX 12                   /* a piece this close to where the stylus lands is under it */
+#define PICK_PX 4                    /* a piece this close (half a tile) to where the stylus lands is under it: painting right beside one still works */
 #define EDGE_PX 12                   /* dragging this close to the map's edge scrolls it, after EDGE_TICKS */
 #define EDGE_TICKS 18
 #define REPEAT_AFTER 24              /* holding a setting's arrow: it repeats after 0.4 s, 8 steps a second */
@@ -114,7 +114,8 @@ static struct {
     int last_wire;                   /* the wire of the switch last placed or picked: a new gate joins it */
     int marker_room, marker_col, marker_row;
     bool edited[WORLD_MAX_ROOMS];
-    bool unsaved, since_autosave, autosaved;
+    bool unsaved, since_autosave;
+    bool has_recover;                /* an earlier session's autosave is waiting (ROOM > RESTORE AUTOSAVE) */
     bool bottom_dirty;
     int panel;
     char msg[80];
@@ -127,7 +128,7 @@ static struct {
     int pan_ticks;
     float pan_acc;
     uint32_t tick;
-    int last_tap_x, last_tap_y;
+    int last_tap_x, last_tap_y, last_pick;   /* where the last tap on the map was, and what it picked (tap again: the next one there) */
     bool want_play;
     int kb_target, kb_thing, kb_len, kb_max;   /* the keyboard */
     char kb[72];
@@ -136,7 +137,7 @@ static struct {
 enum { G_NONE, G_TOOL, G_TAB, G_PALETTE, G_SLOT, G_PIECE, G_PAINT, G_BOX, G_PLACE, G_PAN, G_PANEL, G_SWALLOW };
 static struct {
     int kind, item;
-    bool down, moved, changed;
+    bool down, moved, changed, snapped;
     int x0, y0, x, y;                /* where it touched down; where it is */
     int hx[3], hy[3];                /* the last samples, newest first: the very last one before a lift can jump */
     int ticks;
@@ -149,6 +150,8 @@ static struct {
 
 static int g_test_wires[10];          /* the test play's panel: the wires as last drawn */
 static int g_test_frames;
+static bool g_test_dirty;            /* something on it changed: draw it */
+static bool g_chrome_ok;              /* the bottom screen's toolbar and brushes are drawn and kept (see editor_draw_bottom) */
 
 static Room *R(void) { return &E.h.wd->rooms[E.room]; }
 static Room *room_at(int i) { return &E.h.wd->rooms[i]; }
@@ -413,6 +416,8 @@ static void switch_room(int r) {
     E.bottom_dirty = true;
 }
 
+static void clamp_marker(void);
+
 static void undo(void) {
     if (g_nundo == 0) { say("NOTHING TO UNDO", DIM); return; }
     int step = g_undo[g_nundo - 1].step, other = -1;
@@ -436,7 +441,7 @@ static void undo(void) {
         snap_free(s);
     }
     if (E.room >= wd->nrooms) E.room = other >= 0 ? other : 0;
-    if (E.marker_room >= wd->nrooms) { E.marker_room = E.room; E.marker_col = 2; E.marker_row = R()->h - 2; }
+    clamp_marker();                       /* (the room the marker is in may be gone, or smaller) */
     E.sel = NOTHING;
     refresh();
     say("UNDONE", GOOD);
@@ -479,11 +484,18 @@ static int lowest_free_wire(const Room *r) {
     return 1;
 }
 
+/* A door id this room doesn't use and that no door anywhere points at (a deleted door's partner may still say
+ * "room:door1": a new door must not take that over by accident). */
 static void new_door_id(const Room *r, char *out, size_t n) {
     for (int k = 1; k < 100; k++) {
         snprintf(out, n, "door%d", k);
+        char want[64];
+        snprintf(want, sizeof want, "%s:%s", r->name, out);
         bool taken = false;
         for (int i = 0; i < r->nthings && !taken; i++) taken = r->things[i].kind == TH_DOOR && !strcmp(r->things[i].name, out);
+        for (int q = 0; q < E.h.wd->nrooms && !taken; q++)
+            for (int i = 0; i < room_at(q)->nthings && !taken; i++)
+                taken = room_at(q)->things[i].kind == TH_DOOR && !strcmp(room_at(q)->things[i].target, want);
         if (!taken) return;
     }
 }
@@ -526,12 +538,26 @@ static int place(int bi, int col, int row) {
     return i;
 }
 
+static int find_door(const char *target, int *door);
+static void target_of(int room, int door, char *out, size_t n);
+static void mark_edited(int room);
+static void snap_room(int room);
+
+/* the door another door leads to stops leading back here (it would point at nothing, or at a stranger) */
+static void unlink_partner(int room, int door) {
+    char me[48];
+    target_of(room, door, me, sizeof me);
+    int pd, pr = find_door(room_at(room)->things[door].target, &pd);
+    if (pr >= 0 && !strcmp(room_at(pr)->things[pd].target, me)) { snap_room(pr); room_at(pr)->things[pd].target[0] = 0; mark_edited(pr); }
+}
+
 static void remove_piece(int i) {
     Room *r = R();
     if (i < 0 || i >= r->nthings) return;
     if (locked_kind(r->things[i].kind)) { say("MADE IN WORLD.TXT: IT CAN'T BE REMOVED HERE", WARN); return; }
     begin_step();
     snap_room(E.room);
+    if (r->things[i].kind == TH_DOOR) unlink_partner(E.room, i);
     elog("editor: removed %s at %d,%d in %s", thing_kind_name(r->things[i].kind), r->things[i].col, r->things[i].row, r->name);
     room_remove_thing(r, i);
     E.sel = NOTHING;
@@ -543,9 +569,8 @@ static void remove_piece(int i) {
 static void move_piece(int i, int col, int row) {
     Room *r = R();
     if (i == MARKER) {
-        Thing t = thing_default(TH_START, col, row);
         if (col < 0 || row < 0 || col >= r->w || row >= r->h) { say("OUTSIDE THE ROOM", BAD); return; }
-        (void)t;
+        if (rock(room_tile(r, col, row))) { say("INSIDE ROCK", BAD); return; }
         E.marker_room = E.room; E.marker_col = col; E.marker_row = row;
         say("PLAY STARTS HERE NOW", GOOD);
         E.bottom_dirty = true;
@@ -574,6 +599,7 @@ static char brush_tile(void) { return E.eraser ? '.' : (E.brush >= 0 && BRUSHES[
 static void paint(int col, int row, char t) {
     Room *r = R();
     if (!t || col < 0 || row < 0 || col >= r->w || row >= r->h || room_tile(r, col, row) == t) return;
+    if (!G.snapped) { begin_step(); snap_room(E.room); G.snapped = true; }
     room_set_tile(r, col, row, t);
     GeTilemap *m = &E.h.w->map;
     if (m->w != r->w || m->h != r->h) return;
@@ -593,7 +619,7 @@ static void paint_line(int c0, int r0, int c1, int r1, char t) {   /* the stylus
 }
 
 static void end_stroke(void) {
-    if (!G.changed) { drop_step(); return; }
+    if (!G.changed) return;
     mark_edited(E.room);
     refresh();
     elog("editor: painted in %s", R()->name);
@@ -623,12 +649,22 @@ static int find_door(const char *target, int *door) {
 }
 
 typedef struct { int room, door; } DoorRef;
-static int link_options(DoorRef *out, int max) {   /* every door in the other rooms */
+/* The doors a door of this room can be linked to: those in other rooms that lead nowhere, or to nothing there, or
+ * back to this very door. A door in a working pair is never on offer, so stepping through the list (or holding
+ * the arrow) can't break anything: to rewire a pair, unlink one end first (NOWHERE). */
+static int link_options(int door, DoorRef *out, int max) {
+    char me[48];
+    target_of(E.room, door, me, sizeof me);
     int n = 0;
     for (int r = 0; r < E.h.wd->nrooms; r++) {
         if (r == E.room) continue;
-        for (int i = 0; i < room_at(r)->nthings && n < max; i++)
-            if (room_at(r)->things[i].kind == TH_DOOR) { out[n].room = r; out[n].door = i; n++; }
+        for (int i = 0; i < room_at(r)->nthings && n < max; i++) {
+            const Thing *o = &room_at(r)->things[i];
+            if (o->kind != TH_DOOR) continue;
+            int d, to = find_door(o->target, &d);
+            if (o->target[0] && to >= 0 && strcmp(o->target, me)) continue;   /* leads somewhere real that isn't here */
+            out[n].room = r; out[n].door = i; n++;
+        }
     }
     return n;
 }
@@ -777,6 +813,8 @@ static void check_room(void) {
     for (int i = 0; i < r->nthings; i++) {
         const Thing *t = &r->things[i];
         char lab[24];
+        const char *why = problem(r, t, i);                 /* rock painted over a piece buries it */
+        if (why && !strcmp(why, "INSIDE ROCK")) { snprintf(E.warn, sizeof E.warn, "%s AT %d,%d IS INSIDE ROCK", thing_kind_name(t->kind), t->col, t->row); return; }
         if (t->kind == TH_DOOR) {
             int d;
             door_label(t, lab, sizeof lab);
@@ -799,12 +837,28 @@ static void check_room(void) {
 
 /* ---- saving --------------------------------------------------------------------------------------- */
 
-static const char *mods_path(const char *file) {
-    static char p[4][200];
-    static int k;
-    k = (k + 1) & 3;
-    snprintf(p[k], sizeof p[k], "%s/%s", mods_dir(), file);
-    return p[k];
+/* Where the world is kept: mods/world.txt (SD:/3ds/gloamwood/mods/ on a 3DS), or the file the game was started
+ * with (--world FILE: then FILE, FILE.tmp, FILE.bak...). The names are built into a caller's own buffers: sharing
+ * a few static ones let one name overwrite another in the middle of a save. */
+typedef struct { char world[200], tmp[200], bak[200], autosave[200], recover[200], broken[200]; } SavePaths;
+
+static void save_paths(SavePaths *sp) {
+    if (E.h.world_file && E.h.world_file[0]) {
+        snprintf(sp->world, sizeof sp->world, "%s", E.h.world_file);
+        snprintf(sp->tmp, sizeof sp->tmp, "%s.tmp", E.h.world_file);
+        snprintf(sp->bak, sizeof sp->bak, "%s.bak", E.h.world_file);
+        snprintf(sp->autosave, sizeof sp->autosave, "%s.autosave", E.h.world_file);
+        snprintf(sp->recover, sizeof sp->recover, "%s.recover", E.h.world_file);
+        snprintf(sp->broken, sizeof sp->broken, "%s.broken", E.h.world_file);
+        return;
+    }
+    const char *d = mods_dir();
+    snprintf(sp->world, sizeof sp->world, "%s/world.txt", d);
+    snprintf(sp->tmp, sizeof sp->tmp, "%s/world.tmp", d);
+    snprintf(sp->bak, sizeof sp->bak, "%s/world.bak", d);
+    snprintf(sp->autosave, sizeof sp->autosave, "%s/world.autosave.txt", d);
+    snprintf(sp->recover, sizeof sp->recover, "%s/world.recover.txt", d);
+    snprintf(sp->broken, sizeof sp->broken, "%s/world-broken.txt", d);
 }
 
 static bool file_exists(const char *path) { FILE *f = fopen(path, "r"); if (f) fclose(f); return f != NULL; }
@@ -812,42 +866,43 @@ static bool file_exists(const char *path) { FILE *f = fopen(path, "r"); if (f) f
 static int custom_rooms(void) { int n = 0; for (int i = 0; i < E.h.wd->nrooms; i++) n += E.h.wd->rooms[i].custom; return n; }
 
 /* World.txt is written to world.tmp first, the old one kept as world.bak, then the new one renamed into place:
- * pulling the card (or the power) halfway through never leaves you without a world. */
+ * pulling the card (or the power) halfway through never leaves you without a world (if it stops between the two
+ * renames the game finds world.tmp and uses it: see load_world). */
 static bool save(void) {
     uint64_t t0 = ge_plat_time_us();
-    const char *world = mods_path("world.txt"), *tmp = mods_path("world.tmp"), *bak = mods_path("world.bak");
-    mods_make_dir();
+    SavePaths sp;
+    save_paths(&sp);
+    if (!E.h.world_file) mods_make_dir();
     if (*E.h.world_broken) {                 /* never over the one that didn't load: it is kept beside it */
-        const char *broken = mods_path("world-broken.txt");
-        remove(broken);
-        if (rename(world, broken) == 0) say("YOUR OLD WORLD.TXT DIDN'T LOAD: KEPT AS WORLD-BROKEN.TXT", WARN);
+        remove(sp.broken);
+        if (rename(sp.world, sp.broken) == 0) say("YOUR OLD WORLD.TXT DIDN'T LOAD: KEPT AS WORLD-BROKEN.TXT", WARN);
         *E.h.world_broken = false;
     }
     int n = custom_rooms();
+    bool had = file_exists(sp.world);
     if (n == 0) {                            /* nothing of yours left: the built-in world, and no file */
-        remove(bak);
-        rename(world, bak);
-        remove(mods_path("world.autosave.txt"));
+        if (had) { remove(sp.bak); rename(sp.world, sp.bak); }
+        remove(sp.autosave);
         E.unsaved = E.since_autosave = false;
-        say("SAVED: EVERY ROOM IS THE BUILT-IN ONE (OLD FILE: WORLD.BAK)", GOOD);
-        elog("editor: saved (no rooms of your own: world.txt moved to world.bak)");
+        say(had ? "SAVED: EVERY ROOM IS THE BUILT-IN ONE (OLD FILE: WORLD.BAK)" : "SAVED: EVERY ROOM IS THE BUILT-IN ONE", GOOD);
+        elog("editor: saved (no rooms of your own%s)", had ? ": world.txt moved to world.bak" : "");
+        E.bottom_dirty = true;
         return true;
     }
-    if (world_save(E.h.wd, tmp, true) != 0) { remove(tmp); say("COULDN'T WRITE TO THE SD CARD", BAD); elog("editor: save failed (writing %s)", tmp); return false; }
-    remove(bak);
-    bool had = rename(world, bak) == 0;
-    if (rename(tmp, world) != 0) {
-        if (had) rename(bak, world);
+    if (world_save(E.h.wd, sp.tmp, true) != 0) { remove(sp.tmp); say("COULDN'T WRITE TO THE SD CARD", BAD); elog("editor: save failed (writing %s)", sp.tmp); return false; }
+    if (had) { remove(sp.bak); had = rename(sp.world, sp.bak) == 0; }   /* (the older .bak goes only when there is a file to take its place) */
+    if (rename(sp.tmp, sp.world) != 0) {
+        if (had) rename(sp.bak, sp.world);
         say("COULDN'T SAVE. THE OLD WORLD.TXT IS SAFE", BAD);
-        elog("editor: save failed (renaming %s)", tmp);
+        elog("editor: save failed (renaming %s)", sp.tmp);
         return false;
     }
-    remove(mods_path("world.autosave.txt"));
+    remove(sp.autosave);
     E.unsaved = E.since_autosave = false;
     char m[80];
     snprintf(m, sizeof m, "SAVED %d ROOM%s TO WORLD.TXT", n, n == 1 ? "" : "S");
     say(m, GOOD);
-    elog("editor: saved %d rooms to %s (%d ms)", n, world, (int)((ge_plat_time_us() - t0) / 1000u));
+    elog("editor: saved %d rooms to %s (%d ms)", n, sp.world, (int)((ge_plat_time_us() - t0) / 1000u));
     E.bottom_dirty = true;
     return true;
 }
@@ -855,32 +910,53 @@ static bool save(void) {
 void editor_autosave(void) {
     if (!E.ready || !E.since_autosave) return;
     uint64_t t0 = ge_plat_time_us();
-    const char *path = mods_path("world.autosave.txt");
-    mods_make_dir();
-    if (custom_rooms() == 0) remove(path);
-    else if (world_save(E.h.wd, path, true) != 0) { elog("editor: autosave failed (%s)", path); return; }
+    SavePaths sp;
+    save_paths(&sp);
+    if (!E.h.world_file) mods_make_dir();
+    if (custom_rooms() == 0) remove(sp.autosave);
+    else if (world_save(E.h.wd, sp.autosave, true) != 0) { elog("editor: autosave failed (%s)", sp.autosave); return; }
     E.since_autosave = false;
-    E.autosaved = true;
-    elog("editor: autosaved to %s (%d ms)", path, (int)((ge_plat_time_us() - t0) / 1000u));
+    elog("editor: autosaved to %s (%d ms)", sp.autosave, (int)((ge_plat_time_us() - t0) / 1000u));
 }
 
+/* an Earlier session's autosave (left when the game ended unsaved) is moved aside when the editor first opens, so
+ * this session's own autosaves can never overwrite it before RESTORE AUTOSAVE has had its chance */
+static void keep_old_autosave(void) {
+    SavePaths sp;
+    save_paths(&sp);
+    if (file_exists(sp.autosave)) { remove(sp.recover); rename(sp.autosave, sp.recover); }
+    E.has_recover = file_exists(sp.recover);
+}
+
+/* keep the TEST FROM HERE marker inside the room it is in (rooms get smaller: undo, restore, revert, NARROWER) */
+static void clamp_marker(void) {
+    if (E.marker_room < 0 || E.marker_room >= E.h.wd->nrooms) { E.marker_room = E.room; E.marker_col = 2; E.marker_row = R()->h - 2; }
+    const Room *m = room_at(E.marker_room);
+    E.marker_col = ge_clampi(E.marker_col, 0, m->w - 1);
+    E.marker_row = ge_clampi(E.marker_row, 0, m->h - 1);
+}
+
+/* the world as it was when the autosave was written: the built-in rooms, with the autosaved ones laid over them. (Not
+ * laid over what you have now: a room you renamed since would come back beside its new name.) */
 static void restore_autosave(void) {
-    const char *path = mods_path("world.autosave.txt");
-    if (E.autosaved || !file_exists(path)) { say("NO AUTOSAVE FROM AN EARLIER SESSION", DIM); return; }
-    if (!confirmed(200)) { say("PUT BACK THE AUTOSAVED ROOMS? UNDO WON'T REACH PAST IT. TAP AGAIN", WARN); return; }
+    SavePaths sp;
+    save_paths(&sp);
+    if (!E.has_recover) { say("NO AUTOSAVE FROM AN EARLIER SESSION", DIM); return; }
+    if (!confirmed(200)) { say("PUT BACK THE AUTOSAVED WORLD? WHAT YOU HAVE NOW IS REPLACED. TAP AGAIN", WARN); return; }
     static World file;
     char err[100];
-    int rc = world_load(&file, path, err, sizeof err);
+    int rc = world_load(&file, sp.recover, err, sizeof err);
     if (rc) { char m[80]; snprintf(m, sizeof m, "THE AUTOSAVE DIDN'T LOAD (LINE %d)", rc); say(m, BAD); return; }
-    int names[WORLD_MAX_ROOMS], nn = file.nrooms;
-    char rn[WORLD_MAX_ROOMS][24];
-    for (int i = 0; i < nn; i++) { memcpy(rn[i], file.rooms[i].name, 24); names[i] = i; }
+    world_builtin(E.h.wd);
     int added = 0, replaced = world_overlay(E.h.wd, &file, &added);
-    (void)names;
-    for (int i = 0; i < nn; i++) { int r = world_find_room(E.h.wd, rn[i]); if (r >= 0) mark_edited(r); }
+    for (int i = 0; i < E.h.wd->nrooms; i++) E.edited[i] = true;       /* the game's memory of every room is stale now */
+    E.unsaved = E.since_autosave = true;
     undo_clear();
-    E.autosaved = true;
+    remove(sp.recover);
+    E.has_recover = false;
+    E.sel = NOTHING;
     if (E.room >= E.h.wd->nrooms) E.room = 0;
+    clamp_marker();
     refresh();
     char m[80];
     snprintf(m, sizeof m, "AUTOSAVE BACK: %d ROOMS REPLACED, %d ADDED", replaced, added);
@@ -906,8 +982,7 @@ static void revert_room(void) {
     mark_edited(E.room);
     r->custom = false;                       /* SAVE leaves it out of the file again */
     world_free(&bi);
-    E.marker_col = ge_clampi(E.marker_col, 0, r->w - 1);
-    E.marker_row = ge_clampi(E.marker_row, 0, r->h - 1);
+    clamp_marker();
     refresh();
     say("THE BUILT-IN ROOM IS BACK (SAVE TO KEEP IT SO)", GOOD);
     elog("editor: %s reverted to the built-in room", r->name);
@@ -972,7 +1047,12 @@ static void rename_room(const char *typed) {
 static void keys_commit(void) {
     E.panel = P_NONE;
     E.bottom_dirty = true;
-    if (E.kb_target == KB_ROOM) { rename_room(E.kb); return; }
+    if (E.kb_target == KB_ROOM) {                      /* (OK without typing leaves the name alone: its underscores can't be typed here) */
+        char now[24];
+        upper(now, sizeof now, R()->name);
+        if (strcmp(now, E.kb)) rename_room(E.kb);
+        return;
+    }
     Room *r = R();
     if (E.kb_thing < 0 || E.kb_thing >= r->nthings) return;
     Thing *t = &r->things[E.kb_thing];
@@ -1128,8 +1208,7 @@ static void draw_room_panel(GeImage *fb) {
     ge_text(fb, 248, RP_B2 + 3, "GREEN DOT:", DIM, 1);
     ge_text(fb, 248, RP_B2 + 13, "YOURS", DIM, 1);
     button(fb, 0, RP_B3, 160, 24, E.confirm == 201 ? "TAP AGAIN TO REVERT" : "BACK TO BUILT-IN", PANEL2, TEXT);
-    bool can_restore = !E.autosaved && file_exists(mods_path("world.autosave.txt"));
-    button(fb, 160, RP_B3, 160, 24, E.confirm == 200 ? "TAP AGAIN TO RESTORE" : "RESTORE AUTOSAVE", PANEL2, can_restore ? TEXT : DIM);
+    button(fb, 160, RP_B3, 160, 24, E.confirm == 200 ? "TAP AGAIN TO RESTORE" : "RESTORE AUTOSAVE", PANEL2, E.has_recover ? TEXT : DIM);
     /* the overview: the whole room squeezed into the strip, with the map's view on it */
     const Room *r = R();
     int sh = 240 - RP_STRIP;
@@ -1150,7 +1229,8 @@ enum { S_NONE, S_WIRE, S_NEED, S_WIDTH, S_HEIGHT, S_GATE_KIND, S_MODE, S_TIME, S
 typedef struct { int id; const char *label; char value[40]; bool button; } Slot;
 #define NSLOTS 6
 
-static const char *const GATE_KINDS[] = { "GATE", "PLANK GATE", "BRIDGE", "STONE BRIDGE", "LOCKED" };
+/* (a setting's value sits between two 24 px arrows: 9 letters at most) */
+static const char *const GATE_KINDS[] = { "GATE", "PLANK", "BRIDGE", "STONE BR.", "LOCKED" };
 static int gate_kind(const Thing *t) { return t->lock ? 4 : t->invert ? (t->plank ? 2 : 3) : (t->plank ? 1 : 0); }
 static const char *const LEVER_MODE_NAMES[] = { "STAYS ON", "FLIPS", "TIMED" };
 static const char *const GIVE_NAMES[] = { "NOTHING", "A MASK", "A NEEDLE", "SILK" };
@@ -1165,14 +1245,15 @@ static int slots_for(const Thing *t, Slot *s) {
     case TH_LEVER:
         SLOT(S_WIRE, "WIRE", "%d", t->ch);
         SLOT(S_MODE, "LEVER", "%s", LEVER_MODE_NAMES[ge_clampi(t->mode, 0, 2)]);
-        if (t->mode == LEVER_TIMED) SLOT(S_TIME, "STAYS ON FOR", "%d.%d S", t->time / 60, (t->time % 60) / 6);
+        if (t->mode == LEVER_TIMED) SLOT(S_TIME, "ON FOR", "%d.%d S", t->time / 60, (t->time % 60) / 6);
         break;
     case TH_PLATE: SLOT(S_WIRE, "WIRE", "%d", t->ch); break;
     case TH_GATE:
         SLOT(S_GATE_KIND, "KIND", "%s", GATE_KINDS[gate_kind(t)]);
         if (!t->lock) {
             SLOT(S_WIRE, "WIRE", "%d", t->ch);
-            SLOT(S_NEED, t->invert ? "APPEARS WHEN" : "OPENS WHEN", "%s", t->need == 0 ? "ALL ARE ON" : "ANY IS ON");
+            if (t->need >= 2) SLOT(S_NEED, t->invert ? "APPEARS" : "OPENS", "%d ON", t->need);
+            else SLOT(S_NEED, t->invert ? "APPEARS" : "OPENS", "%s", t->need == 0 ? "ALL ON" : "ANY ON");
         }
         SLOT(S_WIDTH, "WIDTH", "%d", t->w);
         SLOT(S_HEIGHT, "HEIGHT", "%d", t->h);
@@ -1186,16 +1267,16 @@ static int slots_for(const Thing *t, Slot *s) {
     case TH_DOOR: {
         int d, r = find_door(t->target, &d);
         char nm[24], lab[24];
-        if (r >= 0) { upper(nm, sizeof nm, room_at(r)->name); door_label(&room_at(r)->things[d], lab, sizeof lab); SLOT(S_LINK, "LEADS TO", "%.12s %.10s", nm, lab); }
-        else SLOT(S_LINK, "LEADS TO", "%s", t->target[0] ? "(MISSING)" : "NOWHERE");
+        if (r >= 0) { upper(nm, sizeof nm, room_at(r)->name); door_label(&room_at(r)->things[d], lab, sizeof lab); SLOT(S_LINK, "LEADS TO", "%.9s", nm); }
+        else SLOT(S_LINK, "LEADS TO", "%s", t->target[0] ? "MISSING" : "NOWHERE");
         if (r >= 0) BUTTON(S_GOTO, "GO THROUGH");
         break;
     }
     case TH_DUELIST:
         if (t->style == STYLE_PARAGON) break;      /* the final boss: as it is */
-        SLOT(S_STYLE, "FIGHTS LIKE", "%s", t->style == STYLE_FENCER ? "A FENCER" : "A BRAWLER");
+        SLOT(S_STYLE, "FIGHTS AS", "%s", t->style == STYLE_FENCER ? "FENCER" : "BRAWLER");
         SLOT(S_LEVEL, "SKILL", "%s", LEVEL_NAMES[ge_clampi(t->level, 0, 3)]);
-        SLOT(S_ROUNDS, "ROUNDS TO WIN", "%d", t->rounds);
+        SLOT(S_ROUNDS, "ROUNDS", "%d", t->rounds);
         break;
     default: break;
     }
@@ -1234,12 +1315,12 @@ static void slot_apply(int id, int dir, bool first) {
     }
     if (id == S_LINK) {
         DoorRef opts[WORLD_MAX_ROOMS * 8];
-        int n = link_options(opts, (int)(sizeof opts / sizeof opts[0])), cur = -1, d, to = find_door(t->target, &d);
+        int n = link_options(E.sel, opts, (int)(sizeof opts / sizeof opts[0])), cur = -1, d, to = find_door(t->target, &d);
         for (int k = 0; k < n; k++) if (opts[k].room == to && opts[k].door == d) cur = k;
         int next = cur + dir;                  /* -1 is NOWHERE */
         if (next < -1) next = n - 1;
         if (next >= n) next = -1;
-        if (n == 0) { say("NO DOORS IN OTHER ROOMS YET (ROOM > NEW ROOM MAKES ONE)", WARN); return; }
+        if (n == 0) { say("NO FREE DOOR IN ANOTHER ROOM (A DOOR IN A PAIR: UNLINK IT FIRST)", WARN); return; }
         set_link(E.sel, next >= 0 ? opts[next].room : -1, next >= 0 ? opts[next].door : -1);
         refresh();
         return;
@@ -1247,7 +1328,7 @@ static void slot_apply(int id, int dir, bool first) {
     Thing before = *t;
     switch (id) {
     case S_WIRE: t->ch = (int8_t)((t->ch - 1 + dir + 9) % 9 + 1); if (is_input(t->kind)) E.last_wire = t->ch; break;
-    case S_NEED: t->need = t->need == 0 ? 1 : 0; break;
+    case S_NEED: t->need = t->need == 1 ? 0 : 1; break;      /* ANY <> ALL (a world.txt gate needing N goes to ANY first) */
     case S_WIDTH: t->w = (int16_t)ge_clampi(t->w + dir, 1, 8); break;
     case S_HEIGHT: t->h = (int16_t)ge_clampi(t->h + dir, 1, 8); break;
     case S_GATE_KIND: {
@@ -1308,7 +1389,7 @@ static int pick(int x, int y) {
     }
     if (n == 0) return NOTHING;
     if (abs(x - E.last_tap_x) < TAP_PX && abs(y - E.last_tap_y) < TAP_PX)
-        for (int k = 0; k < n; k++) if (cand[k] == E.sel) return cand[(k + 1) % n];
+        for (int k = 0; k < n; k++) if (cand[k] == E.last_pick) return cand[(k + 1) % n];
     return cand[0];
 }
 
@@ -1360,6 +1441,7 @@ static void touch_down(int x, int y, const GeInput *in) {
             int sx = 2 + (k % 3) * (SLOT_W + 2);
             G.dir = s[k].button ? 0 : x < sx + ARROW_W ? -1 : 1;
             slot_apply(G.item, G.dir ? G.dir : 1, true);
+            if (G.item == S_LINK || G.item == S_GATE_KIND) G.dir = 0;   /* one step a tap: holding mustn't rewire doors or churn kinds */
             return;
         }
         if (y < PAL_Y) { G.kind = G_TAB; E.tab = ge_clampi(x / TAB_W, 0, TAB_COUNT - 1); return; }
@@ -1371,7 +1453,7 @@ static void touch_down(int x, int y, const GeInput *in) {
     }
     int c = map_col(x), r = map_row(y);
     int p = pick(x, y);
-    E.last_tap_x = x; E.last_tap_y = y;
+    E.last_tap_x = x; E.last_tap_y = y; E.last_pick = p;
     if (p != NOTHING) {
         G.kind = G_PIECE;
         G.item = p;
@@ -1381,9 +1463,7 @@ static void touch_down(int x, int y, const GeInput *in) {
     }
     if (E.sel >= 0) { E.sel = NOTHING; G.kind = G_SWALLOW; return; }   /* a tap off a selected piece just lets it go */
     char t = brush_tile();
-    if (t) {
-        begin_step();
-        snap_room(E.room);
+    if (t) {                                          /* (the undo step is taken at the first change, so a tap that changes nothing costs none) */
         if (in->down & GE_BTN_R) { G.kind = G_BOX; G.box_c = c; G.box_r = r; G.cell_c = c; G.cell_r = r; }
         else { G.kind = G_PAINT; G.cell_c = c; G.cell_r = r; paint(c, r, t); }
         return;
@@ -1397,7 +1477,7 @@ static void touch_move(int x, int y) {
     G.x = x; G.y = y;
     G.ticks++;
     if (abs(x - G.x0) >= TAP_PX || abs(y - G.y0) >= TAP_PX) G.moved = true;
-    E.bottom_dirty = true;
+    if (E.panel == P_NONE) E.bottom_dirty = true;
     if (G.kind == G_PAINT && in_map(x, y)) {
         int c = map_col(x), r = map_row(y);
         if (c != G.cell_c || r != G.cell_r) { paint_line(G.cell_c, G.cell_r, c, r, brush_tile()); G.cell_c = c; G.cell_r = r; }
@@ -1426,7 +1506,10 @@ static void touch_up(void) {
             if (G.item == MARKER) say("THE MARKER STAYS (IT ISN'T SAVED)", DIM);
             else remove_piece(G.item);
         } else if (in_map(x, y)) {
-            move_piece(G.item, map_col(x) + G.grab_dc, map_row(y) + G.grab_dr);
+            int nc = map_col(x) + G.grab_dc, nr = map_row(y) + G.grab_dr;
+            int ac = G.item == MARKER ? E.marker_col : R()->things[G.item].col, ar = G.item == MARKER ? E.marker_row : R()->things[G.item].row;
+            if (nc == ac && nr == ar && G.item != MARKER) select_piece(G.item);   /* it slid a few pixels but stayed in its cell: a tap */
+            else move_piece(G.item, nc, nr);
         } else {
             say("PUT BACK", DIM);
         }
@@ -1459,8 +1542,7 @@ static void touch_up(void) {
 
 /* dragging near the map's edge, it scrolls that way */
 static void edge_scroll(void) {
-    bool dragging = G.down && (G.kind == G_PAINT || G.kind == G_BOX || G.kind == G_PLACE || (G.kind == G_PIECE && G.moved) ||
-                               (G.kind == G_PALETTE && G.moved));
+    bool dragging = G.down && (G.kind == G_PAINT || G.kind == G_BOX || ((G.kind == G_PLACE || G.kind == G_PIECE || G.kind == G_PALETTE) && G.moved));
     int dx = 0, dy = 0;
     if (dragging && in_map(G.x, G.y)) {
         if (G.x < EDGE_PX) dx = -1; else if (G.x >= BW - EDGE_PX) dx = 1;
@@ -1485,6 +1567,8 @@ void editor_open(const EditorHost *h, int room, int col, int row) {
         E.brush = -1;
         E.tab = TAB_PUZZLE;
         E.last_wire = 1;
+        E.last_pick = NOTHING;
+        keep_old_autosave();
     }
     E.room = ge_clampi(room, 0, E.h.wd->nrooms - 1);
     E.marker_room = E.room;
@@ -1493,6 +1577,7 @@ void editor_open(const EditorHost *h, int room, int col, int row) {
     E.panel = P_NONE;
     E.sel = NOTHING;
     E.want_play = false;
+    g_chrome_ok = false;                              /* the bottom screen was somebody else's (the test panel): draw every part again */
     memset(&G, 0, sizeof G);
     E.h.show_room(E.room);
     center_map(E.marker_col, E.marker_row);
@@ -1500,7 +1585,7 @@ void editor_open(const EditorHost *h, int room, int col, int row) {
     E.cy = (float)(E.marker_row * GE_TILE);
     place_camera();
     if (!E.help_seen) { E.help = 600; E.help_seen = true; }
-    if (!E.autosaved && file_exists(mods_path("world.autosave.txt"))) say("AN AUTOSAVE FROM BEFORE IS WAITING: ROOM > RESTORE AUTOSAVE", WARN);
+    if (E.has_recover) say("AN AUTOSAVE FROM BEFORE IS WAITING: ROOM > RESTORE AUTOSAVE", WARN);
     if (*E.h.world_broken && E.h.world_problem && E.h.world_problem[0]) say(E.h.world_problem, BAD);   /* (SAVE keeps that file aside) */
     check_room();
     E.bottom_dirty = true;
@@ -1515,7 +1600,10 @@ EditorAction editor_update(const GeInput *in) {
     if (E.panel == P_KEYS && (E.tick & 15) == 0) E.bottom_dirty = true;   /* the cursor blinks */
     if (E.sel >= 0 && (E.tick & 15) == 0) E.bottom_dirty = true;          /* so does the selection */
 
-    if (in->pressed & GE_BTN_START) E.want_play = true;
+    if (in->pressed & GE_BTN_START) {
+        if (E.panel == P_KEYS) keys_commit();           /* START is OK on the keyboard: what was typed is kept */
+        else E.want_play = true;
+    }
     if (E.want_play) {
         E.want_play = false;
         g_test_frames = 0;
@@ -1683,7 +1771,19 @@ static void draw_map(GeImage *fb) {
     }
 }
 
+/* how a brush's tile looks in the palette (open to the sky, so the dressed edges) */
+static int tile_vis(char c) {
+    switch (c) {
+    case '#': return TV_GRASS;
+    case '=': return TV_PLANK;
+    case '^': return TV_SPIKE;
+    case 'C': return TV_CRACK;
+    default: return TV_STONE_TOP;      /* S, T, H */
+    }
+}
+
 static void draw_palette(GeImage *fb) {
+    ge_fill_rect(fb, 0, TABS_Y, BW, 24, PANEL, 0);       /* (the gaps between the tabs hold whatever the screen showed before) */
     for (int t = 0; t < TAB_COUNT; t++) button(fb, t * TAB_W, TABS_Y, TAB_W, 24, TAB_NAMES[t], t == E.tab ? LIT : PANEL, t == E.tab ? HI : TEXT);
     ge_fill_rect(fb, 0, PAL_Y, BW, 24, INK, 0);
     int list[16], n = palette_brushes(E.tab, list);
@@ -1694,12 +1794,7 @@ static void draw_palette(GeImage *fb) {
         bool armed = list[k] == E.brush;
         ge_fill_rect(fb, x + 1, y + 1, PAL_W - 2, 22, armed ? LIT : PANEL2, 0);
         if (b->tile) {
-            uint8_t type, vis;
-            Room one = { .w = 1, .h = 1 };
-            char c = b->tile;
-            one.tiles = &c;
-            room_cell(&one, 0, 0, &type, &vis);
-            ge_blit(fb, ts, (GeIRect){ vis * GE_TILE, 0, GE_TILE, GE_TILE }, x + 8, y + 4, 0, GE_WHITE);
+            ge_blit(fb, ts, (GeIRect){ tile_vis(b->tile) * GE_TILE, 0, GE_TILE, GE_TILE }, x + 8, y + 4, 0, GE_WHITE);
         } else {
             icon(fb, b->kind, b->variant, E.last_wire, x + 8, y + 4, 2);
             if (b->locked) padlock(fb, x + 22, y + 13);
@@ -1744,16 +1839,30 @@ static void draw_slots(GeImage *fb) {
  * changes, so the rest is drawn again only when this does: it saves a third of the bottom screen's time. */
 typedef struct { int tab, brush, sel, room, w, h, last_wire, confirm; bool eraser, unsaved, can_undo; Thing t; } Chrome;
 static Chrome g_chrome;
-static bool g_chrome_ok;
+static GeImage g_chrome_img[2];                       /* the toolbar's rows and the brushes' rows as drawn, to put back after the map */
+static const int CHROME_Y[2] = { 0, TABS_Y }, CHROME_H[2] = { TB_H, 240 - TABS_Y };
+
+static void chrome_keep(const GeImage *fb) {
+    for (int k = 0; k < 2; k++) {
+        if (!g_chrome_img[k].px) g_chrome_img[k] = ge_image_create(BW, CHROME_H[k]);
+        if (g_chrome_img[k].px) memcpy(g_chrome_img[k].px, fb->px + CHROME_Y[k] * fb->w, sizeof(uint32_t) * (size_t)BW * (size_t)CHROME_H[k]);
+    }
+}
+static void chrome_restore(GeImage *fb) {            /* (the map draws outlines and icons that reach past its rows) */
+    for (int k = 0; k < 2; k++)
+        if (g_chrome_img[k].px) memcpy(fb->px + CHROME_Y[k] * fb->w, g_chrome_img[k].px, sizeof(uint32_t) * (size_t)BW * (size_t)CHROME_H[k]);
+}
 
 bool editor_draw_bottom(GeImage *fb) {
-    if (!E.bottom_dirty && !G.down) return false;
-    E.bottom_dirty = false;
-    if (E.panel != P_NONE) {
+    if (E.panel != P_NONE) {                          /* a panel redraws when something changed, not every frame */
+        if (!E.bottom_dirty) return false;
+        E.bottom_dirty = false;
         g_chrome_ok = false;
         if (E.panel == P_ROOM) draw_room_panel(fb); else draw_keys(fb);
         return true;
     }
+    if (!E.bottom_dirty && !G.down) return false;
+    E.bottom_dirty = false;
     bool selected = E.sel >= 0 && E.sel < R()->nthings;
     Chrome c;
     memset(&c, 0, sizeof c);
@@ -1763,10 +1872,12 @@ bool editor_draw_bottom(GeImage *fb) {
     if (!g_chrome_ok || memcmp(&c, &g_chrome, sizeof c)) {
         draw_toolbar(fb);
         if (selected) draw_slots(fb); else draw_palette(fb);
+        chrome_keep(fb);
         g_chrome = c;
         g_chrome_ok = true;
     }
     draw_map(fb);
+    chrome_restore(fb);
     return true;
 }
 
@@ -1795,6 +1906,9 @@ static void draw_idle(GeImage *fb, const GeSprite *sp, int x, int y, bool flip, 
 }
 
 static void top_line(GeImage *fb, int y, const char *s, uint32_t c) {
+    char cut[96];
+    int fit = (fb->w - 12) / 6;
+    if ((int)strlen(s) > fit) { snprintf(cut, sizeof cut, "%.*s..", fit - 2, s); s = cut; }
     ge_fill_rect(fb, 0, y, fb->w, 12, GE_RGB(12, 8, 22), 0);       /* (solid: blending a strip this wide costs more than it shows) */
     ge_text(fb, (fb->w - ge_text_width(s, 1)) / 2, y + 3, s, c, 1);
 }
@@ -1889,7 +2003,7 @@ void editor_draw_top(GeImage *fb) {
         int w = 0;
         for (int i = 0; i < 6; i++) { int tw = ge_text_width(HELP[i], 1); if (tw > w) w = tw; }
         int x = (fb->w - w) / 2 - 8, y = 66;
-        ge_fill_rect(fb, x, y, w + 16, 6 * 13 + 10, GE_ARGB(230, 16, 10, 30), 0);
+        ge_fill_rect(fb, x, y, w + 16, 6 * 13 + 10, GE_RGB(16, 10, 30), 0);
         rect_outline(fb, x, y, w + 16, 6 * 13 + 10, GE_RGB(190, 120, 255), false);
         for (int i = 0; i < 6; i++) ge_text(fb, x + 8, y + 7 + i * 13, HELP[i], i == 0 ? HI : TEXT, 1);
     }
@@ -1899,9 +2013,12 @@ void editor_draw_top(GeImage *fb) {
 
 
 TestAction editor_test_touch(const GeInput *in) {
+    if (E.msg_timer > 0 && --E.msg_timer == 0) g_test_dirty = true;
+    if (E.confirm_timer > 0 && --E.confirm_timer == 0) { E.confirm = 0; g_test_dirty = true; }
     if (!in->touch_pressed) return TP_NONE;
     int x = in->touch_x, y = in->touch_y;
     g_test_frames = 0;
+    g_test_dirty = true;
     if (x >= 10 && x < 310 && y >= 26 && y < 74) return TP_EDIT;
     if (y >= 84 && y < 114) {
         if (x < 160) return TP_RESTART;
@@ -1912,8 +2029,9 @@ TestAction editor_test_touch(const GeInput *in) {
 }
 
 bool editor_draw_test(GeImage *fb, const Puzzle *pz, bool force) {
-    bool changed = force || memcmp(g_test_wires, pz->wire_on, sizeof g_test_wires) != 0;
+    bool changed = force || g_test_dirty || memcmp(g_test_wires, pz->wire_on, sizeof g_test_wires) != 0;
     if (!changed && (g_test_frames++ % 30) != 0) return false;
+    g_test_dirty = false;
     memcpy(g_test_wires, pz->wire_on, sizeof g_test_wires);
     ge_clear(fb, PANEL);
     ge_fill_rect(fb, 0, 0, BW, 20, PANEL2, 0);
@@ -1934,7 +2052,5 @@ bool editor_draw_test(GeImage *fb, const Puzzle *pz, bool force) {
     if (E.msg_timer > 0) ge_text(fb, (BW - ge_text_width(E.msg, 1)) / 2, 196, E.msg, E.msg_color, 1);
     ge_text(fb, 10, 214, "STOP EDITING: GO ON PLAYING FROM HERE, FOR REAL", DIM, 1);
     ge_text(fb, 10, 226, "SELECT STILL OPENS THE DEV MENU", DIM, 1);
-    if (E.confirm_timer > 0 && --E.confirm_timer == 0) E.confirm = 0;
-    if (E.msg_timer > 0) E.msg_timer -= 30;
     return true;
 }

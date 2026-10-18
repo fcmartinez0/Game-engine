@@ -279,8 +279,32 @@ static void test_grow_shrink(void) {
     world_free(&w);
 }
 
+static void test_builtin_things_in_the_open(void) {
+    puts("the built-in rooms: nothing stands inside rock (the editor warns about that)");
+    static World w;
+    world_builtin(&w);
+    int buried = 0;
+    for (int r = 0; r < w.nrooms; r++)
+        for (int i = 0; i < w.rooms[r].nthings; i++) {
+            const Thing *t = &w.rooms[r].things[i];
+            if (t->kind == TH_ARENA || t->kind == TH_HALL || t->kind == TH_MARK) continue;
+            int w_ = t->kind == TH_GATE ? t->w : 1, h_ = t->kind == TH_GATE ? t->h : 1;
+            for (int y = t->row - h_ + 1; y <= t->row; y++)
+                for (int x = t->col; x < t->col + w_; x++) {
+                    char c = room_tile(&w.rooms[r], x, y);
+                    if (c == '#' || c == 'S' || c == 'T' || c == 'C' || c == 'H') {
+                        printf("  %s: %s at %d,%d is inside '%c' at %d,%d\n", w.rooms[r].name, thing_kind_name(t->kind), t->col, t->row, c, x, y);
+                        buried++;
+                    }
+                }
+        }
+    CHECK(buried == 0);
+    world_free(&w);
+}
+
 int main(void) {
     test_round_trip();
+    test_builtin_things_in_the_open();
     test_grow_shrink();
     test_builtin_doors();
     test_gloamwood_pinned();

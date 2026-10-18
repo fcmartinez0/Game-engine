@@ -30,6 +30,7 @@ typedef struct {
     void (*log)(const char *line);   /* the play log */
     bool *world_broken;          /* world.txt didn't load: it is renamed before the first save, never written over */
     const char *world_problem;   /* ...and why (shown when the editor opens) */
+    const char *world_file;      /* the file the game was started with (--world), else NULL: mods/world.txt */
 } EditorHost;
 
 typedef enum { ED_STAY, ED_PLAY } EditorAction;

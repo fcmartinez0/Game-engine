@@ -68,6 +68,7 @@ typedef struct {
         RoomProgress progress[WORLD_MAX_ROOMS];
         bool beaten[WORLD_MAX_ROOMS][ROOM_MAX_THINGS];
         int keys, bonus_masks, bonus_ammo, bench_room, bench_col, bench_row, hp, meter, ammo;
+        GePlayerModel model;      /* what the Paragon knows: test duels teach it nothing */
     } snap;
     bool hero_dying;
     int respawn_timer;
@@ -213,6 +214,17 @@ static void load_world(void) {
     const char *path = g.world_file ? g.world_file : world_path();
     if (g.no_mods && !g.world_file) return;
     FILE *f = fopen(path, "r");
+    if (!f) {                              /* A SAVE that was cut off between its two renames (the card pulled, the power gone)
+                                            * leaves no world.txt but a whole world.tmp: that is the saved world */
+        char tmp[200];
+        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        if (!g.world_file) snprintf(tmp, sizeof tmp, "%s/world.tmp", mods_dir());
+        static World probe;
+        char err[120];
+        if (world_load(&probe, tmp, err, sizeof err) == 0 && rename(tmp, path) == 0) LOG("world: found %s from a save that was cut off: it is world.txt now", tmp);
+        world_free(&probe);
+        f = fopen(path, "r");
+    }
     if (!f) return;
     fclose(f);
     static World file;                     /* (far too big for the 3DS's stack) */
@@ -976,7 +988,7 @@ static void end_battle(void) {
         say(g.duel_result == 0 ? "PRACTICE WON. TRY IT ON HARD WHEN YOU'RE READY" : "PRACTICE OVER. NOTHING LOST", 150);
         g.duel_cd = 120;
         p->invuln = 60;
-        paragon_profile_save(&g.model);
+        if (!g.test_play) paragon_profile_save(&g.model);
         return;
     }
     if (paragon_duel()) {
@@ -1015,7 +1027,7 @@ static void end_battle(void) {
     g.duel_cd = 120;
     p = hero();
     p->invuln = 60;
-    paragon_profile_save(&g.model);
+    if (!g.test_play) paragon_profile_save(&g.model);     /* (a test play teaches the Paragon nothing: its model is put back) */
 }
 
 /* ---- game callbacks ---------------------------------------------------- */
@@ -1295,18 +1307,19 @@ static void open_editor(void) {
         g.snap.keys = g.keys; g.snap.bonus_masks = g.bonus_masks; g.snap.bonus_ammo = g.bonus_ammo;
         g.snap.bench_room = g.bench_room; g.snap.bench_col = g.bench_col; g.snap.bench_row = g.bench_row;
         g.snap.hp = p->hp; g.snap.meter = p->meter; g.snap.ammo = p->ammo;
+        g.snap.model = g.model;
         editor_forget_edits();
     }
-    int col = (int)floorf(p->pos.x / GE_TILE), row = (int)floorf((p->pos.y - 1.0f) / GE_TILE);
-    if (!p->active || p->state == GE_ST_DEAD) { int rm; editor_marker(&rm, &col, &row); }   /* (fallen: where the last test began) */
+    int rm = g.room, col = (int)floorf(p->pos.x / GE_TILE), row = (int)floorf((p->pos.y - 1.0f) / GE_TILE);
+    if (!p->active || p->state == GE_ST_DEAD) editor_marker(&rm, &col, &row);   /* (fallen: where the last test began) */
     g.editing = true;
     g.test_play = false;
     g.menu_open = false;
     g.msg_timer = 0;
     g.boss_state = B_SLEEP;
     static EditorHost host;
-    host = (EditorHost){ &g.wd, &g.world, &g.spr, editor_show_room, editor_log_line, &g.world_broken, g.world_problem };
-    editor_open(&host, g.room, col, row);
+    host = (EditorHost){ &g.wd, &g.world, &g.spr, editor_show_room, editor_log_line, &g.world_broken, g.world_problem, g.world_file };
+    editor_open(&host, rm, col, row);
     g.bottom_dirty = true;
     calm_flush();
 }
@@ -1321,15 +1334,29 @@ static void start_test(void) {
     g.keys = g.snap.keys; g.bonus_masks = g.snap.bonus_masks; g.bonus_ammo = g.snap.bonus_ammo;
     g.bench_room = g.snap.bench_room < g.wd.nrooms ? g.snap.bench_room : 0;
     g.bench_col = g.snap.bench_col; g.bench_row = g.snap.bench_row;
+    g.model = g.snap.model;
     apply_relic_ammo();
     int rm, col, row;
     editor_marker(&rm, &col, &row);
+    if (rm < 0 || rm >= g.wd.nrooms) rm = 0;
+    col = ge_clampi(col, 0, g.wd.rooms[rm].w - 1);
+    row = ge_clampi(row, 0, g.wd.rooms[rm].h - 1);
+    bool bench_here = false;                                       /* the bench you rested at may have been edited away */
+    for (int i = 0; i < g.wd.rooms[g.bench_room].nthings; i++) {
+        const Thing *t = &g.wd.rooms[g.bench_room].things[i];
+        bench_here |= t->kind == TH_BENCH && t->col == g.bench_col && t->row == g.bench_row;
+    }
+    if (!bench_here) { g.bench_room = rm; g.bench_col = col; g.bench_row = row; }   /* then a fall brings you back to where the test began */
     g.editing = false;
     g.test_play = true;
     g.mode = M_OVERWORLD;
     g.mode_timer = 0;
     g.hero_dying = false;
     g.respawn_timer = 0;
+    g.door_fade = g.warp_fade = 0;                                 /* RESTART ROOM mid-fade (or mid-alert, mid-practice) starts clean */
+    g.practice = false;
+    g.duel = -1;
+    g.msg_timer = 0;
     GeEntity *p = hero();
     p->active = true;
     p->max_hp = hero_masks();
@@ -1340,9 +1367,13 @@ static void start_test(void) {
     p->invuln = 30;
     ge_anim_play(&p->anim, p->def->clip_idle, true);
     room_enter(rm, NULL);
-    /* at the marker: on the floor under it, or out of the rock it is in */
-    int r = ge_clampi(row, 0, room()->h - 1);
-    while (r > 0 && ge_tilemap_get(&g.world.map, col, r) == GE_TILE_SOLID) r--;
+    /* at the marker: on the floor under it, or (if it is in rock) at the nearest open cell above or below */
+    int r = row;
+    for (int d = 0; d < room()->h && ge_tilemap_get(&g.world.map, col, r) == GE_TILE_SOLID; d++) {
+        int up = row - d - 1, down = row + d + 1;
+        if (up >= 0 && ge_tilemap_get(&g.world.map, col, up) != GE_TILE_SOLID) { r = up; break; }
+        if (down < room()->h && ge_tilemap_get(&g.world.map, col, down) != GE_TILE_SOLID) { r = down; break; }
+    }
     float x = col * GE_TILE + 8.0f, y = ground_at(x, (float)(r * GE_TILE));
     p->pos = (GeVec2){ x, y };
     p->vel = (GeVec2){ 0, 0 };
@@ -1359,6 +1390,7 @@ static void start_test(void) {
 /* STOP EDITING: what happens now counts */
 static void stop_editing(void) {
     g.test_play = false;
+    g.model = g.snap.model;               /* what the test duels taught the Paragon is forgotten */
     editor_forget_edits();
     say(editor_unsaved() ? "PLAYING FOR REAL. YOUR ROOMS AREN'T SAVED YET (START, THEN SAVE)" : "PLAYING FOR REAL", 180);
     g.bottom_dirty = true;
@@ -1999,6 +2031,7 @@ static void demo_draw_inner(GeImage *fb) {
 static void demo_shutdown(void *user) {
     (void)user;
     editor_autosave();                     /* quitting with START+SELECT (or ESC) mid-edit keeps the work */
+    if (g.test_play) g.model = g.snap.model;
     if (devlog_is_open()) {
         uint64_t secs = (g.now_us - g.start_us) / 1000000u;
         devlog("session end. play time %s (exploring %s, duelling %s)", devlog_hms(secs), devlog_hms((uint64_t)g.ticks_world / 60),

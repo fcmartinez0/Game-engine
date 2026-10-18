@@ -90,7 +90,9 @@ THE WORLD EDITOR - press START while exploring (or dev menu > EDIT WORLD)
     - ROOM: other rooms, WIDER / NARROWER / TALLER / SHORTER, the
       backdrop, a NEW ROOM (its door leads back to the marker), BACK TO
       BUILT-IN, RESTORE AUTOSAVE, and an overview to tap and jump to.
-    - Doors: select one, < > on LEADS TO links it (both ends at once),
+    - Doors: select one, < > on LEADS TO links it (both ends at once), but
+      only to a free door (one that leads nowhere): browsing can't break a
+      working pair. To rewire a pair, step to NOWHERE first.
       GO THROUGH shows the other side.
     - The line at the bottom of the top screen warns about a gate with
       no switch, a door that goes nowhere, and the like.
@@ -100,7 +102,9 @@ THE WORLD EDITOR - press START while exploring (or dev menu > EDIT WORLD)
   STOP EDITING (carry on playing from here, for real), the wires' lights.
   SAVE writes your rooms to SD:/3ds/gloamwood/mods/world.txt (the one
   before is kept as world.bak). Each test and quitting also write
-  world.autosave.txt: ROOM > RESTORE AUTOSAVE brings it back.
+  world.autosave.txt. If the game ended with unsaved work, the next time you
+  open the editor that autosave is kept as world.recover.txt, and
+  ROOM > RESTORE AUTOSAVE puts that world back.
   world.txt is plain text: you can also edit it on a computer.
   Every stone wall can be climbed (wall-jump). The hero's reach, for
   building: a jump goes 3 tiles up and 4 across; a double jump 5 up;
