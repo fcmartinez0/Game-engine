@@ -318,6 +318,7 @@ int chars_build(Chars *c, Sprites *s) {
     wd->clip_idle = WC("idle"); wd->clip_run = WC("run"); wd->clip_jump = WC("jump"); wd->clip_fall = WC("fall");
     wd->clip_hurt = WC("hurt"); wd->clip_dead = WC("dead"); wd->clip_attack = WC("swing"); wd->clip_tool = WC("throw");
     wd->clip_attack_up = WC("charge");   /* (its charge is an "up attack": the brain presses attack with up held) */
+    wd->clip_skill = WC("leap");         /* (the crouch before a leap, its tell: a "skill" that costs nothing) */
     wd->ammo_max = 99; wd->ammo_recharge = 1;
 #undef WC
 

@@ -225,7 +225,7 @@ static int shots_of(const GeShotDef *d) {
 
 static void test_attacks_are_real(void) {
     puts("attacks: a swing and a charge are attack animations, a volley is spears, a leap leaves the floor and lands in shockwaves");
-    int swings = 0, swings_ok = 0, charges = 0, charges_ok = 0, throws = 0, throws_ok = 0, spears_seen = 0, leaps = 0, leaps_ok = 0;
+    int swings = 0, swings_ok = 0, charges = 0, charges_ok = 0, throws = 0, throws_ok = 0, spears_seen = 0, leaps = 0, leaps_ok = 0, tells_ok = 0;
     for (uint32_t s = 1; s <= 4; s++) {
         arena(s, 300, 450, 1.0f);
         boss_wake(&brain);
@@ -233,10 +233,11 @@ static void test_attacks_are_real(void) {
             int before = brain.mode;
             step(STAND);
             if (before != B_IDLE || !attacking_mode(brain.mode) || brain.away) continue;
-            int mv = brain.mode, attacked = 0, airborne = 0, throws_made = 0, spears = 0, waves = 0, prev_spears = 0, prev_waves = 0, was_throwing = 0;
+            int mv = brain.mode, attacked = 0, airborne = 0, throws_made = 0, spears = 0, waves = 0, prev_spears = 0, prev_waves = 0, was_throwing = 0, crouch = 0, left_floor_at = -1;
             for (int k = 0; k < 260 && brain.mode == mv; k++) {
                 if (BOSS->state == GE_ST_ATTACK) attacked = 1;
-                if (!BOSS->on_ground) airborne = 1;
+                if (!BOSS->on_ground) { airborne = 1; if (left_floor_at < 0) left_floor_at = k; }
+                if (mv == B_LEAP && left_floor_at < 0 && BOSS->state == GE_ST_ATTACK && BOSS->anim.clip == ch.warden.clip_skill) crouch++;     /* the tell */
                 int throwing = BOSS->state == GE_ST_ATTACK && BOSS->anim.clip == ch.warden.clip_tool;       /* (a spear thrown at a hero this close can be gone the same tick: count the throws by the animation too) */
                 throws_made += throwing && !was_throwing; was_throwing = throwing;
                 int sp = shots_of(&ch.spear), wv = shots_of(&ch.shockwave);
@@ -253,13 +254,14 @@ static void test_attacks_are_real(void) {
             if (mv == B_SWING) { swings++; swings_ok += attacked; }
             if (mv == B_CHARGE) { charges++; charges_ok += attacked; }
             if (mv == B_THROW) { throws++; throws_ok += throws_made >= 2; spears_seen += spears >= 1; }
-            if (mv == B_LEAP) { leaps++; leaps_ok += airborne && waves >= 2; }
+            if (mv == B_LEAP) { leaps++; leaps_ok += airborne && waves >= 2; tells_ok += crouch >= 15 && left_floor_at >= crouch; }
         }
     }
-    if (verbose) printf("  of %d swings %d swung, of %d charges %d charged, of %d volleys %d made two throws (spears seen in flight in %d), of %d leaps %d jumped and sent waves\n",
-                        swings, swings_ok, charges, charges_ok, throws, throws_ok, spears_seen, leaps, leaps_ok);
+    if (verbose) printf("  of %d swings %d swung, of %d charges %d charged, of %d volleys %d made two throws (spears seen in flight in %d), of %d leaps %d jumped and sent waves (%d crouched first)\n",
+                        swings, swings_ok, charges, charges_ok, throws, throws_ok, spears_seen, leaps, leaps_ok, tells_ok);
     CHECK(swings >= 10 && charges >= 10 && throws >= 5 && leaps >= 10);
     CHECK(swings_ok == swings && charges_ok == charges && throws_ok == throws && leaps_ok == leaps);
+    CHECK(tells_ok == leaps);                                           /* a leap is announced by a crouch of at least a quarter second */
     CHECK(spears_seen * 100 >= throws * 90);                            /* ...and the throws really fire spears */
 }
 
@@ -276,10 +278,10 @@ static void test_leap_aim(void) {
         for (int t = 0; t < 4000; t++) {
             if (HERO->pos.x > 470.0f) dir = -1.0f;
             if (HERO->pos.x < 190.0f) dir = 1.0f;
-            int before = brain.mode;
             step((Hero){ false, false, 1.8f * dir, false });
-            if (before == B_IDLE && brain.mode == B_LEAP && !brain.away) { in_leap = true; start_dist = fabsf(HERO->pos.x - BOSS->pos.x); start_dir = dir; }
-            else if (in_leap && brain.mode != B_LEAP) {            /* it landed */
+            if (brain.mode == B_LEAP && !brain.away && brain.leaping && !in_leap && !BOSS->on_ground) {      /* it has jumped */
+                in_leap = true; start_dist = fabsf(HERO->pos.x - BOSS->pos.x); start_dir = dir;
+            } else if (in_leap && brain.mode != B_LEAP) {                                                  /* it landed */
                 in_leap = false;
                 if (start_dist < 95.0f && start_dir == dir) { err += fabs(BOSS->pos.x - HERO->pos.x); n++; }       /* (a leap covers ~130 px; and the hero didn't turn round in mid-air, which nobody can predict) */
             }

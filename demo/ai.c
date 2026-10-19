@@ -427,15 +427,10 @@ void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const Boss
             switch (mv) {
             case B_SWING: it->attack_pressed = true; break;
             case B_CHARGE: it->attack_pressed = true; it->move_y = -1.0f; break;
-            case B_LEAP: {
-                float flight = 2.0f * e->def->jump_vel / e->def->gravity;     /* ticks in the air */
-                float tx = away ? e->pos.x - (float)toward * 110.0f : h->pos.x + h->vel.x * flight * 0.6f;
-                if (c->wall1 > c->wall0) tx = ge_clampf(tx, c->wall0 + 2.0f * GE_TILE, c->wall1 - 2.0f * GE_TILE);
-                it->jump_pressed = it->jump_held = true;
-                e->vel.x = (tx >= e->pos.x ? 1.0f : -1.0f) * leap_speed(e, fabsf(tx - e->pos.x), flight);
-                b->was_air = false;
+            case B_LEAP:
+                it->skill_pressed = true;                            /* the crouch: a beat to see it coming (the jump follows when it ends) */
+                b->was_air = false; b->leaping = false;
                 break;
-            }
             default:
                 b->combo = enraged ? 3 : 2;
                 it->tool_pressed = true;
@@ -473,6 +468,18 @@ void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const Boss
         }
         break;
     case B_LEAP:
+        if (!b->leaping) {                                           /* crouching */
+            if (b->age < 12) e->facing = toward;
+            if (e->state != GE_ST_ATTACK && b->age > 3) {            /* up: aim at where the hero will be, and go */
+                float flight = 2.0f * e->def->jump_vel / e->def->gravity;      /* ticks in the air */
+                float tx = b->away ? e->pos.x - (float)toward * 110.0f : h->pos.x + h->vel.x * flight * 0.6f;
+                if (c->wall1 > c->wall0) tx = ge_clampf(tx, c->wall0 + 2.0f * GE_TILE, c->wall1 - 2.0f * GE_TILE);
+                it->jump_pressed = it->jump_held = true;
+                e->vel.x = (tx >= e->pos.x ? 1.0f : -1.0f) * leap_speed(e, fabsf(tx - e->pos.x), flight);
+                b->leaping = true; b->was_air = false; b->timer = 10;
+            } else if (b->age > 90) { b->mode = B_IDLE; b->timer = boss_gap(w, c, 20); }       /* (it never got to crouch) */
+            break;
+        }
         it->jump_held = true;
         if (!e->on_ground) b->was_air = true;
         else if (b->was_air) {                                       /* landed: shockwaves both ways */
