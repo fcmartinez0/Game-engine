@@ -283,6 +283,7 @@ static void bat(GeWorld *w, int idx, GeEntity *e, const GeEntity *h, Mind *m, Ge
 void ai_think(GeWorld *w, int idx, const GeEntity *hero, GeIntent *it) {
     GeEntity *e = &w->ents[idx];
     Mind *m = &g_mind[idx];
+    if (!hero) m->sees = false;          /* (the last look said "I see you", but nobody is there now: the hero just died or left) */
     switch (e->kind) {
     case EN_CRAWLER: crawler(w, idx, e, hero, m, it); break;
     case EN_BAT:     bat(w, idx, e, hero, m, it); break;
@@ -298,4 +299,185 @@ void ai_provoke(int idx, const GeEntity *hero) {
     m->seen_x = hero->pos.x;
     m->unseen = 0;
     if (m->mode == AM_PATROL || m->mode == AM_SEARCH) { m->mode = AM_CHASE; m->timer = 0; }
+}
+
+/* ---- the boss: Thornwarden ---------------------------------------------------------------------------------- */
+
+static const char *const BOSS_MODES[] = { "asleep", "intro", "idle", "swing", "charge", "leap", "throw", "dead", "dazed" };
+
+void boss_reset(BossBrain *b) { memset(b, 0, sizeof *b); b->mode = B_SLEEP; b->last[0] = b->last[1] = -1; }
+void boss_wake(BossBrain *b) { boss_reset(b); b->mode = B_INTRO; b->timer = 70; }
+const char *boss_mode_name(const BossBrain *b) { return BOSS_MODES[b->mode >= 0 && b->mode <= B_DAZED ? b->mode : 0]; }
+
+static float clamp01(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
+
+/* The sideways speed to leave the ground with to land `dist` px away. In the air it slows down by half its air
+ * acceleration every tick (nothing is steering it), so it has to start faster than dist / flight-time says. */
+static float leap_speed(const GeEntity *e, float dist, float flight) {
+    float a = e->def->air_accel * 0.5f;
+    float v = dist >= 0.5f * a * flight * flight ? dist / flight + 0.5f * a * flight : sqrtf(2.0f * a * dist);
+    return v > 4.5f ? 4.5f : v;
+}
+
+/* a wall (at any height of its body) right in front of it, `dir` being the way it faces */
+static bool wall_ahead(const GeWorld *w, const GeEntity *e, int dir) {
+    float x = e->pos.x + (float)dir * ((float)e->def->body_w * 0.5f + 3.0f);
+    for (float up = 4.0f; up < (float)e->def->body_h; up += 20.0f) if (tile_at(w, x, e->pos.y - up) == GE_TILE_SOLID) return true;
+    return false;
+}
+
+/* What it has seen the hero do, kept as slow averages (a few seconds): a habit takes a while to notice and a while
+ * to forget, and a hero who changes what they do is read again. */
+static void boss_watch(BossBrain *b, const GeEntity *e, const GeEntity *h) {
+    float dist = fabsf(h->pos.x - e->pos.x);
+    bool air = !h->on_ground && h->state != GE_ST_WALL;
+    b->jumpy += ((air ? 1.0f : 0.0f) - b->jumpy) * 0.006f;
+    b->ranged += ((dist > 140.0f ? 1.0f : 0.0f) - b->ranged) * 0.006f;
+    b->hugs += ((dist < 50.0f ? 1.0f : 0.0f) - b->hugs) * 0.006f;
+    b->hug_ticks = dist < 45.0f ? b->hug_ticks + 1 : 0;
+    b->heal_ticks = h->state == GE_ST_CHANNEL ? b->heal_ticks + 1 : 0;
+}
+
+/* The pause after a move: longer when it is gentle (tempo), a few ticks of luck so the rhythm can't be learnt. */
+static int boss_gap(GeWorld *w, const BossCtx *c, int base) {
+    float t = c->tempo > 0.4f ? c->tempo : 1.0f;
+    return (int)((float)base * t) + (int)(rnd(w) * 10.0f);
+}
+
+/* Which attack, from where the hero is and what they keep doing. */
+static int boss_choose(BossBrain *b, GeWorld *w, const GeEntity *e, const GeEntity *h, bool enraged, bool *away) {
+    float dist = fabsf(h->pos.x - e->pos.x);
+    bool air = !h->on_ground && h->state != GE_ST_WALL;
+    float jumpy = clamp01(b->jumpy * 2.5f), ranged = clamp01(b->ranged * 1.25f);
+    float charge_reach = (enraged ? 6.5f : 5.5f) * 34.0f;          /* how far the charge's long frame carries it */
+    int facing = h->pos.x >= e->pos.x ? 1 : -1;
+    *away = false;
+
+    /* a hero clinging to it: get clear (a leap away that sends waves back along the floor), if there is room */
+    if (b->hug_ticks >= 50 && !wall_ahead(w, e, -facing) && tile_at(w, e->pos.x - (float)facing * 56.0f, e->pos.y - 4.0f) != GE_TILE_SOLID) {
+        *away = true;
+        return B_LEAP;
+    }
+
+    /* a hero who stops to heal is hit: the nearest thing that reaches */
+    if (b->heal_ticks >= 10) {
+        if (dist < 85.0f) return B_SWING;
+        if (dist < charge_reach * 0.9f) return B_CHARGE;
+        return dist < 260.0f ? B_LEAP : B_THROW;
+    }
+
+    float W[4] = { 0, 0, 0, 0 };                                    /* swing, charge, leap, throw (indexed by move - B_SWING) */
+    W[0] = dist < 80.0f ? 3.0f : dist < 110.0f ? 3.0f * (110.0f - dist) / 30.0f : 0.0f;
+    W[1] = dist >= 80.0f && dist <= charge_reach ? 2.0f : dist < 80.0f ? 0.7f : 0.8f;
+    W[2] = dist >= 60.0f && dist <= 200.0f ? 1.5f : dist < 60.0f ? 0.5f : 0.9f;
+    W[3] = dist > 100.0f ? 1.5f : dist > 60.0f ? 0.6f : 0.2f;
+    if (air) { W[0] *= dist < 90.0f ? 1.6f : 1.0f; W[1] *= 0.4f; W[2] *= 0.5f; W[3] *= 1.4f; }   /* (a hero in the air hops a charge and a wave) */
+    W[0] *= 1.0f + 0.5f * jumpy; W[1] *= 1.0f - 0.6f * jumpy; W[2] *= 1.0f - 0.7f * jumpy; W[3] *= 1.0f + 0.5f * jumpy;
+    W[1] *= 1.0f + 0.8f * ranged; W[2] *= 1.0f + 0.6f * ranged; W[3] *= 1.0f - 0.5f * ranged;
+    if (enraged) { W[1] *= 1.3f; W[2] *= 1.2f; }
+    for (int i = 0; i < 4; i++) {                                   /* variety: not the same thing again and again */
+        if (b->last[0] == B_SWING + i) W[i] *= b->last[1] == b->last[0] ? 0.0f : 0.4f;
+    }
+    float total = W[0] + W[1] + W[2] + W[3];
+    if (total <= 0.0f) return B_SWING;
+    float roll = rnd(w) * total;
+    for (int i = 0; i < 4; i++) { if (roll < W[i]) return B_SWING + i; roll -= W[i]; }
+    return B_THROW;
+}
+
+void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const BossCtx *c, GeIntent *it) {
+    GeEntity *e = &w->ents[idx];
+    memset(it, 0, sizeof *it);
+    if (b->mode == B_SLEEP || b->mode == B_DEAD || e->state == GE_ST_DEAD) return;
+    if (!h || !h->active || h->state == GE_ST_DEAD) return;
+    float dx = h->pos.x - e->pos.x, dist = fabsf(dx);
+    int toward = dx >= 0.0f ? 1 : -1;
+    bool enraged = e->hp < e->max_hp / 2;
+    if (b->timer > 0) b->timer--;
+    boss_watch(b, e, h);
+    b->age++;
+
+    switch (b->mode) {
+    case B_INTRO:
+        if (b->timer == 0) { b->mode = B_IDLE; b->timer = boss_gap(w, c, 40); }
+        break;
+    case B_IDLE:
+        e->facing = toward;
+        if (dist > 60.0f) it->move_x = (float)toward * (enraged ? 0.8f : 0.6f);
+        if (b->heal_ticks >= 10 && b->timer > 0) b->timer = 0;      /* it doesn't wait for its rhythm to hit a healer */
+        if (b->timer == 0) {
+            bool away = false;
+            int mv = boss_choose(b, w, e, h, enraged, &away);
+            b->last[1] = b->last[0]; b->last[0] = mv;
+            b->mode = mv; b->timer = 10; b->age = 0; b->away = away; b->follow = false;
+            switch (mv) {
+            case B_SWING: it->attack_pressed = true; break;
+            case B_CHARGE: it->attack_pressed = true; it->move_y = -1.0f; break;
+            case B_LEAP: {
+                float flight = 2.0f * e->def->jump_vel / e->def->gravity;     /* ticks in the air */
+                float tx = away ? e->pos.x - (float)toward * 110.0f : h->pos.x + h->vel.x * flight * 0.6f;
+                if (c->wall1 > c->wall0) tx = ge_clampf(tx, c->wall0 + 2.0f * GE_TILE, c->wall1 - 2.0f * GE_TILE);
+                it->jump_pressed = it->jump_held = true;
+                e->vel.x = (tx >= e->pos.x ? 1.0f : -1.0f) * leap_speed(e, fabsf(tx - e->pos.x), flight);
+                b->was_air = false;
+                break;
+            }
+            default:
+                b->combo = enraged ? 3 : 2;
+                it->tool_pressed = true;
+                break;
+            }
+            if (mv == B_SWING && enraged && rnd(w) < 0.35f) b->follow = true;
+        }
+        break;
+    case B_SWING:
+        if (b->age < 10) e->facing = toward;                         /* it turns to you for the first beat of the windup, then it is committed */
+        if (e->state != GE_ST_ATTACK && b->timer == 0) {
+            if (b->follow && dist < 90.0f) { b->follow = false; it->attack_pressed = true; b->timer = 10; b->age = 0; }
+            else { b->mode = B_IDLE; b->timer = boss_gap(w, c, enraged ? 25 : 45); }
+        }
+        break;
+    case B_CHARGE:
+        if (b->age < 12) e->facing = toward;
+        if (e->state == GE_ST_ATTACK && e->anim.frame == 1) {       /* the long frame: barrel across the arena */
+            if (wall_ahead(w, e, e->facing) && b->age > 28) {       /* ...into the wall: that hurts */
+                e->vel.x = 0.0f;
+                e->anim.frame = 2; e->anim.timer = 0;
+                b->mode = B_DAZED; b->timer = 18 + (enraged ? 50 : 75);
+                b->slams++;
+                ge_world_shake(w, 8.0f);
+                for (int i = 0; i < 14; i++)
+                    ge_world_emit(w, e->pos.x + (float)e->facing * 12.0f, e->pos.y - ge_rng_range(&w->rng, 2, 46),
+                                  -(float)e->facing * (float)ge_rng_range(&w->rng, 0, 3), (float)ge_rng_range(&w->rng, -3, 1), 0.1f, 40,
+                                  GE_ARGB(255, 200, 175, 130), 3, GE_P_ADD);
+                break;
+            }
+            e->vel.x = (float)e->facing * (enraged ? 6.5f : 5.5f);
+        }
+        if (e->state != GE_ST_ATTACK && b->timer == 0) {
+            b->mode = B_IDLE; b->timer = boss_gap(w, c, enraged ? 30 : 50);
+        }
+        break;
+    case B_LEAP:
+        it->jump_held = true;
+        if (!e->on_ground) b->was_air = true;
+        else if (b->was_air) {                                       /* landed: shockwaves both ways */
+            if (c->wave)
+                for (int d = -1; d <= 1; d += 2) ge_world_shoot(w, 1, idx, c->wave, e->pos.x + (float)d * 18.0f, e->pos.y - 7.0f, d);
+            ge_world_shake(w, 6.0f);
+            b->mode = B_IDLE; b->timer = boss_gap(w, c, enraged ? 30 : 50);
+        } else if (b->timer == 0) { b->mode = B_IDLE; b->timer = 20; }
+        break;
+    case B_THROW:
+        e->facing = toward;
+        if (e->state != GE_ST_ATTACK && b->timer == 0) {
+            if (--b->combo > 0) { it->tool_pressed = true; b->timer = 8; }
+            else { b->mode = B_IDLE; b->timer = boss_gap(w, c, 40); }
+        }
+        break;
+    case B_DAZED:                                                    /* stunned against the wall: a free moment for the hero */
+        if (b->timer == 0) { b->mode = B_IDLE; b->timer = boss_gap(w, c, 20); }
+        break;
+    default: break;
+    }
 }

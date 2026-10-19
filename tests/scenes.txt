@@ -2,10 +2,10 @@
 forest   5e6c280f   --frames 240 --low-detail --warp 20
 forest2  a010a4fe   --frames 240 --low-detail --god --warp 50
 full     a60f7dcf   --frames 240 --warp 20
-duel     380b16a9   --frames 240 --low-detail --autoplay --god --warp 80
+duel     2804bdf5   --frames 240 --low-detail --autoplay --god --warp 80
 hall     886c3749   --frames 240 --low-detail --warp 186 --difficulty -1
 paragon  cb205da1   --frames 240 --low-detail --autoplay --god --paragon --difficulty -1
-duelfull f2eebbf0   --frames 240 --autoplay --god --warp 80
+duelfull 99abdd1b   --frames 240 --autoplay --god --warp 80
 long     1ed47594   --frames 3000 --low-detail --autoplay --god
 longfull 953d41f0   --frames 3000 --autoplay --god
-boss     6ac8a12e   --frames 240 --low-detail --autoplay --god --warp 150
+boss     41c669b7   --frames 240 --low-detail --autoplay --god --warp 150

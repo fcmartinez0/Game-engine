@@ -311,11 +311,13 @@ int chars_build(Chars *c, Sprites *s) {
     *wd = base;
     wd->run_speed = 1.0f; wd->accel = 0.12f; wd->friction = 0.25f; wd->air_accel = 0.1f;
     wd->gravity = 0.42f; wd->max_fall = 9.0f; wd->jump_vel = 7.8f;
+    wd->coyote_ticks = 4; wd->jump_buffer_ticks = 4;   /* (without these the actor code never lets it leave the floor: its leap was a slide) */
     wd->body_w = 26; wd->body_h = 52; wd->contact_kb_x = 4; wd->contact_kb_y = -3; wd->dead_ticks = 150; wd->armored = true;
     wd->shot = &c->spear;
 #define WC(n) ge_sprite_find_clip(&s->warden, n)
     wd->clip_idle = WC("idle"); wd->clip_run = WC("run"); wd->clip_jump = WC("jump"); wd->clip_fall = WC("fall");
     wd->clip_hurt = WC("hurt"); wd->clip_dead = WC("dead"); wd->clip_attack = WC("swing"); wd->clip_tool = WC("throw");
+    wd->clip_attack_up = WC("charge");   /* (its charge is an "up attack": the brain presses attack with up held) */
     wd->ammo_max = 99; wd->ammo_recharge = 1;
 #undef WC
 

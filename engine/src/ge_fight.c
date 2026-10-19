@@ -727,6 +727,7 @@ static void reset_round(GeFight *f) {
 void ge_fight_init(GeFight *f, const GeFighterDef *d0, const GeSprite *s0, const GeFighterDef *d1, const GeSprite *s1,
                    const GeWorld *backdrop, uint32_t seed) {
     memset(f, 0, sizeof *f);
+    for (int i = 0; i < 2; i++) f->cpu_style[i] = (GeCpuStyle){ 0.5f, 0.4f, 0.3f, 0.4f, 0.4f, 0.3f };   /* a middling temperament */
     GeWorld *w = &f->world;
     ge_world_init(w, 400, 240, seed);
     w->custom_combat = true;
@@ -1045,110 +1046,6 @@ void ge_fight_draw(GeFight *f, GeImage *fb) {
     if (msg) centered(fb, msg, 96, scale, f->phase == GE_FP_KO ? GE_RGB(255, 90, 80) : GE_RGB(255, 236, 170));
 }
 
-/* ---- CPU --------------------------------------------------------------- */
+/* (the CPU fighter lives in ge_cpu.c) */
 
-static int pick(GeFight *f, int s, int role, bool air, int min_level) {
-    const GeFighterDef *d = f->f[s].def;
-    int cand[GE_FIGHT_MAX_MOVES], n = 0;
-    for (int i = 0; i < d->nmoves; i++) {
-        const GeMove *m = &d->moves[i];
-        bool role_ok = role < 0 ? (m->ai != GE_AI_THROW && m->ai != GE_AI_ZONE && m->ai != GE_AI_NONE) : m->ai == role;
-        if (role_ok && (m->stance == ST_AIR) == air && m->level >= min_level && ge_fight_can_start(f, s, i)) cand[n++] = i;
-    }
-    return n ? cand[ge_rng_next(&f->world.rng) % (uint32_t)n] : -1;
-}
 
-void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
-    memset(out, 0, sizeof *out);
-    out->force_move = -1;
-    if (f->phase != GE_FP_FIGHT) return;
-    GeFighter *F = &f->f[s], *O = &f->f[1 - s];
-    GeEntity *e = ent(f, s), *oe = ent(f, 1 - s);
-    GeRng *r = &f->world.rng;
-    level = ge_clampi(level, -1, 3);
-    float p = level < 0 ? 0.12f : 0.3f + 0.2f * (float)level;      /* -1 beginner: 0.12, then 0.3 .. 0.9 */
-    float dx = oe->pos.x - e->pos.x, dist = fabsf(dx);
-    int toward = dx >= 0 ? 1 : -1;
-    if (F->ai_cd > 0) F->ai_cd--;
-
-    /* defence: block what's coming (and read lows/overheads at higher levels) */
-    bool threat = O->state == GE_FS_MOVE && dist < 95.0f;
-    for (int i = 0; i < GE_MAX_SHOTS; i++) {
-        const GeShot *sh = &f->world.shots[i];
-        if (sh->active && sh->team != s && fabsf(sh->pos.x - e->pos.x) < 110.0f && (sh->vel.x > 0) == (sh->pos.x < e->pos.x)) threat = true;
-    }
-    bool free_ground = F->state == GE_FS_STAND || F->state == GE_FS_CROUCH || F->state == GE_FS_BLOCKSTUN;
-    if (threat && free_ground) {
-        if (F->ai_block_for == 0) F->ai_block_for = ge_rng_float(r) < p ? 1 : -1;
-        if (F->ai_block_for == 1) {
-            out->x = -toward;
-            int guard = O->state == GE_FS_MOVE ? clip_at(f, 1 - s, O->def->moves[O->move].clip_idx)->guard : GE_GUARD_MID;
-            out->y = (guard == GE_GUARD_LOW && level >= 1) ? 1 : 0;
-            return;
-        }
-    } else if (!threat) {
-        F->ai_block_for = 0;
-    }
-
-    /* anti-air */
-    if (O->state == GE_FS_AIR && dist < 110.0f && F->state <= GE_FS_CROUCH && ge_rng_float(r) < p * 0.25f) {
-        int mv = pick(f, s, GE_AI_ANTIAIR, false, 0);
-        if (mv >= 0) { out->force_move = mv; return; }
-    }
-    /* combos: on a confirmed hit, cancel into something stronger */
-    if (F->state == GE_FS_MOVE && F->hit_landed) {
-        const GeMove *cur = &F->def->moves[F->move];
-        if (ge_rng_float(r) < p + 0.1f) {
-            int mv = F->meter >= GE_FIGHT_METER && ge_rng_float(r) < 0.5f ? pick(f, s, GE_AI_SUPER, false, cur->level + 1) : -1;
-            if (mv < 0) mv = pick(f, s, -1, cur->stance == ST_AIR, cur->level + 1);
-            out->force_move = mv;
-        }
-        return;
-    }
-    /* jump-ins: swing on the way down */
-    if (F->state == GE_FS_AIR && !F->air_attacked && dist < 60.0f && e->vel.y > -1.0f) {
-        out->force_move = pick(f, s, GE_AI_AIR, true, 0);
-        return;
-    }
-    if (F->state != GE_FS_STAND && F->state != GE_FS_CROUCH) return;
-
-    if (F->ai_cd > 0) { out->x = F->ai_hold_x; out->y = F->ai_hold_y; return; }
-
-    /* neutral game */
-    float roll = ge_rng_float(r);
-    int mv = -1;
-    F->ai_hold_x = 0; F->ai_hold_y = 0;
-    if (level < 0 && roll < 0.45f) {          /* a beginner hangs back and gives you openings */
-        F->ai_hold_x = roll < 0.2f ? -toward : 0;
-        F->ai_cd = 20 + (int)(ge_rng_float(r) * 30.0f);
-        out->x = F->ai_hold_x;
-        return;
-    }
-    if (F->meter >= GE_FIGHT_METER && dist < 90.0f && roll < p * 0.4f && level >= 0) mv = pick(f, s, GE_AI_SUPER, false, 0);
-    else if (dist > 170.0f) {
-        if (roll < 0.25f + p * 0.3f) mv = pick(f, s, GE_AI_ZONE, false, 0);
-        else if (roll < 0.75f) F->ai_hold_x = toward;
-        else mv = pick(f, s, GE_AI_RUSH, false, 0);
-    } else if (dist > 62.0f) {
-        if (roll < 0.45f) F->ai_hold_x = toward;
-        else if (roll < 0.45f + 0.15f * p) { F->ai_hold_x = toward; F->ai_hold_y = -1; F->ai_cd = 1; }
-        else if (roll < 0.72f) mv = pick(f, s, GE_AI_RUSH, false, 0);
-        else if (roll < 0.85f) mv = pick(f, s, GE_AI_ZONE, false, 0);
-        else F->ai_hold_x = -toward;
-    } else {
-        if (level >= 1 && roll < 0.14f) mv = pick(f, s, GE_AI_THROW, false, 0);
-        else if (roll < 0.5f) mv = pick(f, s, GE_AI_POKE, false, 0);
-        else if (roll < 0.68f) mv = pick(f, s, GE_AI_LOW, false, 0);
-        else if (roll < 0.78f) mv = pick(f, s, GE_AI_OVERHEAD, false, 0);
-        else F->ai_hold_x = -toward;
-    }
-    if (mv >= 0) {
-        out->force_move = mv;
-        if (F->def->moves[mv].stance == ST_CROUCH) out->y = 1;
-        F->ai_cd = 10 + (int)(ge_rng_float(r) * (float)(26 - level * 6));
-    } else if (F->ai_cd == 0) {
-        F->ai_cd = 12 + (int)(ge_rng_float(r) * 24.0f);
-    }
-    out->x = F->ai_hold_x;
-    if (out->y == 0) out->y = F->ai_hold_y;
-}

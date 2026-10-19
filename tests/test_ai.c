@@ -349,6 +349,26 @@ static float run_everything(void) {
     return h + (float)g_hostile_shots;
 }
 
+/* The hero dies (or leaves) while a creature that has just looked at them still believes it sees them. */
+static void test_hero_gone(void) {
+    puts("nobody there: a creature that was looking at the hero keeps its feet when the hero is gone");
+    const int kinds[4] = { EN_CRAWLER, EN_GRUNT, EN_SPITTER, EN_BAT };
+    for (int k = 0; k < 4; k++)
+        for (int phase = 0; phase < 5; phase++) {              /* (they look every 4th tick: the hero vanishes at every point in that beat) */
+            blank(); build();
+            place_hero(12, 11);
+            int c[1];
+            c[0] = creature_facing(kinds[k], 9, 11, 1);
+            run(c, 1, 60 + phase);                             /* it has noticed them (or is about to) */
+            for (int t = 0; t < 12; t++) {
+                memset(&w.intents[c[0]], 0, sizeof(GeIntent));
+                ai_think(&w, c[0], NULL, &w.intents[c[0]]);    /* ...and the hero is gone: this must not read them */
+                ge_world_update(&w);
+            }
+            CHECK(E(c[0])->active);
+        }
+}
+
 static void test_determinism(void) {
     puts("the same room, played twice, gives the same game");
     g_hostile_shots = g_prev_shots = 0;
@@ -372,6 +392,7 @@ int main(void) {
     test_crawler();
     test_crawler_gives_up();
     test_bat();
+    test_hero_gone();
     test_determinism();
     ge_world_free(&w);
     art_free(&spr);

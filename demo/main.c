@@ -31,7 +31,6 @@
 #define DUEL_PRACTICE (-2)        /* g.duel for a practice duel: nobody in the room */
 
 typedef enum { M_OVERWORLD, M_ALERT, M_TRANS_IN, M_BATTLE, M_TRANS_OUT, M_VICTORY, M_REPORT } Mode;
-enum { B_SLEEP, B_INTRO, B_IDLE, B_SWING, B_CHARGE, B_LEAP, B_THROW, B_DEAD };
 
 typedef struct {
     Sprites spr;
@@ -101,8 +100,9 @@ typedef struct {
     bool coach_was_showing;
     int confirm_item, confirm_timer;      /* a pending "tap again to confirm" */
 
-    int boss_spawn, boss_state, boss_timer, boss_combo;
-    bool boss_engaged, boss_was_air;
+    int boss_spawn;
+    BossBrain boss;                       /* Thornwarden's mind (ai.h) */
+    bool boss_engaged;
 
     char msg[80];
     int msg_timer;
@@ -182,6 +182,29 @@ static int boss_hp(void) { return g.difficulty < 0 ? 100 : g.difficulty > 0 ? 20
 /* duelists' base levels: Grobb 0, Silke 1, Mosshide 2, Champion 3. Easy: all beginners but the Champion;
  * normal: one step gentler (Grobb is a beginner); hard: one step sharper. */
 static int duel_cpu_level(int base) { return g.difficulty < 0 ? (base >= 3 ? 0 : -1) : ge_clampi(base + (g.difficulty > 0 ? 1 : -1), -1, 3); }
+/* How each duelist likes to fight (GeCpuStyle: aggression, spacing, grab, patience, mixup, adapt), so two of the same
+ * fighter type still feel like different people. Grobb charges in and swings; Silke keeps her distance and pokes;
+ * Mosshide waits and grabs; the Champion plays everything and reads what you keep doing. A duelist someone placed
+ * in the editor gets its archetype's style, nudged by a few points that come from its name, so each is a little
+ * different but the same every time you meet it. */
+static GeCpuStyle duel_cpu_style(const Thing *t) {
+    static const struct { const char *name; GeCpuStyle st; } NAMED[] = {
+        { "GROBB",        { 0.75f, 0.15f, 0.45f, 0.15f, 0.30f, 0.20f } },
+        { "SILKE",        { 0.30f, 0.85f, 0.10f, 0.55f, 0.50f, 0.50f } },
+        { "MOSSHIDE",     { 0.55f, 0.20f, 0.80f, 0.50f, 0.35f, 0.50f } },
+        { "THE CHAMPION", { 0.55f, 0.50f, 0.30f, 0.45f, 0.60f, 1.00f } },
+    };
+    for (unsigned i = 0; i < sizeof NAMED / sizeof NAMED[0]; i++) if (!strcmp(t->name, NAMED[i].name)) return NAMED[i].st;
+    GeCpuStyle st = t->style == STYLE_FENCER ? (GeCpuStyle){ 0.35f, 0.70f, 0.15f, 0.50f, 0.50f, 0.50f }
+                                             : (GeCpuStyle){ 0.65f, 0.20f, 0.50f, 0.30f, 0.35f, 0.40f };
+    uint32_t h = 2166136261u;
+    for (const char *c = t->name; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    float v[6] = { st.aggression, st.spacing, st.grab, st.patience, st.mixup, st.adapt };
+    for (int i = 0; i < 6; i++, h >>= 5) v[i] = ge_clampf(v[i] + ((float)(h & 15u) - 7.5f) * 0.02f, 0.0f, 1.0f);   /* +-0.15 */
+    return (GeCpuStyle){ v[0], v[1], v[2], v[3], v[4], v[5] };
+}
+/* how long Thornwarden rests between attacks: easy gives you room to breathe, hard very little */
+static float boss_tempo(void) { return g.difficulty < 0 ? 1.35f : g.difficulty > 0 ? 0.8f : 1.0f; }
 static float duel_cpu_damage(void) { return g.difficulty < 0 ? 0.5f : g.difficulty > 0 ? 1.1f : 0.75f; }
 static float duel_player_damage(void) { return g.difficulty < 0 ? 1.4f : g.difficulty > 0 ? 1.0f : 1.15f; }
 #ifdef __3DS__
@@ -372,7 +395,7 @@ static bool boss_beaten_anywhere(void) {
 
 static void reset_boss(void) {
     g.boss_engaged = false;
-    g.boss_state = B_SLEEP;
+    boss_reset(&g.boss);
     g.world.cam.locked = false;
     arena_set_gate(false);
     arena_set_exit(!boss_beaten());
@@ -411,7 +434,7 @@ static void room_enter(int r, const char *door) {
     for (int i = 0; i < GE_MAX_SHOTS; i++) w->shots[i].active = false;
     for (int i = 0; i < GE_MAX_PARTS; i++) w->parts[i].life = 0;
     g.boss_engaged = false;
-    g.boss_state = B_SLEEP;
+    boss_reset(&g.boss);
     w->cam.locked = false;
     room_build(r);
     set_backdrop(room()->backdrop);
@@ -496,7 +519,7 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
             return;
         }
         if (w->ents[b].kind == EN_BOSS) {
-            g.boss_state = B_DEAD;
+            g.boss.mode = B_DEAD;
             g.world.cam.locked = false;
             arena_set_gate(false);
             arena_set_exit(false);
@@ -587,7 +610,7 @@ static void boss_ai(int idx) {
     GeEntity *b = &w->ents[idx];
     GeIntent *it = &w->intents[idx];
     memset(it, 0, sizeof *it);
-    if (b->state == GE_ST_DEAD || g.boss_state == B_DEAD) return;
+    if (b->state == GE_ST_DEAD || g.boss.mode == B_DEAD) return;
     GeEntity *p = hero();
     if (!g.boss_engaged) {
         const Thing *a = find_thing(TH_ARENA);    /* its arena, or (without one) close enough to see it */
@@ -595,7 +618,7 @@ static void boss_ai(int idx) {
                         : fabsf(p->pos.x - b->pos.x) < 150.0f && fabsf(p->pos.y - b->pos.y) < 60.0f;
         if (p->active && inside) {
             g.boss_engaged = true;
-            g.boss_state = B_INTRO; g.boss_timer = 70;
+            boss_wake(&g.boss);
             arena_set_gate(true);
             w->cam.locked = a != NULL;
             if (a) {
@@ -608,53 +631,10 @@ static void boss_ai(int idx) {
         }
         return;
     }
-    if (!p->active || p->state == GE_ST_DEAD) return;
-    float dx = p->pos.x - b->pos.x, dist = fabsf(dx);
-    bool enraged = b->hp < b->max_hp / 2;
-    if (g.boss_timer > 0) g.boss_timer--;
-
-    switch (g.boss_state) {
-    case B_INTRO:
-        if (g.boss_timer == 0) { g.boss_state = B_IDLE; g.boss_timer = 40; }
-        break;
-    case B_IDLE:
-        b->facing = dx > 0 ? 1 : -1;
-        if (dist > 60.0f) it->move_x = (float)b->facing * 0.6f;
-        if (g.boss_timer == 0) {
-            float r = ge_rng_float(&w->rng);
-            if (dist < 70.0f && r < 0.6f) { g.boss_state = B_SWING; it->attack_pressed = true; }
-            else if (r < 0.35f) { g.boss_state = B_CHARGE; it->attack_pressed = true; it->move_y = -1; }
-            else if (r < 0.7f) { g.boss_state = B_LEAP; it->jump_pressed = it->jump_held = true; b->vel.x = ge_clampf(dx / 40.0f, -3.5f, 3.5f); g.boss_was_air = false; }
-            else { g.boss_state = B_THROW; g.boss_combo = enraged ? 3 : 2; it->tool_pressed = true; }
-            g.boss_timer = 10;
-        }
-        break;
-    case B_SWING:
-        if (b->state != GE_ST_ATTACK && g.boss_timer == 0) { g.boss_state = B_IDLE; g.boss_timer = enraged ? 25 : 45; }
-        break;
-    case B_CHARGE:
-        /* the charge's long active frame: barrel across the arena */
-        if (b->state == GE_ST_ATTACK && b->anim.frame == 1) b->vel.x = (float)b->facing * (enraged ? 6.5f : 5.5f);
-        if (b->state != GE_ST_ATTACK && g.boss_timer == 0) { g.boss_state = B_IDLE; g.boss_timer = enraged ? 30 : 50; }
-        break;
-    case B_LEAP:
-        it->jump_held = true;
-        if (!b->on_ground) g.boss_was_air = true;
-        else if (g.boss_was_air) {   /* landed: shockwaves both ways */
-            for (int d = -1; d <= 1; d += 2) ge_world_shoot(w, 1, idx, &g.ch.shockwave, b->pos.x + d * 18.0f, b->pos.y - 7.0f, d);
-            ge_world_shake(w, 6.0f);
-            g.boss_state = B_IDLE; g.boss_timer = enraged ? 30 : 50;
-        } else if (g.boss_timer == 0) { g.boss_state = B_IDLE; g.boss_timer = 20; }
-        break;
-    case B_THROW:
-        b->facing = dx > 0 ? 1 : -1;
-        if (b->state != GE_ST_ATTACK && g.boss_timer == 0) {
-            if (--g.boss_combo > 0) { it->tool_pressed = true; g.boss_timer = 8; }
-            else { g.boss_state = B_IDLE; g.boss_timer = 40; }
-        }
-        break;
-    default: break;
-    }
+    BossCtx ctx = { 0.0f, 0.0f, boss_tempo(), &g.ch.shockwave };
+    const Thing *arena = find_thing(TH_ARENA);
+    if (arena) { ctx.wall0 = (float)(arena->col - 1) * GE_TILE; ctx.wall1 = (float)(arena->col + arena->w) * GE_TILE; }
+    boss_think(w, idx, p->active && p->state != GE_ST_DEAD ? p : NULL, &g.boss, &ctx, it);
 }
 
 /* ---- the hero ---------------------------------------------------------- */
@@ -719,7 +699,7 @@ static uint32_t bot_buttons(void) {
         float dx = e->pos.x - p->pos.x, dy = e->pos.y - p->pos.y;
         if (dx > -30.0f && fabsf(dx) < best && fabsf(dy) < 70.0f) { best = fabsf(dx); tgt = i; }
     }
-    if (g.boss_engaged && g.boss_state != B_DEAD) {
+    if (g.boss_engaged && g.boss.mode != B_DEAD) {
         GeEntity *bs = &w->ents[boss_ent() >= 0 ? boss_ent() : g.player];
         float dx = bs->pos.x - p->pos.x;
         int toward = dx > 0 ? 1 : -1;
@@ -881,7 +861,7 @@ static void begin_battle(void) {
     }
     g.fight.rounds_to_win = s->rounds;
     ge_fight_observe(&g.fight, &g.model, 0);          /* every duel teaches the Paragon */
-    if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); }
+    if (!final) { g.fight.damage_scale[1] = duel_cpu_damage(); g.fight.damage_scale[0] = duel_player_damage(); g.fight.cpu_style[1] = duel_cpu_style(s); }
     if (g.practice) { g.fight.damage_scale[1] = 0.5f; g.fight.damage_scale[0] = 1.4f; g.fight.names[1] = "GROBB (PRACTICE)"; }
     g.fight.forgiving_guard = g.difficulty <= 0;      /* easy and normal: L also guards in the air and after your own swing */
     g.fight.forgiving_tech = g.difficulty <= 0 ? 1u : 0u;   /* ...and a tap of L breaks a throw (logs: 0% of throws escaped) */
@@ -1280,7 +1260,7 @@ static void open_editor(void) {
     g.test_play = false;
     g.menu_open = false;
     g.msg_timer = 0;
-    g.boss_state = B_SLEEP;
+    boss_reset(&g.boss);
     static EditorHost host;
     host = (EditorHost){ &g.wd, &g.world, &g.spr, editor_show_room, editor_log_line, &g.world_broken, g.world_problem, g.world_file };
     editor_open(&host, rm, col, row);
@@ -1800,7 +1780,7 @@ static void draw_hud(GeImage *fb) {
     ge_text_outlined(fb, SCREEN_W - 8 - ge_text_width(buf, 1), 8, buf, GE_RGB(200, 170, 255), GE_RGB(20, 14, 30), 1);
 
     /* boss bar */
-    if (g.boss_engaged && g.boss_state != B_DEAD && boss_ent() >= 0) {
+    if (g.boss_engaged && g.boss.mode != B_DEAD && boss_ent() >= 0) {
         GeEntity *b = &w->ents[boss_ent()];
         ge_fill_rect(fb, 49, 221, 302, 7, GE_ARGB(220, 10, 8, 20), 0);
         ge_fill_rect(fb, 50, 222, 300 * b->hp / b->max_hp, 5, GE_RGB(200, 60, 50), 0);

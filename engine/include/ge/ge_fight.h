@@ -130,6 +130,32 @@ typedef struct {
 
 typedef enum { GE_FP_INTRO, GE_FP_FIGHT, GE_FP_KO, GE_FP_TIME, GE_FP_ROUND_END, GE_FP_MATCH_END, GE_FP_FINISHER } GeFightPhase;
 
+/* ---- the CPU fighter's temperament and memory (see ge_cpu.c) ----
+ * The level (-1 beginner .. 3 sharp) says how well a CPU fighter plays; the style says how it likes to play.
+ * Analogy: the level is how good the cook is, the style is the cuisine. */
+typedef struct {
+    float aggression;        /* 0..1: closes the distance, dashes in, keeps pressing after a block */
+    float spacing;           /* keeps a range: pokes at the edge of its reach, fires projectiles, steps back */
+    float grab;              /* throws up close */
+    float patience;          /* blocks and waits for a mistake to punish instead of attacking into you */
+    float mixup;             /* low / overhead variety up close */
+    float adapt;             /* how fast it changes its play to what you keep doing (jumping in, fireballs, turtling) */
+} GeCpuStyle;
+
+/* What a CPU fighter remembers within one fight. Nothing is kept between fights (the Paragon's memory is its own). */
+typedef struct {
+    float jumps, shots, blocks, throws, attacks;   /* the opponent's habits so far, fading over about ten seconds */
+    int last_move, repeat;                         /* the opponent's last move, and how many times running */
+    int prev_state, prev_move;
+    bool was_open;                                 /* the opponent's attack was over but it couldn't act yet, last tick */
+    int react;                                     /* ticks until it may act on that opening (reaction time) */
+    bool punish;                                   /* whether it will act on this opening at all */
+    bool tech_decided, tech;                       /* being thrown: has it decided, and will it break the throw */
+    int tech_at;                                   /* ...and at which tick of the throw */
+    int dash_cd;                                   /* ticks before it dashes again */
+    int bait;                                      /* ticks left stepping back out of reach, so a move misses */
+} GeCpuMind;
+
 typedef struct {
     GeWorld world;           /* the arena; layers and tileset are borrowed from the caller */
     GeFighter f[2];
@@ -166,6 +192,8 @@ typedef struct {
     /* ...and what the hit fighter was doing when a hit got through: attacking, in the air, already in a combo,
      * standing open (no guard), or holding the guard button while busy */
     int stat_hit_attacking[2], stat_hit_air[2], stat_hit_combo[2], stat_hit_open[2], stat_hit_guard_busy[2];
+    GeCpuStyle cpu_style[2]; /* how each side plays when a CPU drives it (ge_fight_init gives a middling default) */
+    GeCpuMind cpu[2];        /* ...and what it remembers of this fight */
     bool forgiving_guard;    /* the guard button also blocks in the air, mid-dash and in your own move's recovery */
     unsigned forgiving_tech; /* bit s: side s can also break a throw with a fresh press of the guard button, over a
                               * longer window (22 ticks instead of 16): one button newcomers already reach for */
@@ -178,7 +206,10 @@ void ge_fight_free(GeFight *f);
 void ge_fight_update(GeFight *f, const GeFightInput in[2]);
 void ge_fight_draw(GeFight *f, GeImage *fb);
 
-/* A CPU opponent: fills `out` for `side`. level -1 (beginner: slow, passive, no supers) .. 3 (sharp). */
+/* A CPU opponent: fills `out` for `side`. level -1 (beginner: slow, passive, no supers) .. 3 (sharp), played
+ * the way f->cpu_style[side] says. From level 0 up it punishes attacks that miss or are blocked once their active
+ * frames are over (after a reaction time), breaks throws, blocks by the real reach of what is coming, presses on
+ * after a blocked hit, and (by `adapt`) changes its play to what you keep doing. */
 void ge_fight_cpu(GeFight *f, int side, int level, GeFightInput *out);
 
 /* exposed for tests / tools */
