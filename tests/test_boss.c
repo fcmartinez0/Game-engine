@@ -20,24 +20,25 @@ static int hero_i, boss_i;
 static BossBrain brain;
 static BossCtx ctx;
 static bool verbose;
+static uint32_t g_seed_off;         /* BOSSSEED=n: every world's seed is shifted by n (to see whether a threshold only holds for the seeds it was fitted on) */
 
 #define RW 40
 #define RH 15
-#define WALL0 80.0f          /* the arena runs from column 5 to column 34 */
+#define WALL0 80.0f          /* the arena's floor runs from column 5 to column 34; like the game's, its walls are one tile thick (columns 4 and 35) with open air beyond */
 #define WALL1 560.0f
 
 static GeEntity *E(int i) { return &w.ents[i]; }
 #define BOSS E(boss_i)
 #define HERO E(hero_i)
 
-/* an arena with a floor at row 12, walls at columns 0-4 and 35-39; the boss at bx, the hero at hx (pixels, on the floor) */
+/* an arena with a floor at row 12 and walls at columns 4 and 35; the boss at bx, the hero at hx (pixels, on the floor) */
 static void arena(uint32_t seed, float bx, float hx, float tempo) {
     ge_world_free(&w);
-    ge_world_init(&w, SCREEN_W, SCREEN_H, seed);
+    ge_world_init(&w, SCREEN_W, SCREEN_H, seed + g_seed_off);
     ge_tilemap_create(&w.map, RW, RH);
     for (int y = 0; y < RH; y++)
         for (int x = 0; x < RW; x++)
-            w.map.type[y * RW + x] = (y >= 12 || x < 5 || x >= 35) ? GE_TILE_SOLID : GE_TILE_EMPTY;
+            w.map.type[y * RW + x] = (y >= 12 || x == 4 || x == 35) ? GE_TILE_SOLID : GE_TILE_EMPTY;
     float floor_y = 12.0f * GE_TILE;
     hero_i = ge_world_spawn(&w, &ch.hero, &spr.hero, 0, hx, floor_y, 99);
     boss_i = ge_world_spawn(&w, &ch.warden, &spr.warden, 1, bx, floor_y, 150);
@@ -47,7 +48,9 @@ static void arena(uint32_t seed, float bx, float hx, float tempo) {
     ctx = (BossCtx){ WALL0, WALL1, tempo, &ch.shockwave };
 }
 
-typedef struct { bool air, heal; float vx; } Hero;      /* what the hero does this tick */
+static float g_force_jumpy = -1.0f, g_force_ranged = -1.0f;     /* tests that pin what it believes about the hero's habits */
+
+typedef struct { bool air, heal; float vx; bool dash; } Hero;      /* what the hero does this tick (dash: along the floor, which the physics counts as off the ground) */
 
 static void step(Hero hv) {
     GeEntity *h = HERO;
@@ -57,12 +60,15 @@ static void step(Hero hv) {
     if (hv.vx != 0.0f) { h->pos.x += hv.vx; h->vel.x = hv.vx; }
     if (hv.heal) h->state = GE_ST_CHANNEL;
     if (hv.air) h->on_ground = false;
+    if (hv.dash) { h->state = GE_ST_DASH; h->on_ground = false; }
+    if (g_force_jumpy >= 0.0f) brain.jumpy = g_force_jumpy;
+    if (g_force_ranged >= 0.0f) brain.ranged = g_force_ranged;
     boss_think(&w, boss_i, h, &brain, &ctx, &w.intents[boss_i]);
     h->vel.x = 0.0f;                                    /* (the hero is moved by hand; the boss saw the speed) */
     ge_world_update(&w);
     BOSS->hp = BOSS->hp > 0 ? BOSS->hp : 1;
 }
-static const Hero STAND = { false, false, 0.0f };
+static const Hero STAND = { false, false, 0.0f, false };
 
 static bool attacking_mode(int m) { return m == B_SWING || m == B_CHARGE || m == B_LEAP || m == B_THROW; }
 
@@ -106,7 +112,7 @@ static int heal_latency(uint32_t seed, float dist, int *attack) {
     for (int t = 0; t < 400 && !(brain.mode == B_IDLE && brain.timer > 25); t++) step(STAND);
     if (brain.mode != B_IDLE) return 99;
     for (int t = 1; t <= 60; t++) {
-        step((Hero){ false, true, 0.0f });
+        step((Hero){ false, true, 0.0f, false });
         if (attacking_mode(brain.mode)) { *attack = brain.mode; return t; }
     }
     return 99;
@@ -181,13 +187,80 @@ static float share_of_ground_attacks(Hero (*who)(int), uint32_t seeds) {
     return total ? (float)ground / (float)total : 0.0f;
 }
 static Hero stands(int t) { (void)t; return STAND; }
-static Hero hops(int t) { return (Hero){ (t / 40) % 2 == 1, false, 0.0f }; }          /* in the air half the time */
+static Hero hops(int t) { return (Hero){ (t / 40) % 2 == 1, false, 0.0f, false }; }          /* in the air half the time */
+static Hero hops_always(int t) { (void)t; return (Hero){ true, false, 0.0f, false }; }          /* in the air all the time */
+static Hero dashes(int t) { return (Hero){ false, false, 0.0f, t % 34 < 10 }; }              /* a dash along the floor every 34 ticks (as often as the cooldown allows) */
 
 static void test_jumpy(void) {
     puts("habits: a hero who keeps jumping gets fewer charges and waves (which they hop) than one who stands still");
-    float standing = share_of_ground_attacks(stands, 6), jumping = share_of_ground_attacks(hops, 6);
+    float standing = share_of_ground_attacks(stands, 10), jumping = share_of_ground_attacks(hops, 10);
     if (verbose) printf("  charges and leaps, of all its attacks: against a hero who stands %.0f%%, against one who jumps %.0f%%\n", standing * 100, jumping * 100);
     CHECK(jumping + 0.12f < standing);
+    float dashing = share_of_ground_attacks(dashes, 10);                 /* a hero who only ever dashes along the floor is not a jumper */
+    if (verbose) printf("  ...against one who dashes along the floor %.0f%%\n", dashing * 100);
+    CHECK(dashing + 0.08f > standing);
+}
+
+static void test_habits_pinned(void) {
+    puts("habits: what it believes about the hero changes what it picks (a hero who stays away is closed on; one in the air is swung at)");
+    g_force_jumpy = 0.0f; g_force_ranged = 0.0f;
+    float base = share_of_ground_attacks(stands, 14);
+    g_force_ranged = 0.8f;
+    float far_habit = share_of_ground_attacks(stands, 14);
+    g_force_ranged = 0.0f;
+    float airborne = share_of_ground_attacks(hops_always, 14);
+    g_force_jumpy = g_force_ranged = -1.0f;
+    if (verbose) printf("  charges and leaps, of all its attacks: %.0f%% normally, %.0f%% against a hero it has seen stay away, %.0f%% against one in the air right now\n",
+                        base * 100, far_habit * 100, airborne * 100);
+    CHECK(far_habit > base + 0.05f);
+    CHECK(airborne + 0.08f < base);
+}
+
+/* what the attacks it picks actually do, in the world: the swing and the charge are swings, the volley is spears, the landing is waves */
+static int shots_of(const GeShotDef *d) {
+    int n = 0;
+    for (int i = 0; i < GE_MAX_SHOTS; i++) n += w.shots[i].active && w.shots[i].def == d;
+    return n;
+}
+
+static void test_attacks_are_real(void) {
+    puts("attacks: a swing and a charge are attack animations, a volley is spears, a leap leaves the floor and lands in shockwaves");
+    int swings = 0, swings_ok = 0, charges = 0, charges_ok = 0, throws = 0, throws_ok = 0, spears_seen = 0, leaps = 0, leaps_ok = 0;
+    for (uint32_t s = 1; s <= 4; s++) {
+        arena(s, 300, 450, 1.0f);
+        boss_wake(&brain);
+        for (int t = 0; t < 5000; t++) {
+            int before = brain.mode;
+            step(STAND);
+            if (before != B_IDLE || !attacking_mode(brain.mode) || brain.away) continue;
+            int mv = brain.mode, attacked = 0, airborne = 0, throws_made = 0, spears = 0, waves = 0, prev_spears = 0, prev_waves = 0, was_throwing = 0;
+            for (int k = 0; k < 260 && brain.mode == mv; k++) {
+                if (BOSS->state == GE_ST_ATTACK) attacked = 1;
+                if (!BOSS->on_ground) airborne = 1;
+                int throwing = BOSS->state == GE_ST_ATTACK && BOSS->anim.clip == ch.warden.clip_tool;       /* (a spear thrown at a hero this close can be gone the same tick: count the throws by the animation too) */
+                throws_made += throwing && !was_throwing; was_throwing = throwing;
+                int sp = shots_of(&ch.spear), wv = shots_of(&ch.shockwave);
+                spears += sp > prev_spears ? sp - prev_spears : 0; waves += wv > prev_waves ? wv - prev_waves : 0;
+                prev_spears = sp; prev_waves = wv;
+                step(STAND);
+            }
+            for (int k = 0; k < 3; k++) {                                   /* (the waves appear on the landing tick) */
+                int sp = shots_of(&ch.spear), wv = shots_of(&ch.shockwave);
+                spears += sp > prev_spears ? sp - prev_spears : 0; waves += wv > prev_waves ? wv - prev_waves : 0;
+                prev_spears = sp; prev_waves = wv;
+                step(STAND);
+            }
+            if (mv == B_SWING) { swings++; swings_ok += attacked; }
+            if (mv == B_CHARGE) { charges++; charges_ok += attacked; }
+            if (mv == B_THROW) { throws++; throws_ok += throws_made >= 2; spears_seen += spears >= 1; }
+            if (mv == B_LEAP) { leaps++; leaps_ok += airborne && waves >= 2; }
+        }
+    }
+    if (verbose) printf("  of %d swings %d swung, of %d charges %d charged, of %d volleys %d made two throws (spears seen in flight in %d), of %d leaps %d jumped and sent waves\n",
+                        swings, swings_ok, charges, charges_ok, throws, throws_ok, spears_seen, leaps, leaps_ok);
+    CHECK(swings >= 10 && charges >= 10 && throws >= 5 && leaps >= 10);
+    CHECK(swings_ok == swings && charges_ok == charges && throws_ok == throws && leaps_ok == leaps);
+    CHECK(spears_seen * 100 >= throws * 90);                            /* ...and the throws really fire spears */
 }
 
 /* ---- aim ---------------------------------------------------------------------------------------------------- */
@@ -204,7 +277,7 @@ static void test_leap_aim(void) {
             if (HERO->pos.x > 470.0f) dir = -1.0f;
             if (HERO->pos.x < 190.0f) dir = 1.0f;
             int before = brain.mode;
-            step((Hero){ false, false, 1.8f * dir });
+            step((Hero){ false, false, 1.8f * dir, false });
             if (before == B_IDLE && brain.mode == B_LEAP && !brain.away) { in_leap = true; start_dist = fabsf(HERO->pos.x - BOSS->pos.x); start_dir = dir; }
             else if (in_leap && brain.mode != B_LEAP) {            /* it landed */
                 in_leap = false;
@@ -234,15 +307,25 @@ static void test_hug(void) {
     if (verbose) printf("  clinging hero: %d attacks, %d leaps clear, it got as far as %.0f px away\n", attacks, aways, farthest);
     CHECK(attacks >= 3 && aways >= 1 && farthest > 70.0f);
 
-    arena(3, WALL0 + 20.0f, WALL0 + 42.0f, 1.0f);                 /* its back to the wall: no room to leap clear, so it fights */
-    boss_wake(&brain);
-    attacks = aways = 0; prev = brain.mode;
-    for (int t = 0; t < 900; t++) {
-        step(STAND);
-        if (prev == B_IDLE && attacking_mode(brain.mode)) { attacks++; aways += brain.away; }
-        prev = brain.mode;
+    /* its back to a wall: no room to leap clear, so it fights. Between its attacks it is put back in the corner with the hero on it. */
+    for (int side = 0; side < 2; side++) {
+        arena(3 + (uint32_t)side, side ? WALL1 - 20.0f : WALL0 + 20.0f, side ? WALL1 - 42.0f : WALL0 + 42.0f, 1.0f);
+        boss_wake(&brain);
+        attacks = aways = 0; prev = brain.mode;
+        int cornered = 0;
+        for (int t = 0; t < 1500; t++) {
+            if (brain.mode == B_IDLE && fabsf(BOSS->pos.x - (side ? WALL1 : WALL0)) > 30.0f && BOSS->on_ground) {
+                BOSS->pos.x = side ? WALL1 - 20.0f : WALL0 + 20.0f; BOSS->vel.x = 0.0f;
+                HERO->pos.x = side ? WALL1 - 42.0f : WALL0 + 42.0f;
+            }
+            step(STAND);
+            if (brain.mode == B_IDLE && brain.hug_ticks >= 50 && fabsf(BOSS->pos.x - (side ? WALL1 : WALL0)) < 30.0f) cornered++;
+            if (prev == B_IDLE && attacking_mode(brain.mode)) { attacks++; aways += brain.away; }
+            prev = brain.mode;
+        }
+        if (verbose) printf("  cornered (%s wall): %d attacks, %d leaps clear, %d idle ticks of a clinging hero\n", side ? "right" : "left", attacks, aways, cornered);
+        CHECK(attacks >= 5 && aways == 0);
     }
-    CHECK(attacks >= 3 && aways == 0);
 }
 
 /* ---- the charge, and the wall --------------------------------------------------------------------------------- */
@@ -269,11 +352,11 @@ static void test_charge_and_wall(void) {
 
     /* the wall */
     int slams = 0, daze_min = 9999, attacked_in_daze = 0, hurt_hero_free = 0;
-    for (uint32_t s = 1; s <= 12; s++) {
+    for (uint32_t s = 1; s <= 24; s++) {
         arena(s, WALL1 - 190, WALL1 - 70, 1.0f);              /* the hero stands near the far wall: a charge at them runs on into it */
         boss_wake(&brain);
         int daze = 0, prev = brain.mode;
-        for (int t = 0; t < 1200; t++) {
+        for (int t = 0; t < 1500; t++) {
             step(STAND);
             if (brain.mode == B_DAZED) {
                 if (prev != B_DAZED) { daze = 0; slams++; }
@@ -288,10 +371,10 @@ static void test_charge_and_wall(void) {
         }
     }
     if (verbose) printf("  into the wall %d times; shortest daze %d ticks\n", slams, daze_min);
-    CHECK(slams >= 5);
+    CHECK(slams >= 10);
     CHECK(daze_min >= 70);
     CHECK(attacked_in_daze == 0);
-    CHECK(hurt_hero_free >= 5);
+    CHECK(hurt_hero_free >= 10);
 }
 
 /* ---- phases, pace, patience ---------------------------------------------------------------------------------- */
@@ -371,12 +454,15 @@ static void test_deterministic(void) {
 
 int main(void) {
     verbose = getenv("BOSSDBG") != NULL;
+    if (getenv("BOSSSEED")) g_seed_off = (uint32_t)atoi(getenv("BOSSSEED"));
     art_make_sheets(&spr);
     if (chars_init(&ch, &spr) != 0) { puts("characters failed to build"); return 1; }
     test_intro();
     test_heal();
     test_variety();
     test_jumpy();
+    test_habits_pinned();
+    test_attacks_are_real();
     test_leap_aim();
     test_hug();
     test_charge_and_wall();

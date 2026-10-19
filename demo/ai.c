@@ -326,11 +326,15 @@ static bool wall_ahead(const GeWorld *w, const GeEntity *e, int dir) {
     return false;
 }
 
+/* Is the hero off the ground? (A dash along the floor takes them off it for a few ticks as far as the physics goes, and
+ * it is the answer to a charge, not a jump: it doesn't count.) */
+static bool hero_airborne(const GeEntity *h) { return !h->on_ground && h->state != GE_ST_WALL && h->state != GE_ST_DASH; }
+
 /* What it has seen the hero do, kept as slow averages (a few seconds): a habit takes a while to notice and a while
  * to forget, and a hero who changes what they do is read again. */
 static void boss_watch(BossBrain *b, const GeEntity *e, const GeEntity *h) {
     float dist = fabsf(h->pos.x - e->pos.x);
-    bool air = !h->on_ground && h->state != GE_ST_WALL;
+    bool air = hero_airborne(h);
     b->jumpy += ((air ? 1.0f : 0.0f) - b->jumpy) * 0.006f;
     b->ranged += ((dist > 140.0f ? 1.0f : 0.0f) - b->ranged) * 0.006f;
     b->hugs += ((dist < 50.0f ? 1.0f : 0.0f) - b->hugs) * 0.006f;
@@ -344,17 +348,27 @@ static int boss_gap(GeWorld *w, const BossCtx *c, int base) {
     return (int)((float)base * t) + (int)(rnd(w) * 10.0f);
 }
 
+/* How far it could leap straight back (px of floor behind it, `behind` being -1 or +1): the arena's wall if the arena is
+ * known (the leap's target is kept 2 tiles inside it), and any solid tile in the way. */
+static float room_behind(const GeWorld *w, const GeEntity *e, int behind, const BossCtx *c) {
+    float room = 9999.0f;
+    if (c->wall1 > c->wall0) room = behind > 0 ? c->wall1 - 2.0f * GE_TILE - e->pos.x : e->pos.x - (c->wall0 + 2.0f * GE_TILE);
+    for (float d = 8.0f; d <= 120.0f && d < room; d += 8.0f)
+        if (tile_at(w, e->pos.x + (float)behind * d, e->pos.y - 4.0f) == GE_TILE_SOLID) { room = d; break; }
+    return room;
+}
+
 /* Which attack, from where the hero is and what they keep doing. */
-static int boss_choose(BossBrain *b, GeWorld *w, const GeEntity *e, const GeEntity *h, bool enraged, bool *away) {
+static int boss_choose(BossBrain *b, GeWorld *w, const GeEntity *e, const GeEntity *h, const BossCtx *c, bool enraged, bool *away) {
     float dist = fabsf(h->pos.x - e->pos.x);
-    bool air = !h->on_ground && h->state != GE_ST_WALL;
+    bool air = hero_airborne(h);
     float jumpy = clamp01(b->jumpy * 2.5f), ranged = clamp01(b->ranged * 1.25f);
     float charge_reach = (enraged ? 6.5f : 5.5f) * 34.0f;          /* how far the charge's long frame carries it */
     int facing = h->pos.x >= e->pos.x ? 1 : -1;
     *away = false;
 
     /* a hero clinging to it: get clear (a leap away that sends waves back along the floor), if there is room */
-    if (b->hug_ticks >= 50 && !wall_ahead(w, e, -facing) && tile_at(w, e->pos.x - (float)facing * 56.0f, e->pos.y - 4.0f) != GE_TILE_SOLID) {
+    if (b->hug_ticks >= 50 && room_behind(w, e, -facing, c) >= 60.0f) {
         *away = true;
         return B_LEAP;
     }
@@ -407,7 +421,7 @@ void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const Boss
         if (b->heal_ticks >= 10 && b->timer > 0) b->timer = 0;      /* it doesn't wait for its rhythm to hit a healer */
         if (b->timer == 0) {
             bool away = false;
-            int mv = boss_choose(b, w, e, h, enraged, &away);
+            int mv = boss_choose(b, w, e, h, c, enraged, &away);
             b->last[1] = b->last[0]; b->last[0] = mv;
             b->mode = mv; b->timer = 10; b->age = 0; b->away = away; b->follow = false;
             switch (mv) {

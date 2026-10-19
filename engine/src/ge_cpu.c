@@ -81,6 +81,7 @@ static int pick(GeFight *f, int s, int role, bool air, int min_level, float edge
     for (int i = 0; i < d->nmoves; i++) {
         const GeMove *m = &d->moves[i];
         bool role_ok = role < 0 ? (m->ai != GE_AI_THROW && m->ai != GE_AI_ZONE && m->ai != GE_AI_NONE) : m->ai == role;
+        if (m->ai == GE_AI_SUPER && role != GE_AI_SUPER) continue;       /* (a super is only ever asked for by name, and only by a fighter good enough to) */
         if (!role_ok || (m->stance == ST_AIR_) != air || m->level < min_level || !ge_fight_can_start(f, s, i)) continue;
         if (edge >= 0.0f && !m->is_throw && !m->shot && edge > (float)ge_fight_move_reach(f, s, i) + 2.0f) continue;
         cand[n++] = i;
@@ -89,12 +90,13 @@ static int pick(GeFight *f, int s, int role, bool air, int min_level, float edge
 }
 
 /* The hardest-hitting move that can land on an opponent `edge` away and starts up within `window` ticks. */
-static int best_punish(const GeFight *f, int s, int window, float edge) {
+static int best_punish(const GeFight *f, int s, int window, float edge, bool supers) {
     const GeFighterDef *d = f->f[s].def;
     int best = -1, best_dmg = -1;
     for (int i = 0; i < d->nmoves; i++) {
         const GeMove *m = &d->moves[i];
         if (m->ai == GE_AI_NONE || m->ai == GE_AI_ZONE || m->ai == GE_AI_ANTIAIR || m->stance == ST_AIR_) continue;
+        if (m->ai == GE_AI_SUPER && !supers) continue;
         if (!ge_fight_can_start(f, s, i)) continue;
         if (ge_fight_move_startup(f, s, i) + 2 > window) continue;
         if (!m->is_throw && !m->shot && edge > (float)ge_fight_move_reach(f, s, i) + 2.0f) continue;
@@ -227,7 +229,7 @@ void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
                     if (F->def->moves[i].ai == GE_AI_SUPER && ge_fight_can_start(f, s, i) && edge <= (float)ge_fight_move_reach(f, s, i) + 2.0f &&
                         ge_fight_move_startup(f, s, i) + 2 <= window) mv = i;
             }
-            if (mv < 0) mv = best_punish(f, s, window, edge);
+            if (mv < 0) mv = best_punish(f, s, window, edge, skill >= 0.6f);
             if (mv >= 0) {
                 out->force_move = mv;
                 if (F->def->moves[mv].stance == ST_CROUCH_) out->y = 1;
@@ -247,7 +249,7 @@ void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
         const GeMove *cur = &F->def->moves[F->move];
         float chance = F->hit_landed ? p + 0.1f : (0.15f + 0.35f * st->aggression) * skill;
         if (rnd(f) < chance) {
-            int mv = F->meter >= GE_FIGHT_METER && F->hit_landed && rnd(f) < 0.5f ? pick(f, s, GE_AI_SUPER, false, cur->level + 1, -1.0f) : -1;
+            int mv = F->meter >= GE_FIGHT_METER && F->hit_landed && skill >= 0.6f && rnd(f) < 0.5f ? pick(f, s, GE_AI_SUPER, false, cur->level + 1, -1.0f) : -1;
             if (mv < 0) mv = pick(f, s, -1, cur->stance == ST_AIR_, cur->level + 1, F->hit_landed ? -1.0f : edge);
             out->force_move = mv;
         }

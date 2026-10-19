@@ -207,9 +207,13 @@ void ge_fight_update(GeFight *f, const GeFightInput in[2]);
 void ge_fight_draw(GeFight *f, GeImage *fb);
 
 /* A CPU opponent: fills `out` for `side`. level -1 (beginner: slow, passive, no supers) .. 3 (sharp), played
- * the way f->cpu_style[side] says. From level 0 up it punishes attacks that miss or are blocked once their active
- * frames are over (after a reaction time), breaks throws, blocks by the real reach of what is coming, presses on
- * after a blocked hit, and (by `adapt`) changes its play to what you keep doing. */
+ * the way f->cpu_style[side] says. At every level it reacts after a reaction time that shrinks with the level, and
+ * punishes (a beginner takes one opening in ten, a level-3 fighter about nine in ten): an attack that cannot reach it
+ * is an opening from its first frame (it answers while the attack is still winding up); so is a move that was blocked
+ * when it has frames to spare, and any attack once its active frames are over. It also breaks throws in proportion to
+ * its level, blocks by the real reach of what is coming, presses on after a blocked hit (from level 1), and (by
+ * `adapt`) changes its play to what you keep doing: jumping in, fireballs, turtling, repeating a move. Supers are for
+ * level 1 and up. */
 void ge_fight_cpu(GeFight *f, int side, int level, GeFightInput *out);
 
 /* exposed for tests / tools */

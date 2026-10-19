@@ -633,7 +633,7 @@ static void boss_ai(int idx) {
     }
     BossCtx ctx = { 0.0f, 0.0f, boss_tempo(), &g.ch.shockwave };
     const Thing *arena = find_thing(TH_ARENA);
-    if (arena) { ctx.wall0 = (float)(arena->col - 1) * GE_TILE; ctx.wall1 = (float)(arena->col + arena->w) * GE_TILE; }
+    if (arena) { ctx.wall0 = (float)arena->col * GE_TILE; ctx.wall1 = (float)(arena->col + arena->w) * GE_TILE; }      /* (first free pixel at each end: the gate and the exit door are the walls) */
     boss_think(w, idx, p->active && p->state != GE_ST_DEAD ? p : NULL, &g.boss, &ctx, it);
 }
 

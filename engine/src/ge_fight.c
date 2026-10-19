@@ -450,6 +450,7 @@ static void fighter_step(GeFight *f, int s) {
                           (easy_tech && (F->in.pressed & GE_FB_BLOCK));
         if (F->timer > (easy_tech ? 4 : 10) && tech_press) {         /* throw tech: a 16-tick window (22 forgiving), presses buffered */
             to_neutral(F, e); to_neutral(T, te);
+            F->buf_timer = 0; F->buf_btn = 0;           /* the press that broke it is spent: it must not also start a throw of its own next tick */
             if (f->model) ge_model_on_throw(f->model, s, true, f->model_side);
             e->vel.x = (float)te->facing * 3.0f;
             te->vel.x = -(float)te->facing * 3.0f;

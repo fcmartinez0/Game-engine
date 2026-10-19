@@ -30,8 +30,8 @@ const char *ai_mode_name(int idx, int kind);
 /* ---- the boss: Thornwarden ---------------------------------------------------------------------------------
  * One mind for the one big fight. It has four moves (a sweeping swing, a charge across the arena, a leap that sends
  * shockwaves along the floor, a volley of spears) and picks between them from where you are and what you have been
- * doing: it hits a hero who stops to heal, it won't charge at someone who keeps jumping, it throws spears at one who
- * stays away, it leaps clear of one who hugs it. Slip a charge and it runs into the wall and is dazed for a moment.
+ * doing: it hits a hero who stops to heal, it won't charge at someone who keeps jumping, it charges and leaps at one who
+ * stays away, it leaps clear of one who hugs it (if it has room). Slip a charge and it runs into the wall and is dazed for a moment.
  * Below half health it waits less, charges faster and sometimes swings twice. Analogy: before, it rolled a die
  * every second; now it plays like a person who watches you and has a plan. It never does anything the hero's own
  * moves wouldn't allow (the same intents), and every attack still has its tell. */
@@ -50,7 +50,7 @@ typedef struct {
 } BossBrain;
 
 typedef struct {
-    float wall0, wall1;        /* the arena's walls, in pixels (wall1 <= wall0: unknown) */
+    float wall0, wall1;        /* the arena's floor from its first free pixel to its last, in pixels (wall1 <= wall0: unknown) */
     float tempo;               /* pauses between attacks are multiplied by this: 1 normal, more is gentler */
     const GeShotDef *wave;     /* what a landing sends along the floor */
 } BossCtx;

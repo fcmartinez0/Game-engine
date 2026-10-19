@@ -353,20 +353,23 @@ static float run_everything(void) {
 static void test_hero_gone(void) {
     puts("nobody there: a creature that was looking at the hero keeps its feet when the hero is gone");
     const int kinds[4] = { EN_CRAWLER, EN_GRUNT, EN_SPITTER, EN_BAT };
+    const int lead_ins[] = { 20, 30, 40, 50, 60, 61, 62, 63, 90, 120 };     /* ticks of looking at them first (they look every 4th tick, and a grunt chases, strikes, backs off...) */
+    int lone_attacks = 0;
     for (int k = 0; k < 4; k++)
-        for (int phase = 0; phase < 5; phase++) {              /* (they look every 4th tick: the hero vanishes at every point in that beat) */
+        for (unsigned li = 0; li < sizeof lead_ins / sizeof *lead_ins; li++) {
             blank(); build();
             place_hero(12, 11);
             int c[1];
             c[0] = creature_facing(kinds[k], 9, 11, 1);
-            run(c, 1, 60 + phase);                             /* it has noticed them (or is about to) */
+            run(c, 1, lead_ins[li]);
             for (int t = 0; t < 12; t++) {
                 memset(&w.intents[c[0]], 0, sizeof(GeIntent));
-                ai_think(&w, c[0], NULL, &w.intents[c[0]]);    /* ...and the hero is gone: this must not read them */
+                ai_think(&w, c[0], NULL, &w.intents[c[0]]);    /* ...and the hero is gone: this must not read them (or shoot or swing at them) */
+                lone_attacks += w.intents[c[0]].attack_pressed || w.intents[c[0]].tool_pressed;
                 ge_world_update(&w);
             }
-            CHECK(E(c[0])->active);
         }
+    CHECK(lone_attacks == 0);
 }
 
 static void test_determinism(void) {
