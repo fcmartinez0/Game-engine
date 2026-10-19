@@ -61,6 +61,14 @@ DEV MENU - always on the BOTTOM (touch) screen
   EDIT WORLD       the world editor (or just press START): see below
   UP/DOWN to choose, A or LEFT/RIGHT to change, SELECT or B to close.
 
+THE CREATURES now have eyes: they only know where you are while nothing solid
+  is between you, they go to where they last saw you and give up after a while,
+  and a creature you hit knows where you are. A grunt hops a one-tile step and
+  follows you down a short drop, but waits at a wall or gate it can't climb and
+  won't step into a pit or onto spikes. A crawler charges what is in front of
+  it. A bat draws back for a moment before it dives (that is your warning), and
+  never dives through rock. A spitter only spits at what it can see.
+
 THE CAVES - walk LEFT from the start to the stone door at the forest's edge
   and press UP: the Hollow, then (its door "down") the Deep. Puzzle pieces:
   levers (slash them, or throw a needle), gates and bridges that follow

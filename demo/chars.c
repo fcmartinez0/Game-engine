@@ -273,7 +273,7 @@ int chars_build(Chars *c, Sprites *s) {
     base.gravity = 0.4f; base.max_fall = 7.0f; base.dead_ticks = 40; base.contact_damage = 1; base.contact_kb_x = 3; base.contact_kb_y = -2.5f;
 
     c->crawler = base;
-    c->crawler.run_speed = 0.45f; c->crawler.accel = 0.1f; c->crawler.friction = 0.2f; c->crawler.air_accel = 0.05f;
+    c->crawler.run_speed = 0.75f; c->crawler.accel = 0.1f;   /* (it paces at 0.6 of this, the old 0.45, and charges at all of it) */ c->crawler.friction = 0.2f; c->crawler.air_accel = 0.05f;
     c->crawler.body_w = 16; c->crawler.body_h = 10;
     c->crawler.clip_idle = ge_sprite_find_clip(&s->crawler, "idle"); c->crawler.clip_run = ge_sprite_find_clip(&s->crawler, "run");
     c->crawler.clip_hurt = ge_sprite_find_clip(&s->crawler, "hurt"); c->crawler.clip_dead = ge_sprite_find_clip(&s->crawler, "dead");
@@ -295,6 +295,7 @@ int chars_build(Chars *c, Sprites *s) {
 
     c->grunt = base;
     c->grunt.run_speed = 0.8f; c->grunt.accel = 0.1f; c->grunt.friction = 0.25f; c->grunt.air_accel = 0.08f;
+    c->grunt.jump_vel = 5.0f; c->grunt.jump_cut_vel = 2.4f; c->grunt.coyote_ticks = 3; c->grunt.jump_buffer_ticks = 3;   /* hops a one-tile step, not two */
     c->grunt.body_w = 14; c->grunt.body_h = 22;
 #define BC(n) ge_sprite_find_clip(&s->brawler, n)
     c->grunt.clip_idle = BC("idle"); c->grunt.clip_run = BC("run"); c->grunt.clip_hurt = BC("hurt"); c->grunt.clip_dead = BC("dead");

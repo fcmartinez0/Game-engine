@@ -5,6 +5,7 @@
 #include "demo.h"
 #include "devlog.h"
 #include "puzzle.h"
+#include "ai.h"
 #include "editor.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
@@ -327,6 +328,7 @@ static void spawn_level_part(bool ordinary_only) {
         }
         g.ent_of[i] = BEATEN(i) ? -1 : ge_world_spawn(&g.world, d, sp, 1, x, y, hp);
         if (g.ent_of[i] < 0) continue;
+        ai_reset(g.ent_of[i]);
         GeEntity *e = &g.world.ents[g.ent_of[i]];
         e->kind = kind;
         e->facing = -1;
@@ -508,6 +510,8 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         w->ents[b].hp = w->ents[b].max_hp;          /* you can't slash a duelist down: you get a head start */
         int s = spawn_of(b);
         if (s >= 0 && g.duel_cd == 0) start_duel_alert(s, true);
+    } else if (ev == GE_EV_HIT && a == g.player && b >= 0 && ordinary_enemy(w->ents[b].kind)) {
+        ai_provoke(b, &w->ents[a]);                       /* a creature you hit knows where you are */
     } else if (ev == GE_EV_HIT && b == g.player) {
         g.model.ow[GE_OW_HURT]++;
         ge_world_shake(w, 3.0f);
@@ -541,13 +545,6 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
 
 /* ---- enemy AI ---------------------------------------------------------- */
 
-static bool floor_ahead(const GeEntity *e, float dist) {
-    float x = e->pos.x + (float)e->facing * dist;
-    float gy = ge_world_ground_y(&g.world, x, e->pos.y - 2.0f);
-    if (gy < 0 || gy > e->pos.y + 20.0f) return false;
-    return ge_tilemap_get(&g.world.map, (int)floorf(x / GE_TILE), (int)floorf((e->pos.y - 2.0f) / GE_TILE)) != GE_TILE_SPIKE;
-}
-
 static bool clear_line(float x0, float y0, float x1, float y1) {
     for (int i = 1; i < 16; i++) {
         float t = (float)i / 16.0f;
@@ -557,16 +554,8 @@ static bool clear_line(float x0, float y0, float x1, float y1) {
     return true;
 }
 
-static void walker_ai(GeEntity *e, GeIntent *it, float speed) {
-    if (e->ai_state == -1) e->ai_state = e->facing;
-    if (!floor_ahead(e, 10.0f) || (e->state == GE_ST_RUN && fabsf(e->vel.x) < 0.01f && e->ai_timer++ > 4)) {
-        e->ai_state = -e->ai_state;
-        e->ai_timer = 0;
-    }
-    e->facing = e->ai_state;
-    it->move_x = speed * (float)e->ai_state;
-}
-
+/* The ordinary creatures think in ai.c (they can see, remember and read the terrain); the duelists just turn to
+ * look around, like trainers waiting for a challenger. */
 static void enemy_ai(int idx) {
     GeWorld *w = &g.world;
     GeEntity *e = &w->ents[idx];
@@ -574,46 +563,16 @@ static void enemy_ai(int idx) {
     memset(it, 0, sizeof *it);
     if (e->state == GE_ST_DEAD || e->state == GE_ST_HURT) return;
     const GeEntity *p = hero()->active && hero()->state != GE_ST_DEAD ? hero() : NULL;
-    float dx = p ? p->pos.x - e->pos.x : 9999.0f, dy = p ? p->pos.y - e->pos.y : 9999.0f;
-    if (e->ai_cd > 0) e->ai_cd--;
-
-    switch (e->kind) {
-    case EN_CRAWLER:
-        walker_ai(e, it, 1.0f);
-        break;
-    case EN_BAT: {
-        float tx = e->ai_x0 + sinf((float)(w->tick + idx * 37) * 0.02f) * 30.0f, ty = e->ai_y0 + sinf((float)w->tick * 0.05f) * 8.0f;
-        if (p && fabsf(dx) < 110.0f && fabsf(dy) < 90.0f && e->ai_cd == 0) { e->ai_timer = 50; e->ai_cd = 140; }
-        if (e->ai_timer > 0 && p) { e->ai_timer--; tx = p->pos.x; ty = p->pos.y - 10.0f; }   /* swoop */
-        it->move_x = ge_clampf((tx - e->pos.x) * 0.05f, -1, 1);
-        it->move_y = ge_clampf((ty - e->pos.y) * 0.05f, -1, 1);
-        break;
-    }
-    case EN_SPITTER:
-        if (p && fabsf(dx) < 170.0f && fabsf(dy) < 100.0f) {
-            e->facing = dx > 0 ? 1 : -1;
-            if (e->ai_cd == 0 && e->state != GE_ST_ATTACK) { it->tool_pressed = true; e->ai_cd = 150; }
-        }
-        break;
-    case EN_GRUNT:
-        if (p && fabsf(dx) < 140.0f && fabsf(dy) < 40.0f) {
-            e->facing = dx > 0 ? 1 : -1;
-            if (fabsf(dx) > 26.0f) { if (floor_ahead(e, 12.0f)) it->move_x = dx > 0 ? 1.0f : -1.0f; }
-            else if (e->ai_cd == 0 && e->on_ground) { it->attack_pressed = true; e->ai_cd = 80 + (int)(ge_rng_float(&w->rng) * 40.0f); }
-        } else {
-            walker_ai(e, it, 0.5f);
-        }
-        break;
-    case EN_DUELIST:
-        /* turns to look around, like a trainer waiting for a challenger */
+    if (e->kind == EN_DUELIST) {
+        float dx = p ? p->pos.x - e->pos.x : 9999.0f;
         if (++e->ai_timer > 150) { e->ai_timer = 0; e->facing = -e->facing; }
         if (p && fabsf(dx) < 60.0f) e->facing = dx > 0 ? 1 : -1;
         if ((w->tick + idx * 5) % 7 == 0)
             ge_world_emit(w, e->pos.x + ge_rng_range(&w->rng, -8, 8), e->pos.y - ge_rng_range(&w->rng, 0, 20), 0, -0.4f, 0, 40,
                           spawn_of(idx) == g.paragon_spawn ? GE_ARGB(220, 255, 210, 110) : GE_ARGB(200, 190, 120, 255), 2, GE_P_ADD);
-        break;
-    default: break;
+        return;
     }
+    ai_think(w, idx, p, it);
 }
 
 /* ---- the boss: Thornwarden ---------------------------------------------- */

@@ -1,11 +1,11 @@
 # name  checksum  arguments (each scene runs with --no-mods --no-hints --fresh)
-forest   c2e3177e   --frames 240 --low-detail --warp 20
-forest2  668ba3a7   --frames 240 --low-detail --god --warp 50
-full     acc0e294   --frames 240 --warp 20
-duel     8a33d0ac   --frames 240 --low-detail --autoplay --god --warp 80
+forest   5e6c280f   --frames 240 --low-detail --warp 20
+forest2  a010a4fe   --frames 240 --low-detail --god --warp 50
+full     a60f7dcf   --frames 240 --warp 20
+duel     380b16a9   --frames 240 --low-detail --autoplay --god --warp 80
 hall     886c3749   --frames 240 --low-detail --warp 186 --difficulty -1
 paragon  cb205da1   --frames 240 --low-detail --autoplay --god --paragon --difficulty -1
-duelfull 1c10b20d   --frames 240 --autoplay --god --warp 80
-long     01042f4b   --frames 3000 --low-detail --autoplay --god
-longfull a8eaf2bf   --frames 3000 --autoplay --god
+duelfull f2eebbf0   --frames 240 --autoplay --god --warp 80
+long     1ed47594   --frames 3000 --low-detail --autoplay --god
+longfull 953d41f0   --frames 3000 --autoplay --god
 boss     6ac8a12e   --frames 240 --low-detail --autoplay --god --warp 150
