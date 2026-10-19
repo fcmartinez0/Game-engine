@@ -26,6 +26,7 @@ int ge_null_bottom_updates(void) { return g_bottom_updates; }
 uint32_t ge_null_bottom_checksum(void) { return g_bottom.px ? ge_image_checksum(&g_bottom) : 0; }
 
 int ge_plat_touch(int *x, int *y) { return g_touch ? g_touch(g_script_user, g_frame, x, y) : 0; }
+void ge_plat_set_bottom(GeBottomMode mode) { (void)mode; }   /* (tests always see the bottom screen) */
 
 void ge_plat_present_bottom(const GeImage *fb) {
     if (!g_bottom.px) g_bottom = ge_image_create(fb->w, fb->h);

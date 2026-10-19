@@ -20,9 +20,11 @@ LINUX / MAC (build it yourself, it takes a minute)
           ./build/demo
 
 THE WINDOW
-  It is laid out like a 3DS: the game on top, the "bottom screen" (the dev menu,
-  the duel coach, and the WORLD EDITOR) underneath. The MOUSE is the stylus: click
-  and drag on the bottom screen. You can resize the window.
+  Just the game: a PC has no bottom screen (that is the 3DS's second screen).
+  Backspace (SELECT) opens the dev menu over the paused game; click its rows with
+  the mouse. The WORLD EDITOR (Enter) makes the window taller to show its map and
+  panels under the game, and the window goes back to its size when you stop
+  editing. The MOUSE is the stylus there: click and drag. You can resize the window.
 
 KEYS (a gamepad works too: buttons by position, like a 3DS)
   Move            arrow keys or WASD
@@ -43,7 +45,7 @@ THE CAVES
   Walk LEFT from the start to the stone door at the forest's edge and press UP.
 
 THE WORLD EDITOR (press Enter while exploring)
-  Click a brush under the map, then click or drag on the map. Click a piece to
+  Click a brush under the map (the editor's lower panel), then click or drag on the map. Click a piece to
   change its settings, drag it to move it, drop it on ERASER to remove it.
   Q undoes. Hold E (R) and drag a tile brush to fill a box. Arrow keys scroll the map.
   Quickest first try: PUZZLE tab, LEVER, click the map, GATE, click the map beside it,

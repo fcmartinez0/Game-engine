@@ -8,20 +8,24 @@
 static SDL_Window *g_win;
 static SDL_Renderer *g_ren;
 static SDL_Texture *g_tex, *g_btex;
-static int g_w, g_h, g_two;
-static int g_mouse_down, g_mx, g_my;   /* logical coordinates */
+static int g_w, g_h, g_two;               /* g_h: the logical height now (the main view, plus the bottom screen when it is under it) */
+static int g_top_h;                       /* the main view's height */
+static GeBottomMode g_mode = GE_BOTTOM_HIDDEN;
+static int g_saved_scale;                 /* the pixel size the window had before it grew to hold the bottom screen */
+static int g_mouse_down, g_mx, g_my;      /* logical coordinates */
 static SDL_GameController *g_pad;
 static int g_shot_requested;
 
 int ge_plat_init(const GePlatformConfig *cfg) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) return -1;
-    /* with a bottom screen the window is laid out like a 3DS: main view on top, the 320-wide screen centred under it */
-    g_w = cfg->width; g_two = cfg->two_screens;
-    g_h = cfg->height + (g_two ? GE_BOTTOM_H : 0);
+    /* The window is the main view alone. A game with a bottom screen (the world editor, the dev menu) can ask for it
+     * with ge_plat_set_bottom: under the main view like a 3DS (the window grows), or over it. */
+    g_w = cfg->width; g_two = cfg->two_screens; g_top_h = cfg->height;
+    g_h = g_top_h;
     int scale = cfg->scale > 0 ? cfg->scale : 1;
     SDL_DisplayMode dm;
     if (SDL_GetDesktopDisplayMode(0, &dm) == 0)
-        while (scale > 1 && (g_h * scale > dm.h - 80 || g_w * scale > dm.w)) scale--;   /* fit the screen */
+        while (scale > 1 && (g_top_h * scale > dm.h - 80 || g_w * scale > dm.w)) scale--;   /* fit the screen (it shrinks a step if the bottom screen is asked for) */
     g_win = SDL_CreateWindow(cfg->title ? cfg->title : "ge", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                              g_w * scale, g_h * scale, SDL_WINDOW_RESIZABLE);
     if (!g_win) return -2;
@@ -99,9 +103,39 @@ int ge_plat_poll(uint32_t *buttons) {
     return 1;
 }
 
+/* where the bottom screen is in the window now (logical pixels), or false if it isn't shown */
+static bool bottom_rect(int *x, int *y) {
+    if (!g_two || g_mode == GE_BOTTOM_HIDDEN) return false;
+    *x = (g_w - GE_BOTTOM_W) / 2;
+    *y = g_mode == GE_BOTTOM_SEPARATE ? g_top_h : 0;
+    return true;
+}
+
+void ge_plat_set_bottom(GeBottomMode mode) {
+    if (!g_two || !g_win || mode == g_mode) return;
+    bool grow = (mode == GE_BOTTOM_SEPARATE) != (g_mode == GE_BOTTOM_SEPARATE);
+    g_mode = mode;
+    if (!grow) return;
+    int cw = 0, ch = 0;
+    SDL_GetWindowSize(g_win, &cw, &ch);
+    int scale = g_w > 0 && cw >= g_w ? cw / g_w : 1;                   /* keep the size of a pixel */
+    bool growing = mode == GE_BOTTOM_SEPARATE;
+    if (growing) g_saved_scale = scale;
+    else if (g_saved_scale > 0) { scale = g_saved_scale; g_saved_scale = 0; }   /* back to the size it was */
+    g_h = g_top_h + (growing ? GE_BOTTOM_H : 0);
+    SDL_DisplayMode dm;
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0)
+        while (scale > 1 && g_h * scale > dm.h - 80) scale--;          /* (a tall window has to fit the screen) */
+    SDL_RenderSetLogicalSize(g_ren, g_w, g_h);
+    if (!(SDL_GetWindowFlags(g_win) & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)))
+        SDL_SetWindowSize(g_win, g_w * scale, g_h * scale);
+    (void)ch;
+}
+
 int ge_plat_touch(int *x, int *y) {
-    if (!g_two || !g_mouse_down) return 0;
-    int bx = g_mx - (g_w - GE_BOTTOM_W) / 2, by = g_my - (g_h - GE_BOTTOM_H);
+    int ox, oy;
+    if (!g_mouse_down || !bottom_rect(&ox, &oy)) return 0;
+    int bx = g_mx - ox, by = g_my - oy;
     if (bx < 0 || by < 0 || bx >= GE_BOTTOM_W || by >= GE_BOTTOM_H) return 0;
     *x = bx; *y = by;
     return 1;
@@ -121,8 +155,14 @@ void ge_plat_present(const GeImage *fb) {
     SDL_RenderClear(g_ren);
     SDL_Rect top = { 0, 0, fb->w, fb->h };
     SDL_RenderCopy(g_ren, g_tex, NULL, &top);
-    if (g_btex) {
-        SDL_Rect bot = { (g_w - GE_BOTTOM_W) / 2, fb->h, GE_BOTTOM_W, GE_BOTTOM_H };
+    int bx, by;
+    if (g_btex && bottom_rect(&bx, &by)) {
+        if (g_mode == GE_BOTTOM_OVERLAY) {                              /* over the game: the game dims behind it */
+            SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 150);
+            SDL_RenderFillRect(g_ren, &top);
+        }
+        SDL_Rect bot = { bx, by, GE_BOTTOM_W, GE_BOTTOM_H };
         SDL_RenderCopy(g_ren, g_btex, NULL, &bot);
     }
     SDL_RenderPresent(g_ren);

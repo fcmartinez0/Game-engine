@@ -9,9 +9,11 @@
  * platform/null.c each provide these functions.
  *
  * Two screens: a game may also draw a 320x240 "bottom screen". On a 3DS that is
- * the real lower (touch) screen; on a desktop the window grows to show it under
- * the main view, the way an emulator does, and the mouse stands in for the
- * stylus. The game code is the same either way. */
+ * the real lower (touch) screen and is always there. A desktop window has no use for a second
+ * screen most of the time, so it is hidden there until the game asks for it with
+ * ge_plat_set_bottom: under the main view (the way an emulator shows it) while something needs
+ * the room, or over the main view while a menu is open. The mouse stands in for the stylus on
+ * whichever shows it. The game code is the same either way. */
 
 #include <stdbool.h>
 
@@ -32,6 +34,10 @@ void     ge_plat_present(const GeImage *fb);                /* show the frame (c
 void     ge_plat_wait_frame(void);                         /* wait for the display to take it (vsync), if the backend does */
 void     ge_plat_present_bottom(const GeImage *fb);        /* only called when the bottom screen changed */
 int      ge_plat_touch(int *x, int *y);                    /* 1 while the bottom screen is touched (or clicked) */
+typedef enum { GE_BOTTOM_SEPARATE, GE_BOTTOM_OVERLAY, GE_BOTTOM_HIDDEN } GeBottomMode;
+/* Where the bottom screen is shown: its own screen (the window grows to hold it), over the main view, or not at
+ * all. A 3DS ignores this (it is always its own screen), and so does the headless backend. Cheap when unchanged. */
+void     ge_plat_set_bottom(GeBottomMode mode);
 uint64_t ge_plat_time_us(void);                            /* monotonic */
 void     ge_plat_sleep_us(uint32_t us);
 

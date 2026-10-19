@@ -45,6 +45,8 @@ int ge_plat_poll(uint32_t *buttons) {
     return 1;
 }
 
+void ge_plat_set_bottom(GeBottomMode mode) { (void)mode; }   /* the lower screen is always its own screen */
+
 int ge_plat_touch(int *x, int *y) {
     if (!(hidKeysHeld() & KEY_TOUCH)) return 0;
     touchPosition t;

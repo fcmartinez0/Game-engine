@@ -19,6 +19,11 @@
 #ifdef DEMO_HEADLESS
 #include "ge/ge_platform_null.h"
 #endif
+/* A desktop window has no bottom screen unless something needs one (that is the 3DS's): the world editor shows it
+ * under the game, the dev menu over the game while paused. The 3DS and the test backend keep it always. */
+#if !defined(__3DS__) && !defined(DEMO_HEADLESS)
+#define PC_WINDOW 1
+#endif
 #ifdef __3DS__
 #include <3ds.h>
 #endif
@@ -1551,8 +1556,18 @@ static void draw_coach(GeImage *fb) {
         if (g.coach[i].text[0]) ge_text(fb, 10, y, g.coach[i].text, i == 0 ? g.coach[i].color : dim, 1);
 }
 
+/* Where the bottom screen is wanted right now (only a desktop window pays attention). */
+static GeBottomMode bottom_mode(void) {
+    if (g.editing || g.test_play) return GE_BOTTOM_SEPARATE;      /* the editor's map and panels, and the test's buttons */
+    if (g.menu_open) return GE_BOTTOM_OVERLAY;                    /* the dev menu, over the paused game */
+    return GE_BOTTOM_HIDDEN;
+}
+
 static bool draw_bottom(void *user, GeImage *fb) {
     (void)user;
+#ifdef PC_WINDOW
+    if (bottom_mode() == GE_BOTTOM_HIDDEN) return false;          /* nobody can see it: don't draw it (it is drawn again when it shows) */
+#endif
     if (g.editing) return editor_draw_bottom(fb);
     if (g.test_play && !coach_showing() && !g.menu_open) {
         bool force = g.bottom_dirty;
@@ -1892,16 +1907,19 @@ static void demo_draw(void *user, GeImage *fb) {
         log_mods();
     }
     g.now_us = t0;
+    ge_plat_set_bottom(bottom_mode());
     devlog_set_clock(g.start_us, t0);
     double dt_ms = g.last_draw_us && t0 > g.last_draw_us ? (double)(t0 - g.last_draw_us) / 1000.0 : 0.0;
     if (dt_ms > 0) g.fps += (1000.0f / (float)dt_ms - g.fps) * 0.1f;
     g.last_draw_us = t0;
     demo_draw_inner(fb);
+#ifndef PC_WINDOW
     if (g.menu_open) {
         const char *m = "PAUSED - DEV MENU ON THE BOTTOM SCREEN";
         ge_fill_rect(fb, 0, 0, fb->w, 13, GE_ARGB(210, 16, 10, 30), 0);
         ge_text(fb, (fb->w - ge_text_width(m, 1)) / 2, 3, m, GE_RGB(255, 236, 160), 1);
     }
+#endif
     double draw = (double)(ge_plat_time_us() - t0) / 1000.0;
     g.draw_ms += ((float)draw - g.draw_ms) * 0.1f;
     g.present_ms += (ge_frame_times().present_ms - g.present_ms) * 0.1f;
