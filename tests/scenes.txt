@@ -8,4 +8,4 @@ paragon  cb205da1   --frames 240 --low-detail --autoplay --god --paragon --diffi
 duelfull 99abdd1b   --frames 240 --autoplay --god --warp 80
 long     1ed47594   --frames 3000 --low-detail --autoplay --god
 longfull 953d41f0   --frames 3000 --autoplay --god
-boss     41c669b7   --frames 240 --low-detail --autoplay --god --warp 150
+boss     473e13be   --frames 240 --low-detail --autoplay --god --warp 150

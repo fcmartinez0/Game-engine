@@ -228,6 +228,39 @@ static void test_style(void) {
     CHECK(space > rush + 12.0f);
 }
 
+/* From across the stage (the engine keeps fighters at most 160 px apart) a zoning fighter throws fireballs and a rush-down fighter
+ * runs in. Fireballs started in a few seconds of facing a player who just stands there: */
+static int zones_thrown(GeCpuStyle st, uint32_t seed) {
+    start_default(seed);
+    F.cpu_style[1] = st;
+    int count = 0, prev_state = -1, prev_move = -1;
+    for (int c = 0; c < 6; c++) {
+        settle(100.0f, 100.0f + 150.0f);
+        for (int t = 0; t < 300; t++) {
+            GeFightInput q = none();
+            E(0)->invuln = 5;
+            ge_fight_cpu(&F, 1, 3, &q);
+            tick(none(), q);
+            bool started = F.f[1].state == GE_FS_MOVE && (prev_state != GE_FS_MOVE || prev_move != F.f[1].move);
+            if (started && F.f[1].def->moves[F.f[1].move].ai == GE_AI_ZONE) count++;
+            prev_state = F.f[1].state; prev_move = F.f[1].move;
+            if (fabsf(E(1)->pos.x - E(0)->pos.x) < 110.0f) break;           /* it has come in: the cycle is over */
+        }
+    }
+    return count;
+}
+
+static void test_zoning(void) {
+    puts("zoning: a spacing fighter throws fireballs from across the stage, a rush-down fighter doesn't bother");
+    int zoner = 0, rusher = 0;
+    for (uint32_t seed = 1; seed <= 24; seed++) {
+        zoner += zones_thrown(style(0.15f, 0.95f, 0.1f, 0.6f, 0.4f, 0.0f), seed);
+        rusher += zones_thrown(style(0.95f, 0.05f, 0.3f, 0.1f, 0.4f, 0.0f), seed);
+    }
+    if (verbose) printf("  fireballs started from far away: spacing fighter %d, rush-down fighter %d\n", zoner, rusher);
+    CHECK(zoner >= 60 && zoner > rusher * 2);                 /* (24 fights: it was 35-50 when the far-range table could never be reached) */
+}
+
 /* ---- reading what you keep doing ------------------------------------------------------------------------ */
 
 /* The player (who can't be hit, so the CPU's answers don't change what happens next) jumps in over and over from 70 px.
@@ -270,6 +303,43 @@ static void test_adapts(void) {
     if (verbose) printf("  mean time to answer a jump-in: adapting %.1f ticks (%d of %d jumps answered), not adapting %.1f ticks (%d answered)\n", with, aw, total, without, ao);
     CHECK(aw * 100 >= total * 50 && ao * 100 >= total * 30);   /* (so the setup does provoke it) */
     CHECK(with + 3.0 < without);
+}
+
+/* ---- the Paragon's taught techniques ----------------------------------------------------------------- */
+
+/* Every duelist it beats teaches the Paragon a move. Grobb's rock and Silke's dust are projectiles: with both gifts, does it
+ * ever throw them, or only its own needle? (It used to pick the first projectile in its list, always.) */
+static void test_paragon_throws_what_it_was_taught(void) {
+    puts("the Paragon: with Grobb's and Silke's gifts it throws their rock and dust as well as its needle");
+    GeFighterDef pd;
+    paragon_build_def(&ch, &spr, GIFT_GROBB | GIFT_SILKE, &pd);
+    int needles = 0, rocks = 0, dusts = 0;
+    for (uint32_t seed = 1; seed <= 30; seed++) {
+        start(&ch.f_brawler, &spr.brawler, &pd, &spr.paragon, seed);
+        GeParagon brain;
+        GePlayerModel model;
+        ge_model_init(&model);
+        ge_paragon_init(&brain, &model);
+        ge_paragon_set_learn(&brain, 100, 1);
+        F.infinite_clock = true;
+        int prev_shots = 0;
+        for (int t = 0; t < 2400; t++) {
+            GeFightInput a = none(), b = none();
+            E(0)->invuln = 5; E(0)->hp = E(0)->hp > 0 ? E(0)->hp : 1;
+            ge_paragon_think(&brain, &F, 1, &b);
+            tick(a, b);
+            int n = 0;
+            for (int i = 0; i < GE_MAX_SHOTS; i++) {
+                const GeShot *sh = &F.world.shots[i];
+                if (!sh->active || sh->team != 1) continue;
+                n++;
+                if (n > prev_shots) { needles += sh->def == &ch.f_needle; rocks += sh->def == &ch.f_rock; dusts += sh->def == &ch.f_dust; }
+            }
+            prev_shots = n;
+        }
+    }
+    if (verbose) printf("  projectiles it threw: needle %d, rock %d, dust %d\n", needles, rocks, dusts);
+    CHECK(needles > 0 && rocks > 0 && dusts > 0);
 }
 
 /* ---- the rest ------------------------------------------------------------------------------------------- */
@@ -343,9 +413,11 @@ int main(void) {
     test_block_then_punish();
     test_tech();
     test_style();
+    test_zoning();
     test_adapts();
     test_deterministic();
     test_cpu_vs_cpu_finishes();
+    test_paragon_throws_what_it_was_taught();
     test_mirror_is_fair();
     if (inited) ge_fight_free(&F);
     art_free(&spr);

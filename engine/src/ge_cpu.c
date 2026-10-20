@@ -278,7 +278,8 @@ void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
     float A = st->aggression, S = st->spacing, G = st->grab, P = st->patience, M = st->mixup;
     bool can_dash = skill >= 0.3f && mind->dash_cd == 0;
     bool zone = has_role(f, s, GE_AI_ZONE), rush = has_role(f, s, GE_AI_RUSH);
-    if (dist > 170.0f) {                                                     /* far */
+    float far_from = 0.72f * ((float)f->world.cam.vw - 40.0f);      /* (the engine never lets fighters get further apart than the view minus 40 px: 160) */
+    if (dist > far_from) {                                                   /* far */
         w[NA_WALK_IN] = 0.35f + 0.5f * A - 0.2f * P + 0.4f * shotty;
         w[NA_DASH_IN] = can_dash ? (0.25f * A + 0.35f * shotty) * skill : 0.0f;
         w[NA_ZONE] = zone ? (0.15f + 0.5f * S) * (1.0f - 0.8f * shotty) : 0.0f;

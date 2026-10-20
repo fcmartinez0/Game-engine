@@ -45,7 +45,7 @@ typedef struct {
     bool leaping;              /* leap: the crouch (its tell) is over and it has jumped */
     bool follow;               /* it will swing again when this one is over */
     int last[2];               /* the last two attacks it chose */
-    float jumpy, ranged, hugs; /* what it has seen the hero do lately: share of time in the air / far away / close */
+    float jumpy, ranged;       /* what it has seen the hero do lately: share of time in the air / far away */
     int hug_ticks, heal_ticks; /* ticks in a row the hero has been close / healing */
     int slams;                 /* charges that ended in the wall (for tests and the play log) */
 } BossBrain;

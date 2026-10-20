@@ -167,8 +167,15 @@ static const Thing *practice_thing(void) {
     return &t;
 }
 static const Thing *duel_thing(void) { return g.duel == DUEL_PRACTICE ? practice_thing() : thing(g.duel); }
-static int duel_ent(void) { return g.duel >= 0 ? g.ent_of[g.duel] : -1; }
-static int boss_ent(void) { return g.boss_spawn >= 0 ? g.ent_of[g.boss_spawn] : -1; }
+/* The entity slot a placed thing was spawned into, or -1 if it isn't there any more: once the thing is gone (a beaten boss, a
+ * duelist that fell) its slot is free and the next spawn, the hero's after a respawn, takes it, so check what is in there. */
+static int ent_of_kind(int spawn, int kind) {
+    if (spawn < 0) return -1;
+    int i = g.ent_of[spawn];
+    return i >= 0 && g.world.ents[i].active && g.world.ents[i].kind == kind ? i : -1;
+}
+static int duel_ent(void) { return ent_of_kind(g.duel, EN_DUELIST); }
+static int boss_ent(void) { return ent_of_kind(g.boss_spawn, EN_BOSS); }
 
 /* Writing to the SD card stalls the game for tens of milliseconds on a 3DS, so the play log is written at
  * moments nobody is playing through: a black fade, a bench, the menu (and at least once a minute). */
@@ -400,12 +407,13 @@ static void reset_boss(void) {
     arena_set_gate(false);
     arena_set_exit(!boss_beaten());
     int bi = boss_ent();
-    if (bi >= 0 && g.world.ents[bi].active) {
+    if (bi >= 0) {
         GeEntity *b = &g.world.ents[bi];
-        b->hp = b->max_hp;
+        b->hp = b->max_hp = boss_hp();               /* (the difficulty may have been changed since it was spawned) */
         b->pos = (GeVec2){ b->ai_x0, b->ai_y0 };
         b->vel = (GeVec2){ 0, 0 };
         b->state = GE_ST_IDLE;
+        b->facing = -1;
     }
 }
 
@@ -559,6 +567,11 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         LOG("spikes at col %d, masks left %d", (int)(p->pos.x / GE_TILE), p->hp);
     } else if (ev == GE_EV_SHOT_TILE) {
         puzzle_shot_tile(&g.pz, a, b);
+    } else if (ev == GE_EV_FELL && w->ents[a].kind == EN_BOSS) {      /* a pit in an arena someone built: it climbs back out at its post */
+        GeEntity *e = &w->ents[a];
+        e->active = true; e->pos = (GeVec2){ e->ai_x0, e->ai_y0 }; e->vel = (GeVec2){ 0, 0 }; e->state = GE_ST_IDLE; e->invuln = 0;
+        if (g.boss_engaged) { g.boss.mode = B_IDLE; g.boss.timer = 40; g.boss.leaping = false; }
+        LOG("boss fell out of the world: back at its post");
     } else if (ev == GE_EV_FELL && a == g.player) {
         g.deaths++;
     } else if (ev == GE_EV_CHANNEL && a == g.player) {
@@ -614,9 +627,10 @@ static void boss_ai(int idx) {
     GeEntity *p = hero();
     if (!g.boss_engaged) {
         const Thing *a = find_thing(TH_ARENA);    /* its arena, or (without one) close enough to see it */
-        bool inside = a ? p->pos.x > (a->col + 3) * GE_TILE && p->pos.x < (a->col + a->w) * GE_TILE
+        bool inside = a ? p->pos.x > (a->col + (a->w > 6 ? 3 : 0)) * GE_TILE && p->pos.x < (a->col + a->w) * GE_TILE
                         : fabsf(p->pos.x - b->pos.x) < 150.0f && fabsf(p->pos.y - b->pos.y) < 60.0f;
-        if (p->active && inside) {
+        bool woken = b->hp < b->max_hp;           /* a needle from the doorway wakes it too: it is not a punching bag */
+        if (p->active && (inside || woken)) {
             g.boss_engaged = true;
             boss_wake(&g.boss);
             arena_set_gate(true);
@@ -1147,8 +1161,8 @@ static void set_logging(bool on) {
 static void warp_to(int col, int row) {   /* row < 0: the first floor from the top of the column */
     GeEntity *p = hero();
     if (!p->active || g.mode != M_OVERWORLD) return;
-    const Thing *a = find_thing(TH_ARENA), *h = find_thing(TH_HALL);
-    if (g.boss_engaged && a && col < a->col) reset_boss();
+    const Thing *h = find_thing(TH_HALL);
+    if (g.boss_engaged) reset_boss();               /* (any warp, back or forward, ends the fight: the boss goes back to its post) */
     if (h && col >= h->col) arena_set_exit(false);
     float x = col * GE_TILE + 8.0f;
     p->pos = (GeVec2){ x, row < 0 ? ground_in_column(x) : ground_at(x, (float)(row * GE_TILE)) };

@@ -246,6 +246,8 @@ int chars_build(Chars *c, Sprites *s) {
                              .kb_x = 2, .kb_y = -2, .hitstop = 7, .stun = 20, .blockstun = 12, .chip = 3, .life = 150, .solid_stops = true };
     c->f_dust = (GeShotDef){ .spr = fx, .clip = FXC("dust"), .speed = 3.2f, .w = 14, .h = 12, .damage = 7, .kb_x = 1.5f,
                              .hitstop = 6, .stun = 16, .blockstun = 10, .chip = 2, .life = 140, .grounded = true };
+    c->f_orb = (GeShotDef){ .spr = fx, .clip = FXC("orb"), .speed = 2.2f, .w = 14, .h = 14, .damage = 9, .kb_x = 2,   /* (no built-in fighter throws it: it is there for mods, `shot=orb`) */
+                            .hitstop = 6, .stun = 18, .blockstun = 12, .chip = 2, .life = 170 };
 #undef FXC
 
     /* the hero: Silksong-style movement */

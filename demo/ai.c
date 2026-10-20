@@ -319,6 +319,16 @@ static float leap_speed(const GeEntity *e, float dist, float flight) {
     return v > 4.5f ? 4.5f : v;
 }
 
+/* Is there floor under x? (Within three tiles below the feet; ledges and pits in an arena someone built.) */
+static bool floor_at(const GeWorld *w, float x, float feet_y) {
+    int c = (int)floorf(x / T), r = (int)floorf((feet_y - 2.0f) / T);
+    for (int k = 1; k <= 3; k++) {
+        int t = ge_tilemap_get(&w->map, c, r + k);
+        if (t == GE_TILE_SOLID || t == GE_TILE_ONEWAY) return true;
+    }
+    return false;
+}
+
 /* a wall (at any height of its body) right in front of it, `dir` being the way it faces */
 static bool wall_ahead(const GeWorld *w, const GeEntity *e, int dir) {
     float x = e->pos.x + (float)dir * ((float)e->def->body_w * 0.5f + 3.0f);
@@ -337,7 +347,6 @@ static void boss_watch(BossBrain *b, const GeEntity *e, const GeEntity *h) {
     bool air = hero_airborne(h);
     b->jumpy += ((air ? 1.0f : 0.0f) - b->jumpy) * 0.006f;
     b->ranged += ((dist > 140.0f ? 1.0f : 0.0f) - b->ranged) * 0.006f;
-    b->hugs += ((dist < 50.0f ? 1.0f : 0.0f) - b->hugs) * 0.006f;
     b->hug_ticks = dist < 45.0f ? b->hug_ticks + 1 : 0;
     b->heal_ticks = h->state == GE_ST_CHANNEL ? b->heal_ticks + 1 : 0;
 }
@@ -354,7 +363,7 @@ static float room_behind(const GeWorld *w, const GeEntity *e, int behind, const 
     float room = 9999.0f;
     if (c->wall1 > c->wall0) room = behind > 0 ? c->wall1 - 2.0f * GE_TILE - e->pos.x : e->pos.x - (c->wall0 + 2.0f * GE_TILE);
     for (float d = 8.0f; d <= 120.0f && d < room; d += 8.0f)
-        if (tile_at(w, e->pos.x + (float)behind * d, e->pos.y - 4.0f) == GE_TILE_SOLID) { room = d; break; }
+        if (tile_at(w, e->pos.x + (float)behind * d, e->pos.y - 4.0f) == GE_TILE_SOLID || !floor_at(w, e->pos.x + (float)behind * d, e->pos.y)) { room = d; break; }
     return room;
 }
 
@@ -374,15 +383,21 @@ static int boss_choose(BossBrain *b, GeWorld *w, const GeEntity *e, const GeEnti
     }
 
     /* a hero who stops to heal is hit: the nearest thing that reaches */
-    if (b->heal_ticks >= 10) {
+    if (b->heal_ticks >= 10 && dist < 160.0f) {          /* (a heal takes about a second: what is further off than this lands too late, so it plays on as usual) */
         if (dist < 85.0f) return B_SWING;
-        if (dist < charge_reach * 0.9f) return B_CHARGE;
-        return dist < 260.0f ? B_LEAP : B_THROW;
+        bool pit = false;
+        for (float d = 16.0f; d <= dist + 16.0f; d += 16.0f) if (!floor_at(w, e->pos.x + (float)facing * d, e->pos.y)) pit = true;
+        if (!pit) return B_CHARGE;
     }
 
     float W[4] = { 0, 0, 0, 0 };                                    /* swing, charge, leap, throw (indexed by move - B_SWING) */
     W[0] = dist < 80.0f ? 3.0f : dist < 110.0f ? 3.0f * (110.0f - dist) / 30.0f : 0.0f;
     W[1] = dist >= 80.0f && dist <= charge_reach ? 2.0f : dist < 80.0f ? 0.7f : 0.8f;
+    for (float d = 16.0f; d <= charge_reach * 1.5f; d += 16.0f) {          /* it won't charge into a pit (or a wall: that is the dazing one); it slides on a way past the long frame */
+        float x = e->pos.x + (float)facing * d;
+        if (tile_at(w, x, e->pos.y - 20.0f) == GE_TILE_SOLID) break;
+        if (!floor_at(w, x, e->pos.y)) { W[1] = 0.0f; break; }
+    }
     W[2] = dist >= 60.0f && dist <= 200.0f ? 1.5f : dist < 60.0f ? 0.5f : 0.9f;
     W[3] = dist > 100.0f ? 1.5f : dist > 60.0f ? 0.6f : 0.2f;
     if (air) { W[0] *= dist < 90.0f ? 1.6f : 1.0f; W[1] *= 0.4f; W[2] *= 0.5f; W[3] *= 1.4f; }   /* (a hero in the air hops a charge and a wave) */
@@ -407,17 +422,19 @@ void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const Boss
     float dx = h->pos.x - e->pos.x, dist = fabsf(dx);
     int toward = dx >= 0.0f ? 1 : -1;
     bool enraged = e->hp < e->max_hp / 2;
+    if (e->hitstop > 0) return;              /* frozen by a hit this tick: the actor would drop what it is told, so decide nothing */
     if (b->timer > 0) b->timer--;
     boss_watch(b, e, h);
     b->age++;
 
     switch (b->mode) {
     case B_INTRO:
+        e->facing = toward;
         if (b->timer == 0) { b->mode = B_IDLE; b->timer = boss_gap(w, c, 40); }
         break;
     case B_IDLE:
         e->facing = toward;
-        if (dist > 60.0f) it->move_x = (float)toward * (enraged ? 0.8f : 0.6f);
+        if (dist > 60.0f && floor_at(w, e->pos.x + (float)toward * 20.0f, e->pos.y)) it->move_x = (float)toward * (enraged ? 0.8f : 0.6f);
         if (b->heal_ticks >= 10 && b->timer > 0) b->timer = 0;      /* it doesn't wait for its rhythm to hit a healer */
         if (b->timer == 0) {
             bool away = false;
@@ -474,6 +491,7 @@ void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const Boss
                 float flight = 2.0f * e->def->jump_vel / e->def->gravity;      /* ticks in the air */
                 float tx = b->away ? e->pos.x - (float)toward * 110.0f : h->pos.x + h->vel.x * flight * 0.6f;
                 if (c->wall1 > c->wall0) tx = ge_clampf(tx, c->wall0 + 2.0f * GE_TILE, c->wall1 - 2.0f * GE_TILE);
+                while (fabsf(tx - e->pos.x) > 8.0f && !floor_at(w, tx, e->pos.y)) tx += tx > e->pos.x ? -8.0f : 8.0f;      /* (it lands on floor, not in a pit) */
                 it->jump_pressed = it->jump_held = true;
                 e->vel.x = (tx >= e->pos.x ? 1.0f : -1.0f) * leap_speed(e, fabsf(tx - e->pos.x), flight);
                 b->leaping = true; b->was_air = false; b->timer = 10;

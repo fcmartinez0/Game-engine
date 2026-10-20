@@ -32,6 +32,7 @@ static const GeClip *clip_of(const GeFight *f, int s, int mi) { return &f->spr[s
 
 static int move_damage(const GeFight *f, int s, int mi) {
     const GeMove *m = &f->f[s].def->moves[mi];
+    if (m->shot) return m->shot->damage;                    /* (a projectile's clip has no damage of its own: the shot has) */
     return m->is_throw ? f->f[s].def->throw_damage : clip_of(f, s, mi)->damage;
 }
 
@@ -53,7 +54,7 @@ static bool recovering(const GeFight *f, int s) {
  * fast = prefer the quickest, otherwise the hardest hitting. */
 static int best_move(const GeFight *f, int s, int role, bool air, int max_startup, float edge, int min_level, bool fast) {
     const GeFighterDef *d = f->f[s].def;
-    int best = -1;
+    int best = -1, zone[GE_FIGHT_MAX_MOVES], nzone = 0;
     float best_score = -1e9f;
     for (int i = 0; i < d->nmoves; i++) {
         const GeMove *m = &d->moves[i];
@@ -65,7 +66,13 @@ static int best_move(const GeFight *f, int s, int role, bool air, int max_startu
         if (!m->is_throw && !m->shot && edge > (float)ge_fight_move_reach(f, s, i) + 2.0f) continue;
         float score = fast ? (float)(100 - su) + (float)move_damage(f, s, i) * 0.1f : (float)move_damage(f, s, i) - (float)su * 0.05f;
         if (score > best_score) { best_score = score; best = i; }
+        if (role == GE_AI_ZONE) {                           /* every projectile it knows (the needle, and the rock and dust it was taught) takes turns */
+            bool seen = false;
+            for (int k = 0; k < nzone; k++) seen |= d->moves[zone[k]].shot == m->shot;
+            if (!seen && nzone < GE_FIGHT_MAX_MOVES) zone[nzone++] = i;
+        }
     }
+    if (role == GE_AI_ZONE && nzone > 1) best = zone[(f->world.tick / 50) % (unsigned)nzone];
     return best;
 }
 

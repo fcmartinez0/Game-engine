@@ -48,19 +48,24 @@ static void arena(uint32_t seed, float bx, float hx, float tempo) {
     ctx = (BossCtx){ WALL0, WALL1, tempo, &ch.shockwave };
 }
 
+static int g_hitstop_every;                                     /* >0: the boss is frozen by a 'hit' for one tick every n ticks (what a slash does to it) */
+static bool g_hurtable;                                         /* the hero can be hit (only the heal test lets them) */
 static float g_force_jumpy = -1.0f, g_force_ranged = -1.0f;     /* tests that pin what it believes about the hero's habits */
 
 typedef struct { bool air, heal; float vx; bool dash; } Hero;      /* what the hero does this tick (dash: along the floor, which the physics counts as off the ground) */
 
 static void step(Hero hv) {
     GeEntity *h = HERO;
-    h->invuln = 5;                                      /* the hero can't be hurt or pushed around */
-    h->hp = h->max_hp;
+    if (!g_hurtable) {
+        h->invuln = 5;                                  /* the hero can't be hurt or pushed around */
+        h->hp = h->max_hp;
+    }
     memset(&w.intents[hero_i], 0, sizeof(GeIntent));
     if (hv.vx != 0.0f) { h->pos.x += hv.vx; h->vel.x = hv.vx; }
     if (hv.heal) h->state = GE_ST_CHANNEL;
     if (hv.air) h->on_ground = false;
     if (hv.dash) { h->state = GE_ST_DASH; h->on_ground = false; }
+    if (g_hitstop_every > 0 && (int)w.tick % g_hitstop_every == 0) BOSS->hitstop = 1;
     if (g_force_jumpy >= 0.0f) brain.jumpy = g_force_jumpy;
     if (g_force_ranged >= 0.0f) brain.ranged = g_force_ranged;
     boss_think(&w, boss_i, h, &brain, &ctx, &w.intents[boss_i]);
@@ -126,10 +131,25 @@ static int idle_latency(uint32_t seed, float dist) {
     return 120;
 }
 
+/* a hero who really can be hit stops to heal at `dist`: does something land before the heal is done (~55 ticks)? */
+static bool heal_is_punished(uint32_t seed, float dist) {
+    arena(seed, 300, 300 + dist, 1.0f);
+    boss_wake(&brain);
+    for (int t = 0; t < 400 && !(brain.mode == B_IDLE && brain.timer > 25); t++) step(STAND);
+    g_hurtable = true;
+    HERO->invuln = 0; HERO->hp = HERO->max_hp;
+    bool hit = false;
+    for (int t = 0; t < 60 && !hit; t++) {
+        step((Hero){ false, true, 0.0f, false });
+        hit = HERO->hp < HERO->max_hp;
+    }
+    g_hurtable = false;
+    return hit;
+}
+
 static void test_heal(void) {
-    puts("healing: a hero who stops to heal is hit at once, with whatever reaches");
-    int worst = 0, base_sum = 0, n = 0;
-    int swing = 0, charge = 0, leap = 0;
+    puts("healing: a hero who stops to heal is hit at once, with whatever reaches in time");
+    int worst = 0, base_sum = 0, n = 0, swing = 0, charge = 0, punished_near = 0, punished_mid = 0, far_leaps = 0;
     for (uint32_t s = 1; s <= 24; s++) {
         int a = -1;
         int lat = heal_latency(s, 60.0f, &a);
@@ -138,15 +158,19 @@ static void test_heal(void) {
         lat = heal_latency(s, 140.0f, &a);
         if (lat > worst) worst = lat;
         charge += a == B_CHARGE;
-        lat = heal_latency(s, 230.0f, &a);
+        lat = heal_latency(s, 230.0f, &a);                                   /* too far for anything to land in time: it decides at once, but not on a slow move that cannot hit */
         if (lat > worst) worst = lat;
-        leap += a == B_LEAP;
+        far_leaps += a == B_LEAP;
         base_sum += idle_latency(s, 140.0f); n++;
+        punished_near += heal_is_punished(s, 60.0f);
+        punished_mid += heal_is_punished(s, 140.0f);
     }
-    if (verbose) printf("  slowest answer to a heal: %d ticks;  swing %d, charge %d, leap %d of 24;  its usual wait: %d ticks\n",
-                        worst, swing, charge, leap, base_sum / n);
+    if (verbose) printf("  slowest answer to a heal: %d ticks;  swing %d, charge %d of 24;  its usual wait: %d ticks;  a real hero who heals is hit: close %d of 24, 140 px off %d of 24\n",
+                        worst, swing, charge, base_sum / n, punished_near, punished_mid);
     CHECK(worst <= 12);                                          /* a reaction time, nothing more */
-    CHECK(swing == 24 && charge == 24 && leap == 24);            /* close: the sword; mid: the charge; far: the leap */
+    CHECK(swing == 24 && charge == 24);                          /* close: the sword; mid: the charge */
+    CHECK(punished_near >= 22 && punished_mid >= 22);            /* ...and it lands before the heal does */
+    CHECK(far_leaps < 20);                                       /* (a leap from 230 px lands 70 ticks later, after the heal: it must not be forced; at its own weights it picks it about a third of the time) */
     CHECK(base_sum / n >= 25);                                   /* (without a heal, it waits for its rhythm) */
 }
 
@@ -223,8 +247,7 @@ static int shots_of(const GeShotDef *d) {
     return n;
 }
 
-static void test_attacks_are_real(void) {
-    puts("attacks: a swing and a charge are attack animations, a volley is spears, a leap leaves the floor and lands in shockwaves");
+static void attacks_are_real(void) {
     int swings = 0, swings_ok = 0, charges = 0, charges_ok = 0, throws = 0, throws_ok = 0, spears_seen = 0, leaps = 0, leaps_ok = 0, tells_ok = 0;
     for (uint32_t s = 1; s <= 4; s++) {
         arena(s, 300, 450, 1.0f);
@@ -263,6 +286,15 @@ static void test_attacks_are_real(void) {
     CHECK(swings_ok == swings && charges_ok == charges && throws_ok == throws && leaps_ok == leaps);
     CHECK(tells_ok == leaps);                                           /* a leap is announced by a crouch of at least a quarter second */
     CHECK(spears_seen * 100 >= throws * 90);                            /* ...and the throws really fire spears */
+}
+
+static void test_attacks_are_real(void) {
+    puts("attacks: a swing and a charge are attack animations, a volley is spears, a leap crouches, leaves the floor and lands in shockwaves, even when hits keep freezing the boss");
+    g_hitstop_every = 0;
+    attacks_are_real();
+    g_hitstop_every = 5;                                                /* a hero hugging it and slashing: it is frozen a tick in five */
+    attacks_are_real();
+    g_hitstop_every = 0;
 }
 
 /* ---- aim ---------------------------------------------------------------------------------------------------- */
@@ -379,6 +411,29 @@ static void test_charge_and_wall(void) {
     CHECK(hurt_hero_free >= 10);
 }
 
+/* ---- a pit in the arena (rooms people build) ---------------------------------------------------------------- */
+
+static void test_pit(void) {
+    puts("pits: it never walks, charges or leaps into a hole in the floor, and still fights across it");
+    int fell = 0, attacks = 0, charged_into = 0;
+    for (uint32_t s = 1; s <= 12; s++) {
+        arena(s, 200, 440, 1.0f);
+        for (int y = 12; y < RH; y++) for (int x = 18; x <= 20; x++) w.map.type[y * RW + x] = GE_TILE_EMPTY;      /* a 3-tile pit between them (columns 18-20 = x 288-336) */
+        boss_wake(&brain);
+        int prev = brain.mode;
+        for (int t = 0; t < 4000; t++) {
+            step(STAND);
+            if (!BOSS->active || BOSS->pos.y > 12.0f * GE_TILE + 4.0f) { fell++; break; }
+            if (prev == B_IDLE && attacking_mode(brain.mode)) { attacks++; charged_into += brain.mode == B_CHARGE; }
+            prev = brain.mode;
+        }
+    }
+    if (verbose) printf("  fell into the pit in %d of 12 fights; %d attacks, %d of them charges (from the side with no pit in the way)\n", fell, attacks, charged_into);
+    CHECK(fell == 0);
+    CHECK(attacks >= 60);
+    CHECK(charged_into >= 1);                                           /* (it still charges when the way is clear) */
+}
+
 /* ---- phases, pace, patience ---------------------------------------------------------------------------------- */
 
 static int attacks_in(float tempo, int hp, uint32_t seed, int ticks, int *doubles) {
@@ -467,6 +522,7 @@ int main(void) {
     test_attacks_are_real();
     test_leap_aim();
     test_hug();
+    test_pit();
     test_charge_and_wall();
     test_tempo_and_phases();
     test_always_acts();
