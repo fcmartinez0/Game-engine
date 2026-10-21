@@ -73,6 +73,14 @@ Thing thing_default(int kind, int col, int row) {
 int arena_gate_col(const Thing *a) { return a->col - 1; }
 int arena_exit_col(const Thing *a) { return a->col + a->w; }
 
+void room_display_name(const char *name, char *out, size_t n) {
+    if (n == 0) return;
+    if (!strcmp(name, "gloamwood")) name = "fran's demo";
+    size_t k = 0;
+    for (; name[k] && k + 1 < n; k++) out[k] = (name[k] >= 'a' && name[k] <= 'z') ? (char)(name[k] - 32) : name[k];
+    out[k] = 0;
+}
+
 bool world_name_ok(const char *s) {
     size_t n = strlen(s);
     if (n == 0 || n > 23) return false;

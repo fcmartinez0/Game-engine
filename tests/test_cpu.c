@@ -94,7 +94,7 @@ static void test_punish(void) {
     CHECK(l3 + 3.0 < l0 && l3 + 5.0 < lb);                     /* a reaction time: ~9 ticks for the sharpest, ~15 at level 0, ~18 for a beginner */
 }
 
-/* A command-grab super (the fighters' HK, 100 meter) is a punish for a sharp fighter. Whole fights between two CPUs with the
+/* The super (100 meter) is a punish for a sharp fighter. Whole fights between two CPUs with the
  * fencer's meter held full: how many supers does it start, by its level? A beginner is "passive, no supers". */
 static int supers_started(int level, int fights) {
     int count = 0;
@@ -305,6 +305,73 @@ static void test_adapts(void) {
     CHECK(with + 3.0 < without);
 }
 
+/* ---- the super is a motion -------------------------------------------------------------------------------------- */
+
+/* The player types forward, down, back, then Light + forward, `per` ticks to a step, with the opponent `dist` px away. Returns
+ * whether the super started (and leaves the fight running so the caller can look at what it does). */
+static bool type_super(int per, int meter, float dist) {
+    settle(120.0f, 120.0f + dist);
+    F.f[0].meter = meter;
+    int super_move = move_named(0, "6246L");
+    GeFightInput p;
+    const int steps[4][2] = { { 1, 0 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };          /* x (toward = +1), y (down = +1) */
+    for (int st = 0; st < 4; st++)
+        for (int t = 0; t < per; t++) {
+            p = none();
+            p.x = steps[st][0]; p.y = steps[st][1];
+            if (st == 3 && t == per - 1) p.pressed = GE_FB_L;
+            tick(p, none());
+        }
+    for (int t = 0; t < 2; t++) tick(none(), none());
+    return F.f[0].state == GE_FS_MOVE && F.f[0].move == super_move;
+}
+
+static void test_super_motion(void) {
+    puts("the super: forward, down, back, then Light + forward starts it (with a full meter, in half a second), and it is a real attack");
+    start_default(21);
+    int sm = move_named(0, "6246L");
+    CHECK(sm >= 0 && !F.f[0].def->moves[sm].is_throw && F.f[0].def->moves[sm].meter_cost == GE_FIGHT_METER);
+    CHECK(sm >= 0 && F.f[1].def->moves[move_named(1, "6246L")].ai == GE_AI_SUPER);
+    int ok_fast = 0, ok_slow = 0, ok_empty = 0, ok_diagonals = 0;
+    for (int n = 0; n < 6; n++) {
+        ok_fast += type_super(6, GE_FIGHT_METER, 200.0f);                 /* 24 ticks in all */
+        ok_slow += type_super(12, GE_FIGHT_METER, 200.0f);                /* 48 ticks: too slow */
+        ok_empty += type_super(6, 99, 200.0f);                            /* one short of a full meter */
+    }
+    /* rolled the way a thumb does it, through the diagonals */
+    settle(120.0f, 320.0f);
+    F.f[0].meter = GE_FIGHT_METER;
+    const int path[7][2] = { { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { 0, 0 }, { 1, 0 } };
+    for (int st = 0; st < 7; st++)
+        for (int t = 0; t < 4; t++) {
+            GeFightInput p = none();
+            p.x = path[st][0]; p.y = path[st][1];
+            if (st == 6 && t == 3) p.pressed = GE_FB_L;
+            tick(p, none());
+        }
+    tick(none(), none()); tick(none(), none());
+    ok_diagonals = F.f[0].state == GE_FS_MOVE && F.f[0].move == sm;
+    /* and when it starts, it hits: 32 of the opponent's health at full damage */
+    settle(120.0f, 120.0f + 40.0f);
+    F.f[0].meter = GE_FIGHT_METER;
+    int hp_before = E(1)->hp;
+    for (int st = 0; st < 4; st++)
+        for (int t = 0; t < 5; t++) {
+            GeFightInput p = none();
+            p.x = st == 0 || st == 3 ? 1 : st == 2 ? -1 : 0; p.y = st == 1 ? 1 : 0;
+            if (st == 3 && t == 4) p.pressed = GE_FB_L;
+            tick(p, none());
+        }
+    for (int t = 0; t < 80; t++) tick(none(), none());
+    int lost = hp_before - E(1)->hp;
+    if (verbose) printf("  started %d of 6 typed in 24 ticks, %d of 6 typed in 48 ticks, %d of 6 without a full meter; through the diagonals: %d; health it took: %d\n",
+                        ok_fast, ok_slow, ok_empty, ok_diagonals, lost);
+    CHECK(ok_fast == 6);
+    CHECK(ok_slow == 0 && ok_empty == 0);
+    CHECK(ok_diagonals == 1);
+    CHECK(lost >= 25);
+}
+
 /* ---- the Paragon's taught techniques ----------------------------------------------------------------- */
 
 /* Every duelist it beats teaches the Paragon a move. Grobb's rock and Silke's dust are projectiles: with both gifts, does it
@@ -418,6 +485,7 @@ int main(void) {
     test_deterministic();
     test_cpu_vs_cpu_finishes();
     test_paragon_throws_what_it_was_taught();
+    test_super_motion();
     test_mirror_is_fair();
     if (inited) ge_fight_free(&F);
     art_free(&spr);

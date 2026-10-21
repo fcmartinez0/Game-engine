@@ -171,6 +171,18 @@ static void test_bad_files(void) {
     world_free(&w);
 }
 
+static void test_room_names_on_screen(void) {
+    puts("what a room is called on screen");
+    char out[32];
+    room_display_name("gloamwood", out, sizeof out);
+    CHECK(!strcmp(out, "FRAN'S DEMO"));                    /* the forest's name in the data stays gloamwood; the player sees this */
+    room_display_name("hollow", out, sizeof out);
+    CHECK(!strcmp(out, "HOLLOW"));
+    char small[6];
+    room_display_name("gloamwood", small, sizeof small);
+    CHECK(!strcmp(small, "FRAN'") && strlen(small) == 5);  /* cut to fit, always terminated */
+}
+
 static void test_editing_helpers(void) {
     puts("room editing helpers");
     static World w;
@@ -319,6 +331,7 @@ int main(void) {
     test_grow_shrink();
     test_builtin_doors();
     test_gloamwood_pinned();
+    test_room_names_on_screen();
     test_friendly_values();
     test_bad_files();
     test_editing_helpers();

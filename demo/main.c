@@ -282,10 +282,7 @@ static void load_world(void) {
 
 static const char *room_title(void) {
     static char t[32];
-    if (!strcmp(room()->name, "gloamwood")) return "THE GLOAMWOOD";
-    size_t i = 0;
-    for (; room()->name[i] && i + 1 < sizeof t; i++) t[i] = (char)toupper((unsigned char)room()->name[i]);
-    t[i] = 0;
+    room_display_name(room()->name, t, sizeof t);
     return t;
 }
 
@@ -1533,7 +1530,7 @@ static void draw_coach(GeImage *fb) {
             "HOLD L: GUARD. GRABBED? TAP L TO BREAK IT",
             "R DASH (BACK+R: BACKDASH)   UP: JUMP",
             "Y+X: THROW, UP CLOSE (ALSO BREAKS A THROW)",
-            "A+B: SUPER, WHEN THE BLUE BAR IS FULL",
+            "FWD, DOWN, BACK, THEN Y+FWD: SUPER (BLUE BAR)",
             "DOWN, DOWN-FWD, FWD + ATTACK: SHOT",
             "FWD, DOWN, DOWN-FWD + ATTACK: RISING CUT",
             "DOWN, DOWN-BACK, BACK + X OR A: RUSH",
@@ -2004,8 +2001,11 @@ static void demo_draw_inner(GeImage *fb) {
             else encounter_draw_reveal(fb, encounter_pattern(duel_thing()->name), g.mode_timer, g.tick);
         }
         if (g.mode == M_BATTLE) {
-            const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B THRUST  L BLOCK  R DASH  A+B SUPER";
-            if (g.fight.phase == GE_FP_INTRO) ge_text_outlined(fb, (SCREEN_W - ge_text_width(hint, 1)) / 2, 200, hint, GE_RGB(220, 210, 240), GE_RGB(20, 14, 30), 1);
+            const char *hint = "Y LIGHT  X MEDIUM  A HEAVY  B THRUST  L BLOCK  R DASH", *hint2 = "SUPER (BLUE BAR FULL): FWD, DOWN, BACK, THEN Y+FWD";
+            if (g.fight.phase == GE_FP_INTRO) {
+                ge_text_outlined(fb, (SCREEN_W - ge_text_width(hint, 1)) / 2, 200, hint, GE_RGB(220, 210, 240), GE_RGB(20, 14, 30), 1);
+                ge_text_outlined(fb, (SCREEN_W - ge_text_width(hint2, 1)) / 2, 212, hint2, GE_RGB(220, 210, 240), GE_RGB(20, 14, 30), 1);
+            }
         }
     } else if (g.mode == M_REPORT && g.mode_timer >= 30) {
         paragon_draw_report(fb, g.facts, g.nfacts, &g.model, g.learn_shown, g.gifts, g.mode_timer);   /* opaque: no world under it */

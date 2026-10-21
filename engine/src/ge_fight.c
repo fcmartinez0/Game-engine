@@ -15,6 +15,8 @@ enum { ST_ANY_GROUND = 0, ST_STAND = 1, ST_CROUCH = 2, ST_EXACT = 3, ST_AIR = 4 
 #define INTRO_TICKS 100
 #define ROUND_TICKS (99 * 60)
 #define MOTION_WINDOW 18
+/* ticks to complete a motion: 18 for the usual three directions, 12 more for each one beyond (a four-direction super gets 30) */
+static int motion_window(int n) { int w = MOTION_WINDOW + (n > 3 ? (n - 3) * 12 : 0); return w < GE_FIGHT_HIST ? w : GE_FIGHT_HIST; }
 
 typedef struct {
     int damage, hitstop, stun, bstun, chip, guard;
@@ -276,7 +278,7 @@ static bool try_moves_now(GeFight *f, int s, bool air, int min_level) {
     for (int i = 0; i < F->def->nmoves; i++) {
         const GeMove *m = &F->def->moves[i];
         if (m->level < min_level || !buttons_hit(F, m->buttons) || !stance_ok(m, dir, air)) continue;
-        if (m->nmotion && !ge_fight_motion_done(F, m->motion, m->nmotion, MOTION_WINDOW)) continue;
+        if (m->nmotion && !ge_fight_motion_done(F, m->motion, m->nmotion, motion_window(m->nmotion))) continue;
         if (!ge_fight_can_start(f, s, i)) continue;
         start_move(f, s, i);
         return true;

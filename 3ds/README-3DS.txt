@@ -37,7 +37,8 @@ CONTROLS - duels (when a duelist spots you)
   R                    dash (hold back + R = backdash)
   Y / X / A            light / medium / heavy
   B                    sword thrust: slow but the longest reach (DOWN + B low, in the air too)
-  A + B together       super (when the meter is full)
+  forward, down, back, then Y + forward   super (when the meter is full;
+                       the four steps within about half a second)
   Y + X together       throw (up close)
   down, down-forward, forward + attack      projectile
   forward, down, down-forward + attack      rising anti-air

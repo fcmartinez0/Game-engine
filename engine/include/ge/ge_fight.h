@@ -24,7 +24,9 @@
  *   "6M"   forward + medium (command normal, list it before 5M)
  *   "236L" special               "623H" special              "S"   super button
  *   "LM"   two buttons together = throw (needs to be close)
- *   "HK"   any chord works the same way (the demo uses H+K for the super)
+ *   "HK"   any chord works the same way
+ *   "6246L" a longer motion works too (forward, down, back, then light + forward: the demo's super; four
+ *          directions get 30 ticks to complete instead of 18)
  *
  * Moves are tried in list order, so put supers and specials first, command
  * normals before plain ones.

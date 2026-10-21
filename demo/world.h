@@ -7,6 +7,7 @@
  * every prop with its place and its settings, that the stage crew can rebuild exactly any night. */
 
 #include "ge/ge_world.h"
+#include <stddef.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -116,6 +117,9 @@ void room_build_tilemap(const Room *r, GeTilemap *m);
 /* one cell as room_build_tilemap makes it (to restore a cell a gate or a crate leaves, or one just painted) */
 void room_cell(const Room *r, int col, int row, uint8_t *type, uint8_t *vis);
 bool world_name_ok(const char *s);                  /* a-z 0-9 - _, 1 to 23 characters */
+/* What a room is called on screen: its name in capitals, except the built-in forest, whose name in the data stays "gloamwood"
+ * (world files and doors refer to it) but which the player sees as FRAN'S DEMO. */
+void room_display_name(const char *name, char *out, size_t n);
 int  arena_gate_col(const Thing *arena);             /* the column before it */
 int  arena_exit_col(const Thing *arena);             /* the column after it */
 

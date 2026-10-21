@@ -136,7 +136,7 @@ static void fighter_def(GeFighterDef *d, const GeSprite *spr, const GeShotDef *s
     d->clip_backdash = C("f_backdash");
 #undef C
     GeMove moves[] = {
-        MV("HK", "f_super", 4, GE_FIGHT_METER, NULL, GE_AI_SUPER),   /* A+B together on a 3DS */
+        MV("6246L", "f_super", 4, GE_FIGHT_METER, NULL, GE_AI_SUPER),   /* forward, down, back, then Light (Y on a 3DS) + forward */
         MV("623H", "f_rise", 3, 0, NULL, GE_AI_ANTIAIR),
         MV("623M", "f_rise", 3, 0, NULL, GE_AI_ANTIAIR),
         MV("236H", "f_shoot", 3, 0, shot, GE_AI_ZONE),

@@ -1049,7 +1049,7 @@ static void keys_commit(void) {
     E.bottom_dirty = true;
     if (E.kb_target == KB_ROOM) {                      /* (OK without typing leaves the name alone: its underscores can't be typed here) */
         char now[24];
-        upper(now, sizeof now, R()->name);
+        room_display_name(R()->name, now, sizeof now);
         if (strcmp(now, E.kb)) rename_room(E.kb);
         return;
     }
@@ -1149,7 +1149,7 @@ static void room_panel_press(int x, int y) {
             E.cx = (at ? at->col : 12) * GE_TILE + 8.0f; E.cy = (at ? at->row : R()->h - 2) * (float)GE_TILE;
             E.panel = P_NONE;
             char nm[24];
-            upper(nm, sizeof nm, R()->name);
+            room_display_name(R()->name, nm, sizeof nm);
             say(nm, GOOD);
         }
         return;
@@ -1189,7 +1189,7 @@ static void draw_room_panel(GeImage *fb) {
     ge_clear(fb, PANEL);
     ge_fill_rect(fb, 0, 0, BW, TB_H, PANEL2, 0);
     char buf[80], nm[24];
-    upper(nm, sizeof nm, R()->name);
+    room_display_name(R()->name, nm, sizeof nm);
     snprintf(buf, sizeof buf, "ROOMS. THIS ONE: %s, %d X %d", nm, R()->w, R()->h);
     ge_text(fb, 6, 8, buf, HI, 1);
     button(fb, BW - 72, 0, 72, TB_H, "CLOSE", GE_RGB(70, 40, 60), TEXT);
@@ -1267,7 +1267,7 @@ static int slots_for(const Thing *t, Slot *s) {
     case TH_DOOR: {
         int d, r = find_door(t->target, &d);
         char nm[24], lab[24];
-        if (r >= 0) { upper(nm, sizeof nm, room_at(r)->name); door_label(&room_at(r)->things[d], lab, sizeof lab); SLOT(S_LINK, "LEADS TO", "%.9s", nm); }
+        if (r >= 0) { room_display_name(room_at(r)->name, nm, sizeof nm); door_label(&room_at(r)->things[d], lab, sizeof lab); SLOT(S_LINK, "LEADS TO", "%.9s", nm); }
         else SLOT(S_LINK, "LEADS TO", "%s", t->target[0] ? "MISSING" : "NOWHERE");
         if (r >= 0) BUTTON(S_GOTO, "GO THROUGH");
         break;
@@ -1309,7 +1309,7 @@ static void slot_apply(int id, int dir, bool first) {
         center_map(room_at(to)->things[d].col, room_at(to)->things[d].row);
         E.cx = room_at(to)->things[d].col * GE_TILE + 8.0f; E.cy = room_at(to)->things[d].row * (float)GE_TILE;
         char nm[24];
-        upper(nm, sizeof nm, R()->name);
+        room_display_name(R()->name, nm, sizeof nm);
         say(nm, GOOD);
         return;
     }
@@ -1803,7 +1803,7 @@ static void draw_palette(GeImage *fb) {
     }
     /* the room, at the end of the row */
     char nm[24];
-    upper(nm, sizeof nm, R()->name);
+    room_display_name(R()->name, nm, sizeof nm);
     nm[10] = 0;
     int x = n * PAL_W + 6;
     if (x < BW - 40) {
@@ -1930,7 +1930,7 @@ void editor_draw_top(GeImage *fb) {
             if (t->kind == TH_DOOR) {
                 int d, to = find_door(t->target, &d);
                 door_label(t, dl, sizeof dl);
-                if (to >= 0) { upper(nm, sizeof nm, room_at(to)->name); snprintf(lab, sizeof lab, "DOOR > %s", nm); }
+                if (to >= 0) { room_display_name(room_at(to)->name, nm, sizeof nm); snprintf(lab, sizeof lab, "DOOR > %s", nm); }
                 else snprintf(lab, sizeof lab, "%s > %s", dl, t->target[0] ? "MISSING" : "NOWHERE");
             } else if (t->kind == TH_SIGN) snprintf(lab, sizeof lab, "%.24s%s", t->text, strlen(t->text) > 24 ? ".." : "");
             else snprintf(lab, sizeof lab, "%s", t->name);
@@ -1984,7 +1984,7 @@ void editor_draw_top(GeImage *fb) {
         snprintf(head, sizeof head, "%s: %s", bi >= 0 ? BRUSHES[bi].name : thing_kind_name(r->things[E.sel].kind), bi >= 0 ? BRUSHES[bi].desc : "");
     } else if (E.eraser) snprintf(head, sizeof head, "ERASER: TAP A PIECE TO REMOVE IT, OR RUB OUT TILES");
     else if (E.brush >= 0) snprintf(head, sizeof head, "%s: %s", BRUSHES[E.brush].name, BRUSHES[E.brush].desc);
-    else snprintf(head, sizeof head, "EDITING %s. PICK A BRUSH BELOW THE MAP", r->name);
+    else { char rn[32]; room_display_name(r->name, rn, sizeof rn); snprintf(head, sizeof head, "EDITING %s. PICK A BRUSH BELOW THE MAP", rn); }
     char up[96];
     upper(up, sizeof up, head);
     top_line(fb, 0, up, HI);
