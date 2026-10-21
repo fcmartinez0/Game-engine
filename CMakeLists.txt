@@ -23,7 +23,7 @@ endif()
 # compiled straight into each executable (a static library would create a
 # circular dependency with the core).
 find_package(SDL2 QUIET)
-set(DEMO_SRC demo/main.c demo/art.c demo/backdrop.c demo/chars.c demo/world.c demo/puzzle.c demo/ai.c demo/editor.c demo/devlog.c demo/paragon.c demo/encounter.c demo/mods.c)
+set(DEMO_SRC demo/main.c demo/art.c demo/backdrop.c demo/chars.c demo/world.c demo/puzzle.c demo/ai.c demo/editor.c demo/devlog.c demo/paragon.c demo/encounter.c demo/mods.c demo/intro_img.c)
 
 add_executable(demo_headless ${DEMO_SRC} platform/null.c)
 target_compile_definitions(demo_headless PRIVATE DEMO_HEADLESS)
@@ -67,6 +67,7 @@ add_executable(boss_tests tests/test_boss.c demo/ai.c demo/world.c demo/art.c de
 target_link_libraries(boss_tests ge)
 add_test(NAME boss_tests COMMAND boss_tests)
 add_test(NAME boss_flow COMMAND sh ${CMAKE_SOURCE_DIR}/tests/boss_flow.sh $<TARGET_FILE:demo_headless>)
+add_test(NAME intro COMMAND sh ${CMAKE_SOURCE_DIR}/tests/intro.sh $<TARGET_FILE:demo_headless>)
 add_executable(cpu_tests tests/test_cpu.c demo/paragon.c demo/encounter.c demo/world.c demo/art.c demo/backdrop.c demo/chars.c)
 target_link_libraries(cpu_tests ge)
 add_test(NAME cpu_tests COMMAND cpu_tests)

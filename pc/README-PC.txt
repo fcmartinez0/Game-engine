@@ -11,6 +11,8 @@ WINDOWS (this zip)
   The game saves next to gloamwood.exe: gloamwood_settings.txt, gloamwood_profile.txt
   (what the final boss has learned about you) and the mods folder (your world.txt).
   Quit with ESC or by closing the window.
+  A picture plays for three seconds when the game starts; after the first
+  second any of A, B, X, Y or START (the keys listed below) skips it.
 
 LINUX / MAC (build it yourself, it takes a minute)
   Linux:  sudo apt install cmake gcc libsdl2-dev        (or your distro's names)

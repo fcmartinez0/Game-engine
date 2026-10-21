@@ -7,6 +7,8 @@ INSTALL
      You should end up with:  SD:/3ds/gloamwood/gloamwood.3dsx
   2. Put the card back, open the Homebrew Launcher, pick Fran's demo.
   Quit with START + SELECT (that also writes the end-of-session summary).
+  A picture plays for three seconds when the game starts; after the first
+  second any of A, B, X, Y or START skips it.
 
 CONTROLS - exploring
   D-pad / Circle Pad   move, aim up/down

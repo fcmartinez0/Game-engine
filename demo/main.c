@@ -6,6 +6,7 @@
 #include "devlog.h"
 #include "puzzle.h"
 #include "ai.h"
+#include "intro_img.h"
 #include "editor.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
@@ -108,6 +109,8 @@ typedef struct {
     int msg_timer;
 
     bool autoplay, low_detail, god;
+    bool intro_on;                        /* the three-second picture before the game starts is showing */
+    int intro_t;                          /* ticks it has shown for */
     const char *layers_path;
     int warp_col;
     GeInput bot_in;
@@ -1641,9 +1644,18 @@ static bool draw_bottom(void *user, GeImage *fb) {
     return true;
 }
 
+#define INTRO_TICKS 180       /* three seconds at 60 ticks a second */
+#define INTRO_FADE 24
+
 static void demo_update(void *user, const GeInput *in) {
     (void)user;
     uint64_t t0 = ge_plat_time_us();
+    if (g.intro_on) {                                      /* the picture: the game waits behind it */
+        g.intro_t++;
+        bool skip = g.intro_t > 60 && (in->pressed & (GE_BTN_A | GE_BTN_B | GE_BTN_X | GE_BTN_Y | GE_BTN_START));   /* after the first second a press moves on */
+        if (g.intro_t >= INTRO_TICKS || skip) { g.intro_on = false; LOG("intro over after %d ticks%s", g.intro_t, skip ? " (skipped)" : ""); }
+        return;
+    }
     if (g.editing) {                                       /* the editor has both screens; the game waits */
         if (editor_update(in) == ED_PLAY) start_test();
         g.update_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.update_ms) * 0.1f;
@@ -1963,7 +1975,26 @@ static void demo_draw(void *user, GeImage *fb) {
     }
 }
 
+/* The picture, in the middle of the top screen on a plain colour from its own average, fading in and out of black. */
+static void draw_intro(GeImage *fb) {
+    ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_RGB(g_intro_bg[0], g_intro_bg[1], g_intro_bg[2]), 0);
+    int x0 = (fb->w - INTRO_W) / 2, y0 = (fb->h - INTRO_H) / 2;
+    if (x0 >= 0 && y0 >= 0)
+        for (int y = 0; y < INTRO_H; y++) {
+            uint32_t *row = fb->px + (size_t)(y0 + y) * (size_t)fb->w + (size_t)x0;
+            const unsigned short *src = g_intro_pix + y * INTRO_W;
+            for (int x = 0; x < INTRO_W; x++) {
+                unsigned c = src[x], r = (c >> 11) & 31u, gr = (c >> 5) & 63u, b = c & 31u;
+                row[x] = GE_RGB((r << 3) | (r >> 2), (gr << 2) | (gr >> 4), (b << 3) | (b >> 2));
+            }
+        }
+    int t = g.intro_t, fade = t < INTRO_FADE ? 255 - t * 255 / INTRO_FADE : t > INTRO_TICKS - INTRO_FADE ? (t - (INTRO_TICKS - INTRO_FADE)) * 255 / INTRO_FADE : 0;
+    if (fade > 255) fade = 255;
+    if (fade > 0) ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(fade, 0, 0, 0), 0);
+}
+
 static void demo_draw_inner(GeImage *fb) {
+    if (g.intro_on) { draw_intro(fb); return; }
     if (g.editing) { ge_world_draw(&g.world, fb); editor_draw_top(fb); return; }
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
@@ -2095,6 +2126,7 @@ int main(int argc, char **argv) {
     g.difficulty = -1;   /* new players start on easy; the setting is saved once changed */
     g_log = getenv("GLOAM_LOG") != NULL;
     const char *dump_dir = ".";
+    bool no_intro = false, force_intro = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--autoplay")) g.autoplay = true;
         else if (!strcmp(argv[i], "--low-detail")) g.low_detail = true;
@@ -2108,6 +2140,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--difficulty") && i + 1 < argc) { g.difficulty = ge_clampi(atoi(argv[++i]), -1, 1); g.difficulty_set = true; }
         else if (!strcmp(argv[i], "--no-mods")) g.no_mods = true;                                  /* ignore the mods folder */
         else if (!strcmp(argv[i], "--no-hints")) g.no_hints = true;                                /* benchmarks: skip the opening controls text */
+        else if (!strcmp(argv[i], "--no-intro")) no_intro = true;                                  /* skip the picture before the game */
+        else if (!strcmp(argv[i], "--intro")) force_intro = true;                                  /* ...or show it in a scripted run too (tests) */
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc) paragon_set_profile_path(argv[++i]);
         else if (!strcmp(argv[i], "--paragon")) g.to_paragon = true;                              /* straight to its hall */
@@ -2132,6 +2166,12 @@ int main(int argc, char **argv) {
     g.console = "DESKTOP";
 #endif
     g.auto_low = g.low_detail;
+    /* The picture plays on every normal start; not for a scripted run (autoplay, a warp, a start room, taps), which wants the game at once. */
+    bool scripted = g.autoplay || g.warp_col > 0 || g.to_paragon || g.start_room || g.export_world;
+#ifdef DEMO_HEADLESS
+    scripted = scripted || g_ntaps || g_ntouches;
+#endif
+    g.intro_on = !no_intro && (force_intro || !scripted);
 #ifdef DEMO_HEADLESS
     ge_null_configure(frames, dump_every, dump_dir, g_ntaps ? tap_script : NULL, NULL);
     if (g_ntouches) ge_null_set_touch(touch_script);
