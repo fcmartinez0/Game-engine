@@ -39,7 +39,7 @@ void paragon_build_def(const Chars *c, Sprites *s, unsigned gifts, GeFighterDef 
     int n = out->nmoves;
     if (gifts & GIFT_GROBB) out->moves[n++] = (GeMove){ .input = "236S", .clip = "f_shoot", .level = 3, .shot = &c->f_rock, .ai = GE_AI_ZONE };
     if (gifts & GIFT_SILKE) out->moves[n++] = (GeMove){ .input = "214S", .clip = "f_shoot", .level = 3, .shot = &c->f_dust, .ai = GE_AI_ZONE };
-    if (gifts & GIFT_THORNWARDEN) out->moves[n++] = (GeMove){ .input = "623S", .clip = "f_charge", .level = 3, .ai = GE_AI_RUSH };
+    if (gifts & GIFT_AVERY) out->moves[n++] = (GeMove){ .input = "623S", .clip = "f_charge", .level = 3, .ai = GE_AI_RUSH };
     out->nmoves = n;
     ge_fighter_def_finish(out, spr);
 }

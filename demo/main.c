@@ -1,4 +1,4 @@
-/* Gloamwood: a Silksong-style platformer where some enemies challenge you to
+/* Fran's demo (code name: Gloamwood): a Silksong-style platformer where some enemies challenge you to
  * a fighting-game duel. Everything game-specific lives in demo/; the engine
  * knows nothing about benches, masks or goblins. */
 
@@ -101,7 +101,7 @@ typedef struct {
     int confirm_item, confirm_timer;      /* a pending "tap again to confirm" */
 
     int boss_spawn;
-    BossBrain boss;                       /* Thornwarden's mind (ai.h) */
+    BossBrain boss;                       /* Avery The Cat's mind (ai.h) */
     bool boss_engaged;
 
     char msg[80];
@@ -210,7 +210,7 @@ static GeCpuStyle duel_cpu_style(const Thing *t) {
     for (int i = 0; i < 6; i++, h >>= 5) v[i] = ge_clampf(v[i] + ((float)(h & 15u) - 7.5f) * 0.02f, 0.0f, 1.0f);   /* +-0.15 */
     return (GeCpuStyle){ v[0], v[1], v[2], v[3], v[4], v[5] };
 }
-/* how long Thornwarden rests between attacks: easy gives you room to breathe, hard very little */
+/* how long Avery The Cat rests between attacks: easy gives you room to breathe, hard very little */
 static float boss_tempo(void) { return g.difficulty < 0 ? 1.35f : g.difficulty > 0 ? 0.8f : 1.0f; }
 static float duel_cpu_damage(void) { return g.difficulty < 0 ? 0.5f : g.difficulty > 0 ? 1.1f : 0.75f; }
 static float duel_player_damage(void) { return g.difficulty < 0 ? 1.4f : g.difficulty > 0 ? 1.0f : 1.15f; }
@@ -616,7 +616,7 @@ static void enemy_ai(int idx) {
     ai_think(w, idx, p, it);
 }
 
-/* ---- the boss: Thornwarden ---------------------------------------------- */
+/* ---- the boss: Avery The Cat ------------------------------------------- */
 
 static void boss_ai(int idx) {
     GeWorld *w = &g.world;
@@ -639,7 +639,7 @@ static void boss_ai(int idx) {
                 w->cam.lock_x0 = (float)(a->col - 1) * GE_TILE;
                 w->cam.lock_x1 = (float)(a->col + a->w) * GE_TILE;
             }
-            say("THORNWARDEN", 150);
+            say("AVERY THE CAT", 150);
             LOG("boss engaged");
             ge_world_shake(w, 6.0f);
         }
@@ -841,12 +841,14 @@ static void coach_reset(void);
 /* What the Paragon has taken so far: one technique per duelist (and the boss) beaten. */
 static unsigned earned_gifts(void) {
     static const struct { const char *name; unsigned gift; } T[] = {
-        { "GROBB", GIFT_GROBB }, { "SILKE", GIFT_SILKE }, { "MOSSHIDE", GIFT_MOSSHIDE }, { "THE CHAMPION", GIFT_CHAMPION }, { "THORNWARDEN", GIFT_THORNWARDEN } };
+        { "GROBB", GIFT_GROBB }, { "SILKE", GIFT_SILKE }, { "MOSSHIDE", GIFT_MOSSHIDE }, { "THE CHAMPION", GIFT_CHAMPION } };
     unsigned gifts = 0;
     for (int r = 0; r < g.wd.nrooms; r++)          /* whichever room they were in */
         for (int i = 0; i < g.wd.rooms[r].nthings; i++) {
             const Thing *t = &g.wd.rooms[r].things[i];
-            if (g.beaten[r][i] && (t->kind == TH_DUELIST || t->kind == TH_BOSS))
+            if (!g.beaten[r][i]) continue;
+            if (t->kind == TH_BOSS) gifts |= GIFT_AVERY;                  /* (whatever the boss is called in this world) */
+            else if (t->kind == TH_DUELIST)
                 for (unsigned k = 0; k < sizeof T / sizeof T[0]; k++) if (!strcmp(t->name, T[k].name)) gifts |= T[k].gift;
         }
     return gifts;
@@ -865,7 +867,7 @@ static void begin_battle(void) {
         opp = &g.paragon_def;
     }
     ge_fight_init(&g.fight, &g.ch.f_hero, &g.spr.hero, opp, duel_sprite(s->style), &g.world, 1000 + g.tick);
-    g.fight.names[0] = "WREN";
+    g.fight.names[0] = "MIKOSHI";
     g.fight.names[1] = s->name;
     if (final) g.fight.world.backdrop_pattern = encounter_pattern(s->name);   /* only the Paragon fights inside its pattern */
     if (!final && room()->backdrop == BD_CAVE) {     /* a cave's duels stand on stone, not grass */
@@ -930,7 +932,7 @@ static GeFightInput fight_input(const GeInput *in) {
 static void end_battle(void) {
     GeEntity *p = hero();
     int ent = duel_ent();
-    LOG("duel over: %s vs WREN -> %s (rounds %d-%d), duel ran at %.1f fps avg, worst frame %.1f ms",
+    LOG("duel over: %s vs MIKOSHI -> %s (rounds %d-%d), duel ran at %.1f fps avg, worst frame %.1f ms",
         duel_thing()->name, g.duel_result == 0 ? "WON" : "LOST", g.fight.f[0].wins, g.fight.f[1].wins,
         g.duel_perf.dt_sum > 0 ? g.duel_perf.frames / (g.duel_perf.dt_sum / 1000.0) : 0.0, g.duel_perf.dt_max);
     LOG("  your defence: blocked %d, hit at the wrong height while blocking %d, hit while not blocking %d, thrown %d",
@@ -1148,7 +1150,7 @@ static void apply_detail(void) {
 static void set_logging(bool on) {
     g.log_wanted = on;
     if (on && !devlog_is_open() && devlog_open()) {
-        devlog("session start: Gloamwood, built %s %s, console %s, detail %s, difficulty %s", __DATE__, __TIME__, g.console,
+        devlog("session start: Fran's demo, built %s %s, console %s, detail %s, difficulty %s", __DATE__, __TIME__, g.console,
                g.low_detail ? "low" : "full", g.difficulty < 0 ? "easy" : g.difficulty > 0 ? "hard" : "normal");
         devlog("a perf line every 10 s: fps avg/worst, share of frames slower than 60 fps, update/draw/present ms (present = sending the picture to the screen; vsync wait = waiting for the screen's next refresh: time to spare when the frame was on time)");
         devlog_flush();
@@ -1509,7 +1511,7 @@ static void draw_coach(GeImage *fb) {
     ge_fill_rect(fb, 0, 0, fb->w, 20, paragon ? GE_RGB(46, 36, 20) : GE_RGB(34, 22, 58), 0);
     ge_fill_rect(fb, 0, 20, fb->w, 1, paragon ? GE_RGB(240, 196, 90) : GE_RGB(190, 120, 255), 0);
     char buf[96];
-    snprintf(buf, sizeof buf, "WREN VS %s", g.fight.names[1] ? g.fight.names[1] : "?");
+    snprintf(buf, sizeof buf, "MIKOSHI VS %s", g.fight.names[1] ? g.fight.names[1] : "?");
     ge_text_outlined(fb, 6, 6, buf, paragon ? GE_RGB(255, 220, 140) : GE_RGB(220, 190, 255), ink, 1);
     ge_text(fb, fb->w - 6 - ge_text_width("SELECT: DEV MENU", 1), 7, "SELECT: DEV MENU", dim, 1);
     int y = 26;
@@ -1983,7 +1985,7 @@ static void demo_draw_inner(GeImage *fb) {
         if (g.mode == M_TRANS_IN) { draw_alert(fb); draw_trans_in(fb, g.mode_timer); }
         if (g.mode == M_REPORT) paragon_draw_report(fb, g.facts, g.nfacts, &g.model, g.learn_shown, g.gifts, g.mode_timer);
         if (g.mode == M_VICTORY && g.mode_timer > 60) {
-            const char *a = "THORNWARDEN FELLED", *b = "THE FAR DOOR HAS OPENED";
+            const char *a = "AVERY THE CAT FELLED", *b = "THE FAR DOOR HAS OPENED";
             ge_text_outlined(fb, (SCREEN_W - ge_text_width(a, 2)) / 2, 90, a, GE_RGB(255, 220, 160), GE_RGB(20, 14, 30), 2);
             ge_text_outlined(fb, (SCREEN_W - ge_text_width(b, 1)) / 2, 112, b, GE_RGB(230, 220, 250), GE_RGB(20, 14, 30), 1);
         }
@@ -2144,6 +2146,6 @@ int main(int argc, char **argv) {
     }
     GeGame game = { .user = &g, .init = demo_init, .update = demo_update, .draw = demo_draw, .shutdown = demo_shutdown,
                     .draw_bottom = draw_bottom };
-    GePlatformConfig cfg = { .title = "Gloamwood", .width = SCREEN_W, .height = SCREEN_H, .scale = 3 };
+    GePlatformConfig cfg = { .title = "Fran's demo", .width = SCREEN_W, .height = SCREEN_H, .scale = 3 };
     return ge_run(&game, &cfg);
 }

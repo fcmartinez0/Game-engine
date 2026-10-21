@@ -158,6 +158,17 @@ static void test_bad_files(void) {
     rc = world_load(&w, tmp_path("ok"), err, sizeof err);
     CHECK(rc == 0 && w.nrooms == 1 && w.rooms[0].backdrop == BD_CAVE && w.rooms[0].nthings == 1 && w.rooms[0].things[0].ch == 2);
     world_free(&w);
+    /* the boss's old name, in a world file saved before it was renamed, loads under the new one; a name someone chose stays */
+    write_file(tmp_path("oldboss"), "gloamwood-world 1\nroom r 25 15 cave\ntiles\n"
+                                    ".........................\n.........................\n.........................\n.........................\n"
+                                    ".........................\n.........................\n.........................\n.........................\n"
+                                    ".........................\n.........................\n.........................\n.........................\n"
+                                    ".........................\n.........................\n#########################\nend\n"
+                                    "thing boss 12 13 name=\"THORNWARDEN\"\nthing boss 18 13 name=\"MY OWN\"\nendroom\n");
+    rc = world_load(&w, tmp_path("oldboss"), err, sizeof err);
+    CHECK(rc == 0 && w.rooms[0].nthings == 2 && !strcmp(w.rooms[0].things[0].name, "AVERY THE CAT") && !strcmp(w.rooms[0].things[1].name, "MY OWN"));
+    CHECK(!strcmp(thing_default(TH_BOSS, 0, 0).name, "AVERY THE CAT"));
+    world_free(&w);
 }
 
 static void test_editing_helpers(void) {

@@ -52,7 +52,7 @@ It perfectly executes the plan it chooses, but the *plan* can be wrong. When it 
 | Silke | Ground-dust projectile; faster walk and dash |
 | Mosshide | Hits harder; much more health |
 | The Champion | Starts the fight with a full super meter; faster reactions |
-| Thornwarden | Armoured rush |
+| Avery The Cat | Armoured rush |
 
 * **Losing teaches it too.** Every duel, won or lost, goes into the model.
 
@@ -78,16 +78,16 @@ So the best possible player outcome is to take it to 1 HP and watch the finisher
 
 All art in the demo is drawn by code and will be replaced by artists. The *design* below is what the art should keep.
 
-* **Silhouette first.** Same height and build as Wren, the player's hero, on purpose: it is what you could be. Everything else differs.
+* **Silhouette first.** Same height and build as Mikoshi, the player's hero, on purpose: it is what you could be. Everything else differs.
 * **Head:** a smooth porcelain mask with no mouth or nose. One vertical gold slit for an eye, at the front. Three thin spines sweep back like a crown. A gold ring (a halo) hangs behind the head. Nothing else in the game has a halo, so it reads at any size.
 * **Body:** the colour of the space between stars (deep indigo), with a cloak that trails to the floor. It is outlined in dim gold where everyone else has a black outline, so it stays readable on any background.
-* **Weapon:** the longest blade in the game, thin and gold, held in the same grip as Wren's needle-sword.
-* **Moves:** Wren's move list, with its own frame data (more reach, one tick quicker). The demo's duelists each give it one more technique when you beat them (section 4).
+* **Weapon:** the longest blade in the game, thin and gold, held in the same grip as Mikoshi's needle-sword.
+* **Moves:** Mikoshi's move list, with its own frame data (more reach, one tick quicker). The demo's duelists each give it one more technique when you beat them (section 4).
 * **Motif: the eye.** Its slit eye, the great window behind it, and its duel pattern (a field of eyes) all say one thing: *it has been watching.*
 
 ## 6c. The Still Hall (the final area)
 
-Past Thornwarden's far door: a long, low, symmetrical stone hall, the only indoor room in the demo.
+Past Avery The Cat's far door: a long, low, symmetrical stone hall, the only indoor room in the demo.
 
 | Element | Why |
 |---|---|

@@ -65,7 +65,7 @@ int chars_build(Chars *c, Sprites *s);  /* then the defs (clip lookups by name) 
 #include "ge/ge_model.h"
 #include "ge/ge_paragon.h"
 
-enum { GIFT_GROBB = 1, GIFT_SILKE = 2, GIFT_MOSSHIDE = 4, GIFT_CHAMPION = 8, GIFT_THORNWARDEN = 16 };
+enum { GIFT_GROBB = 1, GIFT_SILKE = 2, GIFT_MOSSHIDE = 4, GIFT_CHAMPION = 8, GIFT_AVERY = 16 };
 #define PARAGON_CLOCK_TICKS (75 * 60)           /* the finisher fires after this long, whatever happens */
 
 /* The Paragon's fighter def: the hero's move list, undying, plus what it took from each duelist beaten. */

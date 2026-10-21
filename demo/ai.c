@@ -301,7 +301,7 @@ void ai_provoke(int idx, const GeEntity *hero) {
     if (m->mode == AM_PATROL || m->mode == AM_SEARCH) { m->mode = AM_CHASE; m->timer = 0; }
 }
 
-/* ---- the boss: Thornwarden ---------------------------------------------------------------------------------- */
+/* ---- the boss: Avery The Cat ---------------------------------------------------------------------------------- */
 
 static const char *const BOSS_MODES[] = { "asleep", "intro", "idle", "swing", "charge", "leap", "throw", "dead", "dazed" };
 

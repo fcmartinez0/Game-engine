@@ -283,7 +283,7 @@ int mods_export(Sprites *s, Chars *c) {
               "              You can leave it out: then your .anim uses the built-in sheet.\n"
               "  NAME.moves  duel move list and tuning (fighters only); the comments in it explain the format.\n\n"
               "Keep every clip name the built-in .anim has (the game looks them up by name); you can add more.\n"
-              "hero = Wren, brawler = Grobb and Mosshide, fencer = Silke and the Champion, paragon, warden = the boss.\n"
+              "hero = Mikoshi, brawler = Grobb and Mosshide, fencer = Silke and the Champion, paragon, warden = the boss.\n"
               "Then use RELOAD MODS in the dev menu (bottom screen). Problems are listed there and in the play log.\n", f);
         fclose(f);
     }

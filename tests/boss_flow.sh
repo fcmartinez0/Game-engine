@@ -1,5 +1,5 @@
 #!/bin/sh
-# Thornwarden through the real game loop (demo/main.c), headless: the things only the whole game can get wrong.
+# Avery The Cat through the real game loop (demo/main.c), headless: the things only the whole game can get wrong.
 #   boss_flow.sh <demo_headless>
 bin="$1"
 tmp="$(mktemp -d)"

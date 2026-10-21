@@ -12,7 +12,7 @@
  * guard dog on a leash it can read: it notices you, goes where it last saw you, gives up after a while, and
  * can be fooled by a wall.
  *
- * The duelists have their own mind (engine/src/ge_cpu.c). The boss, Thornwarden, has one here too (below). */
+ * The duelists have their own mind (engine/src/ge_cpu.c). The boss, Avery The Cat, has one here too (below). */
 
 #include "ge/ge_world.h"
 
@@ -27,7 +27,7 @@ bool ai_line_clear(const GeTilemap *m, float x0, float y0, float x1, float y1);
 const char *ai_mode_name(int idx, int kind);
 
 
-/* ---- the boss: Thornwarden ---------------------------------------------------------------------------------
+/* ---- the boss: Avery The Cat ---------------------------------------------------------------------------------
  * One mind for the one big fight. It has four moves (a sweeping swing, a charge across the arena, a leap that sends
  * shockwaves along the floor, a volley of spears) and picks between them from where you are and what you have been
  * doing: it hits a hero who stops to heal, it won't charge at someone who keeps jumping, it charges and leaps at one who

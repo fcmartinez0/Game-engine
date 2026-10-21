@@ -1,5 +1,5 @@
-GLOAMWOOD - playable on a PC
-============================
+FRAN'S DEMO - playable on a PC
+==============================
 
 WINDOWS (this zip)
   1. Unzip it anywhere (a folder you can write to: your Desktop or Documents,

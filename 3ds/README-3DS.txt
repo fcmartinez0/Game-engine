@@ -1,10 +1,11 @@
-GLOAMWOOD - playtest build for Nintendo 3DS (custom firmware)
-=============================================================
+FRAN'S DEMO - playtest build for Nintendo 3DS (custom firmware)
+==============================================================
+(the folder and file names on the card still say gloamwood, so your saves, log and mods stay where they were)
 
 INSTALL
   1. Copy the "3ds" folder from this zip onto the root of your SD card.
      You should end up with:  SD:/3ds/gloamwood/gloamwood.3dsx
-  2. Put the card back, open the Homebrew Launcher, pick GLOAMWOOD.
+  2. Put the card back, open the Homebrew Launcher, pick Fran's demo.
   Quit with START + SELECT (that also writes the end-of-session summary).
 
 CONTROLS - exploring
@@ -150,7 +151,7 @@ THE PLAY LOG - please send this back
   when you quit.
   Copy it to a computer and upload it.
 
-THE PARAGON (final boss, past Thornwarden's far door)
+THE PARAGON (final boss, past Avery The Cat's far door)
   It learns how YOU fight, from every duel, and remembers between sessions:
   File:  SD:/3ds/gloamwood/profile.txt
   It cannot be beaten in this demo - the point is to see what it learned.

@@ -1,4 +1,4 @@
-/* Thornwarden's mind (demo/ai.c, boss_think), played in a small arena with the game's own boss, hero, art and physics.
+/* Avery The Cat's mind (demo/ai.c, boss_think), played in a small arena with the game's own boss, hero, art and physics.
  * The hero is unhurtable and does only what a test tells them (stand, jump, heal, run, cling); we count what the boss
  * does about it. Worlds are seeded, so a count is a fact about the code, not luck. Set BOSSDBG=1 to print numbers. */
 

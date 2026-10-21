@@ -60,7 +60,7 @@ Thing thing_default(int kind, int col, int row) {
     case TH_ARENA: t.w = 22; t.h = 3; break;
     case TH_HALL:  t.w = 34; t.h = 6; break;
     case TH_DUELIST: snprintf(t.name, sizeof t.name, "DUELIST"); t.level = 1; break;
-    case TH_BOSS:  snprintf(t.name, sizeof t.name, "THORNWARDEN"); break;
+    case TH_BOSS:  snprintf(t.name, sizeof t.name, "AVERY THE CAT"); break;
     case TH_RELIC: snprintf(t.name, sizeof t.name, "RELIC"); break;
     case TH_DOOR:  snprintf(t.name, sizeof t.name, "door"); break;
     case TH_MARK:  snprintf(t.name, sizeof t.name, "MARK"); break;
@@ -715,6 +715,7 @@ int world_load(World *w, const char *path, char *err, int errlen) {
                 else if (!strcmp(key, "text")) copy_str(t.text, sizeof t.text, val);
             }
             if (t.kind == TH_DOOR && t.name[0] && !world_name_ok(t.name)) FAIL("door id '%s': use a-z, 0-9, - and _", t.name);
+            if (t.kind == TH_BOSS && !strcmp(t.name, "THORNWARDEN")) copy_str(t.name, sizeof t.name, "AVERY THE CAT");   /* (the boss's old name, in world files saved before it was renamed) */
             if (room_add_thing(r, t) < 0) FAIL("room %s has too many things (at most %d)", r->name, ROOM_MAX_THINGS);
         } else if (strcmp(word, "gloamwood-world") != 0) {
             FAIL("'%s' is not something a world file says", word);

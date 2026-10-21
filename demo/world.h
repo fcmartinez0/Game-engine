@@ -32,7 +32,7 @@ typedef enum {
     TH_SIGN,        /* text shown when you stand near it */
     TH_CRAWLER, TH_BAT, TH_SPITTER, TH_GRUNT,
     TH_DUELIST,     /* challenges you to a duel: name, style (brawler/fencer/paragon), level, rounds */
-    TH_BOSS,        /* Thornwarden; fought inside an arena */
+    TH_BOSS,        /* Avery The Cat; fought inside an arena */
     TH_ARENA,       /* the boss room: w tiles wide from col; its gate is the column before it, its far door the one after */
     TH_HALL,        /* the Paragon's hall: indoors, w tiles wide from col, h tiles high above row */
     TH_LEVER,       /* input: hit it to switch its wire on (mode: once / toggle / timed) */
