@@ -257,7 +257,8 @@ int chars_build(Chars *c, Sprites *s) {
     h->gravity = 0.4f; h->max_fall = 7.5f; h->jump_vel = 6.8f; h->jump_cut_vel = 2.4f;
     h->coyote_ticks = 6; h->jump_buffer_ticks = 7;
     h->air_jumps = 1; h->air_jump_vel = 6.0f;
-    h->wall_slide_speed = 1.2f; h->wall_jump_vx = 2.9f; h->wall_jump_vy = 6.3f; h->wall_jump_lock = 9;
+    h->wall_slide_speed = 1.2f; h->wall_jump_vx = 2.9f; h->wall_jump_vy = 6.3f; h->wall_jump_lock = 4;
+    h->wall_hop_vx = 1.0f; h->wall_chain_decay = 0.78f; h->wall_grace_ticks = 5; h->wall_boost_ticks = 14;
     h->dash_speed = 4.8f; h->dash_ticks = 10; h->dash_cooldown = 24; h->air_dash = true;
     h->invuln_ticks = 70; h->dead_ticks = 80; h->body_w = 10; h->body_h = 22;
     h->meter_max = 99; h->meter_per_hit = 11; h->skill_cost = 33; h->channel_cost = 33; h->channel_ticks = 55;

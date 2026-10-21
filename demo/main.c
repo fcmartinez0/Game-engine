@@ -1838,9 +1838,11 @@ static void draw_hud(GeImage *fb) {
     if (g.tick < 420 && !g.no_hints && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
         const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   R DASH";
         const char *l2 = "X THROW NEEDLE   A SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
+        const char *l3 = "JUMP OFF A WALL: AWAY = KICK   NOTHING = HOP   TOWARD = CLIMB";
         int a = g.tick > 360 ? (420 - (int)g.tick) * 255 / 60 : 255;
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l1, 1)) / 2, 44, l1, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l2, 1)) / 2, 55, l2, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
+        ge_text_outlined(fb, (SCREEN_W - ge_text_width(l3, 1)) / 2, 66, l3, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
     }
     if (g.msg_timer > 0) {
         int scale = strlen(g.msg) < 16 ? 2 : 1;

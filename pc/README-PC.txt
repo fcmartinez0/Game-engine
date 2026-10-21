@@ -30,7 +30,9 @@ THE WINDOW
 
 KEYS (a gamepad works too: buttons by position, like a 3DS)
   Move            arrow keys or WASD
-  B  jump         Z or Space  (again in the air = double jump; off walls = wall jump)
+  B  jump         Z or Space  (again in the air = double jump)
+                              off a wall the arrows pick the jump: away = a kick out,
+                              nothing = a hop straight up, toward the wall = climb it
   Y  slash        X or J      (hold UP = up-slash, DOWN in the air = pogo)
   R  dash         E or O
   X  needle       V or I

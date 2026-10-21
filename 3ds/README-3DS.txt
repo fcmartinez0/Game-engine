@@ -12,7 +12,11 @@ INSTALL
 
 CONTROLS - exploring
   D-pad / Circle Pad   move, aim up/down
-  B                    jump (again in the air = double jump, off walls = wall jump)
+  B                    jump (again in the air = double jump)
+                       OFF A WALL the D-pad picks the jump: away from the wall =
+                       a kick out, nothing = a hop straight up, toward the wall =
+                       climb up along it and over a ledge. (Hold toward the wall
+                       to slide down it.) A press a hair late or early still counts.
   Y                    slash   (hold UP = up-slash, DOWN in the air = pogo down-slash)
   R                    dash (works in the air too, you can't be hurt mid-dash)
   X                    throw a needle (3 charges, they refill)

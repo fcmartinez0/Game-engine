@@ -194,7 +194,7 @@ static void test_moveset(void) {
     for (int i = 0; i < 12; i++) { w.intents[a].move_x = 1; run(&w, 1); }
     CHECK(w.ents[a].state == GE_ST_WALL && w.ents[a].vel.y <= 1.0f + 0.001f);
     CHECK(w.ents[a].air_jumps_left == 1 && w.ents[a].facing == -1); /* refilled, facing away from the wall */
-    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });         /* away from the wall: the kick */
     CHECK(w.ents[a].vel.x < -2.0f && w.ents[a].vel.y < -5.0f && w.ents[a].wall_lock > 0);
     ge_world_free(&w);
 
@@ -278,6 +278,115 @@ static void test_moveset(void) {
     press(&w, a, (GeIntent){ .attack_pressed = true });
     run(&w, 10);
     CHECK(w.ents[a].pos.x < 99.0f && w.ents[vic].hp == 49);
+    ge_world_free(&w);
+    ge_sprite_free(&s);
+}
+
+/* A tall room with a wall (column 20) on the right of a hero sliding down it: the wall jump depends on the stick. */
+static void make_tall_world(GeWorld *w) {
+    ge_world_init(w, 400, 240, 99);
+    ge_tilemap_create(&w->map, 40, 60);
+    for (int y = 58; y < 60; y++) for (int x = 0; x < 40; x++) w->map.type[y * 40 + x] = GE_TILE_SOLID;
+    for (int y = 0; y < 58; y++) w->map.type[y * 40 + 20] = GE_TILE_SOLID;
+}
+
+/* sliding down the left face of the wall (it is on the hero's right, wall = +1) */
+static int slide_on_wall(GeWorld *w, const GeActorDef *d, const GeSprite *s, float y) {
+    make_tall_world(w);
+    int a = ge_world_spawn(w, d, s, 0, 320 - 5, y, 100);
+    w->ents[a].air_jumps_left = 0;
+    for (int i = 0; i < 14; i++) { w->intents[a].move_x = 1; run(w, 1); }
+    return a;
+}
+
+static void test_wall_jumps(void) {
+    puts("wall jumps: the stick picks the jump (kick away, hop, climb), a press a hair late or early still works, the same wall again is weaker each time");
+    GeSprite s = make_sprite();
+    GeActorDef d = make_def(&s);
+    d.air_jumps = 1; d.air_jump_vel = 6;
+    d.wall_slide_speed = 1; d.wall_jump_vx = 3; d.wall_jump_vy = 6; d.wall_jump_lock = 4;
+    d.wall_hop_vx = 1.0f; d.wall_chain_decay = 0.75f; d.wall_grace_ticks = 5; d.wall_boost_ticks = 12;
+    GeWorld w;
+
+    /* the kick: away from the wall, a long way, steering locked for a moment */
+    int a = slide_on_wall(&w, &d, &s, 40);
+    CHECK(w.ents[a].state == GE_ST_WALL);
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.x <= -2.5f && w.ents[a].vel.y <= -5.5f && w.ents[a].wall_lock > 0 && w.ents[a].facing == -1);
+    ge_world_free(&w);
+
+    /* the hop: the stick let go: up, and only a little away */
+    a = slide_on_wall(&w, &d, &s, 40);
+    press(&w, a, (GeIntent){ .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.x < -0.5f && w.ents[a].vel.x > -1.6f && w.ents[a].vel.y <= -5.5f && w.ents[a].wall_lock == 0);
+    ge_world_free(&w);
+
+    /* the climb: toward the wall: straight up it, facing it, free to steer */
+    a = slide_on_wall(&w, &d, &s, 40);
+    float x0 = w.ents[a].pos.x;
+    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+    CHECK(fabsf(w.ents[a].vel.x) < 0.8f && w.ents[a].vel.y <= -5.5f && w.ents[a].wall_lock == 0 && w.ents[a].facing == 1);
+    for (int i = 0; i < 20; i++) { w.intents[a].move_x = 1; w.intents[a].jump_held = true; run(&w, 1); }
+    CHECK(fabsf(w.ents[a].pos.x - x0) < 3.0f);                    /* it went up the wall, not away from it */
+    ge_world_free(&w);
+
+    /* after a kick it can turn back to the wall quickly: hold toward and it is on it again within half a second */
+    a = slide_on_wall(&w, &d, &s, 40);
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+    int back_at = -1;
+    for (int i = 0; i < 40 && back_at < 0; i++) { w.intents[a].move_x = 1; w.intents[a].jump_held = true; run(&w, 1); if (w.ents[a].wall_dir == 1) back_at = i; }
+    CHECK(back_at >= 0 && back_at < 30);
+    ge_world_free(&w);
+
+    /* the same wall again and again gets weaker (down to under half of the first) */
+    a = slide_on_wall(&w, &d, &s, 40);
+    float vy[5];
+    for (int k = 0; k < 5; k++) {
+        for (int i = 0; i < 60 && !(w.ents[a].state == GE_ST_WALL && w.ents[a].vel.y > 0.0f); i++) { w.intents[a].move_x = 1; run(&w, 1); }
+        press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+        vy[k] = w.ents[a].vel.y;
+    }
+    float k[5];                                                   /* each jump's strength as a share of the first (gravity has taken 0.4 off in the tick the press ran) */
+    for (int i = 0; i < 5; i++) k[i] = (-vy[i] + 0.4f) / 6.0f;
+    CHECK(fabsf(k[0] - 1.0f) < 0.02f && fabsf(k[1] - 0.75f) < 0.02f && fabsf(k[2] - 0.5625f) < 0.02f && fabsf(k[3] - 0.45f) < 0.02f && fabsf(k[4] - 0.45f) < 0.02f);
+    ge_world_free(&w);
+
+    /* a press just after the wall is gone still jumps off it (5 ticks of grace), too late does not */
+    int late_ok = 0;
+    for (int late = 0; late <= 8; late += 4) {
+        a = slide_on_wall(&w, &d, &s, 40);
+        w.ents[a].pos.x -= 8.0f;                                                       /* it comes off the wall */
+        w.ents[a].vel.x = 0;
+        w.ents[a].air_jumps_left = 0;                                                  /* (sliding refilled them: so only a wall jump can answer the press) */
+        for (int i = 0; i < late; i++) { w.intents[a].move_x = 0; run(&w, 1); }
+        float before = w.ents[a].vel.y;
+        press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+        bool jumped = w.ents[a].vel.y < before - 3.0f;
+        if (late == 0 || late == 4) late_ok += jumped;
+        if (late == 8) CHECK(!jumped);
+        ge_world_free(&w);
+    }
+    CHECK(late_ok == 2);
+
+    /* a press just before touching the wall is kept and fires on contact (no air jump left to use it up) */
+    make_tall_world(&w);
+    a = ge_world_spawn(&w, &d, &s, 0, 320 - 10, 40, 100);
+    w.ents[a].air_jumps_left = 0;
+    w.ents[a].vel.x = 1.2f;
+    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });   /* pressed early, in the air, not yet on the wall */
+    int fired = 0;
+    for (int i = 0; i < 8 && !fired; i++) { w.intents[a].move_x = 1; w.intents[a].jump_held = true; run(&w, 1); fired = w.ents[a].vel.y < -5.0f; }
+    CHECK(fired);
+    ge_world_free(&w);
+
+    /* creatures have no wall moves at all */
+    GeActorDef c = make_def(&s);
+    make_tall_world(&w);
+    a = ge_world_spawn(&w, &c, &s, 1, 320 - 5, 40, 10);
+    for (int i = 0; i < 12; i++) { w.intents[a].move_x = 1; run(&w, 1); }
+    float vy_before = w.ents[a].vel.y;
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.y >= vy_before - 0.01f && w.ents[a].state != GE_ST_WALL);
     ge_world_free(&w);
     ge_sprite_free(&s);
 }
@@ -994,6 +1103,7 @@ int main(void) {
     test_asset_prep_roundtrip();
     test_layers_file();
     test_moveset();
+    test_wall_jumps();
     test_contact_shots_meter();
     test_armor_grounded_zoom_font();
     test_3ds_rotate();

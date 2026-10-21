@@ -84,7 +84,15 @@ typedef struct {
     float air_jump_vel;
     float wall_slide_speed;   /* max fall speed while sliding down a wall; 0 = no wall moves */
     float wall_jump_vx, wall_jump_vy;
-    int wall_jump_lock;       /* ticks of no steering after a wall jump, so it pushes off */
+    int wall_jump_lock;       /* ticks of no steering after a kick off the wall, so it pushes off */
+    /* How the stick picks the wall jump (the direction held when jump is pressed, relative to the wall): AWAY from it is the
+     * kick (wall_jump_vx sideways, locked for wall_jump_lock ticks); NOTHING is a hop (wall_hop_vx away, free to steer);
+     * TOWARD it is a climb (straight up along it, free to steer, so it carries on over a ledge or back onto the wall). */
+    float wall_hop_vx;
+    float wall_chain_decay;   /* a wall jump off the same wall as the last one (no ground, no other wall between) is this
+                               * fraction of the last one's height, so one wall can be climbed a little but not forever (0 = no limit) */
+    int wall_grace_ticks;     /* a wall jump still works this many ticks after losing the wall (a press a hair late) */
+    int wall_boost_ticks;     /* after a wall jump, reversing in the air is quicker for this many ticks (getting back to the wall) */
     float dash_speed; int dash_ticks, dash_cooldown;
     bool air_dash;            /* one dash per airtime */
     bool flying;              /* no gravity; move_y steers vertically */
@@ -134,6 +142,8 @@ typedef struct {
     int air_jumps_left;
     bool air_dashed;
     int wall_dir;             /* -1/+1 while touching a wall in the air */
+    int wall_grace, wall_boost, wall_chain;   /* wall coyote ticks left, the quicker-reversal window, wall jumps in a row off one wall */
+    int8_t wall_mem, wall_last;               /* the side the wall was on when last touched / last jumped off (-1 left, +1 right) */
     int meter, ammo, ammo_timer;
     bool shot_fired;
     bool buffered_attack;
