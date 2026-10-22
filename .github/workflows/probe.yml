@@ -1,0 +1,30 @@
+name: probe
+on:
+  push:
+    branches: [claude/paragon-final-boss]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: look around
+        run: |
+          uname -a; sw_vers; arch
+          xcodebuild -version || true
+          cmake --version | head -1
+          python3 --version
+          clang --version | head -1
+          for t in iconutil sips ditto codesign plutil hdiutil screencapture xattr; do printf '%s: ' $t; command -v $t || echo missing; done
+          arch -x86_64 /usr/bin/true && echo "rosetta ok" || echo "no rosetta"
+          brew list --versions sdl2 || echo "no brew sdl2"
+          echo "pwd of a GUI launch would be /; HOME=$HOME"
+          screencapture -x /tmp/probe.png && ls -la /tmp/probe.png && file /tmp/probe.png || echo "screencapture failed"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-${{ matrix.os }}
+          path: /tmp/probe.png
+          if-no-files-found: ignore
