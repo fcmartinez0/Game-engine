@@ -1,5 +1,6 @@
 /* Nintendo 3DS backend (devkitPro + libctru). Draws the 400x240 software
- * framebuffer straight into the top screen. NOTE: written against libctru's
+ * framebuffer straight into the top screen, and the optional 320x240 one into
+ * the bottom (touch) screen. NOTE: written against libctru's
  * documented API but not yet run on hardware -- see README. */
 
 #include "ge/ge_input.h"
@@ -13,6 +14,7 @@ int ge_plat_init(const GePlatformConfig *cfg) {
     (void)cfg;
     gfxInitDefault();
     gfxSet3D(false);
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);   /* the bottom screen is only redrawn when it changes */
     osSetSpeedupEnable(true); /* New 3DS: 804 MHz; ignored on the original */
     return 0;
 }
@@ -43,14 +45,31 @@ int ge_plat_poll(uint32_t *buttons) {
     return 1;
 }
 
+void ge_plat_set_bottom(GeBottomMode mode) { (void)mode; }   /* the lower screen is always its own screen */
+
+int ge_plat_touch(int *x, int *y) {
+    if (!(hidKeysHeld() & KEY_TOUCH)) return 0;
+    touchPosition t;
+    hidTouchRead(&t);
+    *x = t.px; *y = t.py;
+    return 1;
+}
+
+void ge_plat_present_bottom(const GeImage *fb) {
+    u16 fw, fh;   /* sideways too: 240 wide, 320 tall */
+    u8 *dst = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &fw, &fh);
+    if (dst && fw == fb->h && fh == fb->w) ge_3ds_rotate_bgr8(fb->px, fb->w, fb->h, dst);
+}
+
 void ge_plat_present(const GeImage *fb) {
     u16 fw, fh;   /* libctru reports the top screen as 240 wide, 400 tall: it's mounted sideways */
     u8 *dst = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &fw, &fh);
     if (dst && fw == fb->h && fh == fb->w) ge_3ds_rotate_bgr8(fb->px, fb->w, fb->h, dst);
     gfxFlushBuffers();
     gfxSwapBuffers();
-    gspWaitForVBlank();
 }
+
+void ge_plat_wait_frame(void) { gspWaitForVBlank(); }
 
 /* The system tick runs at SYSCLOCK_ARM11 (~268 MHz) on every model: fine-grained
  * enough to time a frame, unlike osGetTime's milliseconds. */

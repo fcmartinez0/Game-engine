@@ -203,3 +203,57 @@ void art_add_layers(GeWorld *w) {
     LAYER(.img = make_mist(800, 70, 70), .factor_x = 1.7f, .auto_x = 0.3f, .y = 170, .foreground = true, .optional = true);
 #undef LAYER
 }
+
+/* ---- the caves (placeholder art) ------------------------------------------------------------------
+ * Under the forest: a dark, still backdrop with rock columns far away and teeth of stone hanging from
+ * the dark above. Cheap on the 3DS on purpose: one solid back layer (it replaces the clear) and two
+ * layers of solid silhouettes, so the compositor skips everything the columns hide. */
+
+static GeImage make_cave_back(void) {
+    GeImage im = ge_image_create(400, 240);
+    ge_gradient_v(&im, 0, 140, GE_RGB(8, 6, 18), GE_RGB(22, 16, 40));
+    ge_gradient_v(&im, 140, 240, GE_RGB(22, 16, 40), GE_RGB(36, 26, 52));
+    GeRng r;
+    ge_rng_seed(&r, 41);
+    for (int i = 0; i < 40; i++) {   /* a few glints in the rock */
+        int x = (int)(ge_rng_float(&r) * im.w), y = (int)(ge_rng_float(&r) * im.h);
+        ge_fill_rect(&im, x, y, 1, 1, GE_ARGB(60 + (int)(ge_rng_float(&r) * 100), 150, 200, 255), 0);
+    }
+    return im;
+}
+
+static GeImage make_cave_columns(int w, int h, uint32_t c, int seed) {
+    GeImage im = ge_image_create(w, h);
+    GeRng r;
+    ge_rng_seed(&r, (uint32_t)seed);
+    for (int i = 0; i < 9; i++) {
+        int x = (int)(ge_rng_float(&r) * w), cw = 14 + (int)(ge_rng_float(&r) * 26);
+        for (int y = 0; y < h; y++) {   /* a column, a little narrower in the middle */
+            float t = (float)y / (float)h, k = 1.0f - 0.35f * sinf(t * 3.14159f);
+            int hw = (int)((float)cw * 0.5f * k);
+            wrap_rect(&im, x - hw, y, hw * 2, 1, c);
+        }
+    }
+    return im;
+}
+
+static GeImage make_stalactites(int w, int h, uint32_t c) {
+    GeImage im = ge_image_create(w, h);
+    GeRng r;
+    ge_rng_seed(&r, 43);
+    wrap_rect(&im, 0, 0, w, 6, c);
+    for (int x = 0; x < w; x += 6 + (int)(ge_rng_float(&r) * 10)) {
+        int len = 8 + (int)(ge_rng_float(&r) * (float)(h - 10)), hw = 2 + (int)(ge_rng_float(&r) * 5);
+        for (int y = 0; y < len; y++) wrap_rect(&im, x - hw * (len - y) / len, y, 1 + 2 * hw * (len - y) / len, 1, c);
+    }
+    return im;
+}
+
+void art_add_cave_layers(GeWorld *w) {
+#define LAYER(...) ge_world_add_layer(w, (GeParallaxLayer){ __VA_ARGS__ })
+    LAYER(.img = make_cave_back(), .opaque = true);
+    LAYER(.img = make_cave_columns(640, 260, GE_RGB(26, 20, 44), 47), .factor_x = 0.15f, .factor_y = 0.1f, .y = -10);
+    LAYER(.img = make_cave_columns(800, 280, GE_RGB(34, 26, 54), 53), .factor_x = 0.35f, .factor_y = 0.2f, .y = -20);
+    LAYER(.img = make_stalactites(800, 60, GE_RGB(18, 14, 30)), .factor_x = 0.5f, .factor_y = 0.3f, .y = 0);
+#undef LAYER
+}

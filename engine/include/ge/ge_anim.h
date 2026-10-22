@@ -80,6 +80,8 @@ int ge_sprite_find_clip(const GeSprite *s, const char *name); /* -1 if absent */
 /* Load a sheet (.pam) and its clip text (.anim) from disk, e.g. files exported by
  * tools/asset-prep. Returns 0, -1 (image), -2 (.anim unreadable) or -3 (.anim syntax error). */
 int ge_sprite_load(GeSprite *s, const char *pam_path, const char *anim_path);
+/* Write the clips back out in the same text format (ge_sprite_parse reads it back unchanged). 0 on success. */
+int ge_sprite_save_anim(const GeSprite *s, const char *anim_path);
 void ge_sprite_free(GeSprite *s);
 
 typedef struct {

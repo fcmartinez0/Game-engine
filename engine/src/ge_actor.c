@@ -140,6 +140,10 @@ static void actor_free(GeWorld *w, int idx, const GeIntent *in) {
     /* steering */
     float mx = e->wall_lock > 0 ? 0.0f : in->move_x;
     float accel = (e->on_ground || fly) ? d->accel : d->air_accel;
+    if (e->wall_boost > 0) {                               /* just off a wall: turning round (back to it) is quicker */
+        e->wall_boost--;
+        if (mx * e->vel.x < 0.0f) accel *= 2.2f;
+    }
     if (mx != 0.0f) {
         e->vel.x = approach(e->vel.x, mx * d->run_speed, accel);
         e->facing = mx > 0 ? 1 : -1;
@@ -152,6 +156,10 @@ static void actor_free(GeWorld *w, int idx, const GeIntent *in) {
     if (e->on_ground) { e->air_jumps_left = d->air_jumps; e->air_dashed = false; }
     int wall = (!e->on_ground && !fly && d->wall_slide_speed > 0.0f) ? ge_entity_wall_contact(w, e) : 0;
     e->wall_dir = wall;
+    if (wall != 0) { e->wall_grace = d->wall_grace_ticks; e->wall_mem = (int8_t)wall; }
+    if (e->on_ground) { e->wall_chain = 0; e->wall_last = 0; }
+    int jump_wall = wall != 0 ? wall : (e->wall_grace > 0 && !e->on_ground && !fly ? (int)e->wall_mem : 0);   /* the wall it can jump off */
+    if (wall == 0 && e->wall_grace > 0) e->wall_grace--;
     bool sliding = wall != 0 && in->move_x * (float)wall > 0.0f && e->vel.y > -0.5f && e->wall_lock <= 0;
     if (sliding) { e->air_jumps_left = d->air_jumps; e->air_dashed = false; e->facing = -wall; }
 
@@ -172,13 +180,27 @@ static void actor_free(GeWorld *w, int idx, const GeIntent *in) {
             e->jump_buf = e->coyote = 0;
             e->on_ground = false;
             dust(w, e->pos.x, e->pos.y, 4);
-        } else if (wall != 0 && in->jump_pressed) {
-            e->vel.x = -(float)wall * d->wall_jump_vx;
-            e->vel.y = -d->wall_jump_vy;
-            e->facing = -wall;
-            e->wall_lock = d->wall_jump_lock;
+        } else if (jump_wall != 0) {
+            /* the stick, relative to the wall, picks the jump: away = kick, nothing = hop, toward = climb */
+            float side = in->move_x * (float)jump_wall;
+            int mode = side < -0.3f ? 0 : side > 0.3f ? 2 : 1;
+            float push = mode == 0 ? d->wall_jump_vx : mode == 1 ? d->wall_hop_vx : 0.0f;
+            float up = d->wall_jump_vy;
+            e->wall_chain = e->wall_last == jump_wall ? e->wall_chain + 1 : 0;      /* the same wall again, with nothing between */
+            e->wall_last = (int8_t)jump_wall;
+            if (d->wall_chain_decay > 0.0f) {
+                float k = 1.0f;
+                for (int i = 0; i < e->wall_chain; i++) k *= d->wall_chain_decay;
+                up *= k < 0.45f ? 0.45f : k;
+            }
+            e->vel.x = mode == 2 ? 0.0f : -(float)jump_wall * push;
+            e->vel.y = -up;
+            e->facing = mode == 2 ? jump_wall : -jump_wall;
+            e->wall_lock = mode == 0 ? d->wall_jump_lock : 0;
+            e->wall_boost = d->wall_boost_ticks;
+            e->wall_grace = 0;
             e->jump_buf = 0;
-            dust(w, e->pos.x + wall * d->body_w * 0.5f, e->pos.y - d->body_h * 0.5f, 5);
+            dust(w, e->pos.x + (float)jump_wall * d->body_w * 0.5f, e->pos.y - d->body_h * 0.5f, 5);
         } else if (in->jump_pressed && e->air_jumps_left > 0) {
             e->vel.y = -(d->air_jump_vel > 0 ? d->air_jump_vel : d->jump_vel);
             e->air_jumps_left--;
@@ -189,7 +211,7 @@ static void actor_free(GeWorld *w, int idx, const GeIntent *in) {
             }
         }
     }
-    if (!in->jump_held && e->vel.y < -d->jump_cut_vel) e->vel.y = -d->jump_cut_vel; /* variable jump height */
+    if (!fly && !in->jump_held && e->vel.y < -d->jump_cut_vel) e->vel.y = -d->jump_cut_vel; /* variable jump height (not for flyers: they would never rise) */
 
     /* actions */
     int atk = in->attack_pressed ? pick_attack(e, in) : -1;
@@ -342,6 +364,8 @@ static void pogo(GeWorld *w, int ai, float speed) {
     ge_world_event(w, GE_EV_POGO, ai, -1);
 }
 
+void ge_entity_pogo(GeWorld *w, int idx, float speed) { pogo(w, idx, speed); }
+
 void ge_world_apply_hit(GeWorld *w, int ai, int vi, const GeHit *h) {
     GeEntity *v = &w->ents[vi];
 
@@ -432,7 +456,13 @@ void ge_shots_update(GeWorld *w) {
             s->pos.y += s->vel.y;
         }
         int t = ge_tilemap_get(&w->map, (int)floorf(s->pos.x / GE_TILE), (int)floorf(s->pos.y / GE_TILE));
-        if (s->def->solid_stops && t == GE_TILE_SOLID) { kill_shot(w, s); continue; }
+        if (s->def->solid_stops && t == GE_TILE_SOLID) {
+            int tx = (int)floorf(s->pos.x / GE_TILE), ty = (int)floorf(s->pos.y / GE_TILE);
+            bool inside = tx >= 0 && ty >= 0 && tx < w->map.w && ty < w->map.h;   /* (off the edge counts as solid) */
+            ge_world_event(w, GE_EV_SHOT_TILE, s->owner, inside ? ty * w->map.w + tx : -1);   /* games may care what it hit */
+            kill_shot(w, s);
+            continue;
+        }
         if (s->pos.y > (float)(w->map.h * GE_TILE) + 32.0f) s->active = false;
     }
 }

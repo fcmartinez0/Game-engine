@@ -2,6 +2,7 @@
 
 #include "ge/ge_fight.h"
 #include "ge/ge_font.h"
+#include "ge/ge_model.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,8 @@ enum { ST_ANY_GROUND = 0, ST_STAND = 1, ST_CROUCH = 2, ST_EXACT = 3, ST_AIR = 4 
 #define INTRO_TICKS 100
 #define ROUND_TICKS (99 * 60)
 #define MOTION_WINDOW 18
+/* ticks to complete a motion: 18 for the usual three directions, 12 more for each one beyond (a four-direction super gets 30) */
+static int motion_window(int n) { int w = MOTION_WINDOW + (n > 3 ? (n - 3) * 12 : 0); return w < GE_FIGHT_HIST ? w : GE_FIGHT_HIST; }
 
 typedef struct {
     int damage, hitstop, stun, bstun, chip, guard;
@@ -45,7 +48,7 @@ int ge_fighter_def_finish(GeFighterDef *d, const GeSprite *spr) {
         int nb = 0;
         m->buttons = 0;
         for (; *p; p++) {
-            uint8_t b = *p == 'L' ? GE_FB_L : *p == 'M' ? GE_FB_M : *p == 'H' ? GE_FB_H : *p == 'S' ? GE_FB_S : 0;
+            uint8_t b = *p == 'L' ? GE_FB_L : *p == 'M' ? GE_FB_M : *p == 'H' ? GE_FB_H : *p == 'S' ? GE_FB_S : *p == 'K' ? GE_FB_K : 0;
             if (!b) return -(1 + i);
             m->buttons |= b;
             nb++;
@@ -90,9 +93,13 @@ bool ge_fight_motion_done(const GeFighter *F, const int *motion, int n, int wind
     return false;
 }
 
+#define ATTACK_BUTTONS (GE_FB_L | GE_FB_M | GE_FB_H | GE_FB_S | GE_FB_K)
+#define BUFFER_TICKS 8
+
 static bool buttons_hit(const GeFighter *F, uint8_t b) {
     if (!(F->in.pressed & b)) return false;
     if ((b & (b - 1)) == 0) return true;          /* single button */
+    if (F->buf_timer > 0 && (F->buf_btn & b) == b) return true;   /* a chord pressed during the last move */
     uint8_t acc = 0;                              /* several: all pressed within 3 ticks */
     for (int k = 0; k < 3; k++) acc |= F->hist_btn[hist_at(F, k)];
     return (acc & b) == b;
@@ -129,6 +136,61 @@ bool ge_fight_can_start(const GeFight *f, int s, int mi) {
         if (fabsf(oe->pos.x - e->pos.x) > F->def->throw_range) return false;
     }
     return true;
+}
+
+/* ---- frame data helpers (used by the AI) ------------------------------ */
+
+int ge_fight_move_total(const GeFight *f, int s, int mi) {
+    const GeClip *c = clip_at(f, s, f->f[s].def->moves[mi].clip_idx);
+    int t = 0;
+    for (int i = 0; i < c->nframes; i++) t += c->frames[i].ticks;
+    return t;
+}
+
+int ge_fight_move_startup(const GeFight *f, int s, int mi) {
+    const GeMove *m = &f->f[s].def->moves[mi];
+    const GeClip *c = clip_at(f, s, m->clip_idx);
+    int t = 0;
+    if (m->is_throw) return 1;
+    if (m->shot && c->shoot >= 0) {
+        for (int i = 0; i < c->shoot && i < c->nframes; i++) t += c->frames[i].ticks;
+        return t;
+    }
+    for (int i = 0; i < c->nframes; i++) {
+        if (c->frames[i].has_hit) return t;
+        t += c->frames[i].ticks;
+    }
+    return t;
+}
+
+int ge_fight_move_reach(const GeFight *f, int s, int mi) {
+    const GeMove *m = &f->f[s].def->moves[mi];
+    if (m->is_throw) return (int)f->f[s].def->throw_range;
+    if (m->shot) return 260;   /* a projectile crosses the screen */
+    const GeClip *c = clip_at(f, s, m->clip_idx);
+    float r = 0.0f;
+    for (int i = 0; i < c->nframes; i++)
+        if (c->frames[i].has_hit && c->frames[i].hit.x + c->frames[i].hit.w > r) r = c->frames[i].hit.x + c->frames[i].hit.w;
+    return (int)(r + 0.5f);
+}
+
+int ge_fight_frames_until_free(const GeFight *f, int s) {
+    const GeFighter *F = &f->f[s];
+    const GeEntity *e = cent(f, s);
+    int t = e->hitstop;
+    switch (F->state) {
+    case GE_FS_MOVE: {
+        const GeClip *c = clip_at(f, s, F->def->moves[F->move].clip_idx);
+        if (e->anim.done) return t;
+        t += c->frames[e->anim.frame].ticks - e->anim.timer;
+        for (int i = e->anim.frame + 1; i < c->nframes; i++) t += c->frames[i].ticks;
+        return t;
+    }
+    case GE_FS_HITSTUN: return t + (F->air_hit ? F->timer + 40 : F->timer);
+    case GE_FS_BLOCKSTUN: case GE_FS_DOWN: case GE_FS_THROWN: case GE_FS_DASH: return t + (F->timer > 0 ? F->timer : 0);
+    case GE_FS_KO: case GE_FS_WIN: return 9999;
+    default: return 0;
+    }
 }
 
 GeRect ge_fighter_hurtbox(const GeFight *f, int s) {
@@ -180,6 +242,7 @@ static void start_move(GeFight *f, int s, int mi) {
         }
     }
     if (m->is_throw) {
+        f->stat_thrown[1 - s]++;
         O->state = GE_FS_THROWN;
         O->timer = 26;
         oe->vel = (GeVec2){ 0, 0 };
@@ -188,7 +251,21 @@ static void start_move(GeFight *f, int s, int mi) {
     }
 }
 
+static bool try_moves_now(GeFight *f, int s, bool air, int min_level);
+
+/* Buttons pressed a few ticks too early (during a move's recovery, block-stun, a landing) still count:
+ * the input buffer. Without it a press that is a hair early simply vanishes, which feels like lag. */
 static bool try_moves(GeFight *f, int s, bool air, int min_level) {
+    GeFighter *F = &f->f[s];
+    uint8_t pressed = F->in.pressed;
+    if (F->buf_timer > 0) F->in.pressed |= F->buf_btn;
+    bool started = try_moves_now(f, s, air, min_level);
+    F->in.pressed = pressed;
+    if (started) F->buf_timer = 0;
+    return started;
+}
+
+static bool try_moves_now(GeFight *f, int s, bool air, int min_level) {
     GeFighter *F = &f->f[s];
     if (F->in.force_move >= 0 && F->in.force_move < F->def->nmoves) {
         const GeMove *m = &F->def->moves[F->in.force_move];
@@ -201,7 +278,7 @@ static bool try_moves(GeFight *f, int s, bool air, int min_level) {
     for (int i = 0; i < F->def->nmoves; i++) {
         const GeMove *m = &F->def->moves[i];
         if (m->level < min_level || !buttons_hit(F, m->buttons) || !stance_ok(m, dir, air)) continue;
-        if (m->nmotion && !ge_fight_motion_done(F, m->motion, m->nmotion, MOTION_WINDOW)) continue;
+        if (m->nmotion && !ge_fight_motion_done(F, m->motion, m->nmotion, motion_window(m->nmotion))) continue;
         if (!ge_fight_can_start(f, s, i)) continue;
         start_move(f, s, i);
         return true;
@@ -215,12 +292,28 @@ static bool dash_input(const GeFighter *F, int d) {
     return F->hist_dir[hist_at(F, 0)] == d && F->hist_dir[hist_at(F, 1)] != d && ge_fight_motion_done(F, q, 3, 14);
 }
 
+static void lose_hp(GeFight *f, int s, int amount);
+
 /* ---- per-fighter state machine ------------------------------------------ */
 
 static void to_neutral(GeFighter *F, GeEntity *e) {
     F->state = (F->in.y > 0) ? GE_FS_CROUCH : GE_FS_STAND;
     F->timer = 0;
     (void)e;
+}
+
+/* Is an attack on its way to fighter s: a swing nearby, a jump-in, or a projectile flying at it? */
+static bool threatened(const GeFight *f, int s) {
+    const GeFighter *O = &f->f[1 - s];
+    const GeEntity *e = cent(f, s), *oe = cent(f, 1 - s);
+    float dist = fabsf(oe->pos.x - e->pos.x);
+    if (O->state == GE_FS_MOVE && dist < 120.0f) return true;
+    if (O->state == GE_FS_AIR && dist < 100.0f) return true;
+    for (int i = 0; i < GE_MAX_SHOTS; i++) {
+        const GeShot *sh = &f->world.shots[i];
+        if (sh->active && sh->team != s && fabsf(sh->pos.x - e->pos.x) < 140.0f && (sh->vel.x > 0) == (sh->pos.x < e->pos.x)) return true;
+    }
+    return false;
 }
 
 static void fighter_step(GeFight *f, int s) {
@@ -232,6 +325,10 @@ static void fighter_step(GeFight *f, int s) {
     bool grounded_free = (F->state == GE_FS_STAND || F->state == GE_FS_CROUCH);
     if (grounded_free) face_opponent(f, s);
     record_input(F, e);                         /* always, so inputs buffer through hit-stop */
+    uint8_t atk = F->in.pressed & ATTACK_BUTTONS;
+    if (atk && !grounded_free) { F->buf_btn = (uint8_t)((F->buf_timer > 0 ? F->buf_btn : 0) | atk); F->buf_timer = BUFFER_TICKS; }
+    else if (F->buf_timer > 0 && e->hitstop == 0) F->buf_timer--;
+    F->guarding = false;
     if (e->hitstop > 0) { e->hitstop--; return; }
     ge_anim_update(&e->anim);
     if (e->invuln > 0) e->invuln--;
@@ -243,8 +340,9 @@ static void fighter_step(GeFight *f, int s) {
         F->combo = 0; F->juggle = 0; F->air_hit = false;
         if (try_moves(f, s, false, 0)) break;
         int dir = F->hist_dir[F->hist_head];
-        if (d->dash_ticks > 0 && (dash_input(F, 6) || dash_input(F, 4))) {
-            int sgn = dir == 6 ? e->facing : -e->facing;
+        bool dash_btn = (F->in.pressed & GE_FB_DASH) != 0;
+        if (d->dash_ticks > 0 && (dash_btn || dash_input(F, 6) || dash_input(F, 4))) {
+            int sgn = dash_btn ? (F->in.x * e->facing < 0 ? -e->facing : e->facing) : (dir == 6 ? e->facing : -e->facing);
             F->state = GE_FS_DASH;
             F->timer = d->dash_ticks;
             e->state_timer = sgn;
@@ -258,15 +356,21 @@ static void fighter_step(GeFight *f, int s) {
             F->air_attacked = false;
             play(e, d->clip_jump, true);
             break;
-        } else if (F->in.y > 0) {
-            F->state = GE_FS_CROUCH;
-            e->vel.x = 0;
-            play(e, d->clip_crouch, false);
         } else {
-            F->state = GE_FS_STAND;
-            int rx = F->in.x * e->facing;
-            e->vel.x = rx > 0 ? (float)e->facing * d->body.run_speed : rx < 0 ? -(float)e->facing * d->walk_back : 0.0f;
-            play(e, rx > 0 ? d->clip_walk_f : rx < 0 ? d->clip_walk_b : d->clip_idle, false);
+            /* Guarding shows: holding the guard button, or holding back while something is coming, puts you in
+             * the guard pose and stops you walking away, so you can see you are blocking before the hit lands. */
+            bool back = F->in.x * e->facing < 0;
+            F->guarding = (F->in.held & GE_FB_BLOCK) || (back && threatened(f, s));
+            if (F->in.y > 0) {
+                F->state = GE_FS_CROUCH;
+                e->vel.x = 0;
+                play(e, F->guarding ? d->clip_block_low : d->clip_crouch, false);
+            } else {
+                F->state = GE_FS_STAND;
+                int rx = F->guarding ? 0 : F->in.x * e->facing;
+                e->vel.x = rx > 0 ? (float)e->facing * d->body.run_speed : rx < 0 ? -(float)e->facing * d->walk_back : 0.0f;
+                play(e, rx > 0 ? d->clip_walk_f : rx < 0 ? d->clip_walk_b : F->guarding ? d->clip_block : d->clip_idle, false);
+            }
         }
         gravity(F, e);
         ge_entity_physics(w, F->ent);
@@ -338,16 +442,26 @@ static void fighter_step(GeFight *f, int s) {
         GeEntity *te = ent(f, 1 - s);
         e->pos.x = ge_clampf(te->pos.x + (float)te->facing * 18.0f, d->body.body_w, (float)f->arena_w - d->body.body_w);
         e->pos.y = te->pos.y;
-        if (F->timer > 18 && buttons_hit(F, GE_FB_L | GE_FB_M)) {    /* throw tech */
+        bool easy_tech = (f->forgiving_tech >> s) & 1u;
+        if (F->timer == 25 && ((f->hints >> s) & 1u)) {
+            F->pop = easy_tech ? "THROW! TAP L TO BREAK" : "THROW! PRESS Y+X TO BREAK";
+            F->pop_timer = 40; F->pop_color = GE_RGB(255, 236, 160);
+        }
+        bool tech_press = buttons_hit(F, GE_FB_L | GE_FB_M) ||
+                          (F->buf_timer > 0 && (F->buf_btn & (GE_FB_L | GE_FB_M)) == (GE_FB_L | GE_FB_M)) ||
+                          (easy_tech && (F->in.pressed & GE_FB_BLOCK));
+        if (F->timer > (easy_tech ? 4 : 10) && tech_press) {         /* throw tech: a 16-tick window (22 forgiving), presses buffered */
             to_neutral(F, e); to_neutral(T, te);
+            F->buf_timer = 0; F->buf_btn = 0;           /* the press that broke it is spent: it must not also start a throw of its own next tick */
+            if (f->model) ge_model_on_throw(f->model, s, true, f->model_side);
             e->vel.x = (float)te->facing * 3.0f;
             te->vel.x = -(float)te->facing * 3.0f;
             ge_world_spark(w, (e->pos.x + te->pos.x) * 0.5f, e->pos.y - 20, 1, 6, GE_ARGB(255, 180, 220, 255));
             break;
         }
         if (--F->timer <= 0) {
-            e->hp -= T->def->throw_damage;
-            if (e->hp < 0) e->hp = 0;
+            lose_hp(f, s, ge_clampi((int)((float)T->def->throw_damage * f->damage_scale[1 - s] + 0.5f), 1, 999));
+            if (f->model) ge_model_on_throw(f->model, s, false, f->model_side);
             F->state = GE_FS_HITSTUN;
             F->timer = 30;
             F->air_hit = true;
@@ -397,21 +511,62 @@ static Stats clip_stats(const GeClip *c) {
     return (Stats){ c->damage, c->hitstop, c->stun, c->blockstun ? c->blockstun : c->stun * 2 / 3, c->chip, c->guard, c->kb_x, c->kb_y, c->knockdown };
 }
 
+/* Health loss, with the boss rule: an undying fighter bottoms out at 1 and that sets off its finisher. */
+static void lose_hp(GeFight *f, int s, int amount) {
+    GeEntity *e = ent(f, s);
+    e->hp -= amount;
+    if (e->hp < 0) e->hp = 0;
+    if (f->f[s].def->undying && e->hp < 1) { e->hp = 1; f->finisher_pending = true; }
+    /* and its opponent is never simply knocked out either: the finisher is always how the fight ends */
+    if (f->finisher_side >= 0 && s != f->finisher_side && e->hp < 1) { e->hp = 1; f->finisher_pending = true; }
+}
+
+/* past the last frame that can hit: the move is only recovering now */
+static bool past_active(const GeFight *f, int s) {
+    const GeFighter *F = &f->f[s];
+    if (F->state != GE_FS_MOVE) return false;
+    const GeClip *c = clip_at(f, s, F->def->moves[F->move].clip_idx);
+    int last = -1;
+    for (int i = 0; i < c->nframes; i++) if (c->frames[i].has_hit) last = i;
+    return cent(f, s)->anim.done || cent(f, s)->anim.frame > last;
+}
+
 static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, float x, float y) {
     GeFighter *A = &f->f[s], *D = &f->f[1 - s];
     GeEntity *ae = ent(f, s), *de = ent(f, 1 - s);
     GeWorld *w = &f->world;
-    bool hold_back = D->in.x == dir;            /* away from the attack */
-    bool low = D->in.y > 0;
+    bool button_guard = (D->in.held & GE_FB_BLOCK) != 0;            /* the guard button stops every height */
+    bool hold_back = D->in.x == dir || button_guard;
+    bool low = D->in.y > 0 || (button_guard && st->guard == GE_GUARD_LOW);   /* (a guard drops to meet a low: it reads clearly) */
     bool can_block = (D->state == GE_FS_STAND || D->state == GE_FS_CROUCH || D->state == GE_FS_BLOCKSTUN) && de->on_ground && hold_back;
-    bool guard_ok = st->guard == GE_GUARD_MID || (st->guard == GE_GUARD_LOW && low) || (st->guard == GE_GUARD_HIGH && !low);
+    /* the forgiving guard: holding the button is enough while jumping, dashing, or finishing your own swing */
+    if (!can_block && button_guard && f->forgiving_guard &&
+        (D->state == GE_FS_AIR || D->state == GE_FS_DASH || (D->state == GE_FS_MOVE && past_active(f, 1 - s))))
+        can_block = true;
+    bool guard_ok = button_guard || st->guard == GE_GUARD_MID || (st->guard == GE_GUARD_LOW && low) || (st->guard == GE_GUARD_HIGH && !low);
+    bool show = (f->hints >> (1 - s)) & 1u;
+    if (can_block && guard_ok) f->stat_blocked[1 - s]++;
+    else if (can_block) f->stat_wrong_height[1 - s]++;
+    else {
+        f->stat_hit[1 - s]++;
+        if (D->state == GE_FS_HITSTUN || D->state == GE_FS_DOWN) f->stat_hit_combo[1 - s]++;
+        else if (button_guard) f->stat_hit_guard_busy[1 - s]++;
+        else if (D->state == GE_FS_MOVE) f->stat_hit_attacking[1 - s]++;
+        else if (D->state == GE_FS_AIR || !de->on_ground) f->stat_hit_air[1 - s]++;
+        else f->stat_hit_open[1 - s]++;
+    }
+    if (can_block && guard_ok) { D->pop = "BLOCK"; D->pop_timer = 24; D->pop_color = GE_RGB(150, 210, 255); }
+    else if (show && can_block) {                                    /* they tried to block but used the wrong height: say so */
+        D->pop = st->guard == GE_GUARD_LOW ? "LOW! HOLD DOWN-BACK (OR L)" : "HIGH! STAND TO BLOCK (OR L)";
+        D->pop_timer = 70; D->pop_color = GE_RGB(255, 170, 90);
+    }
 
     if (can_block && guard_ok) {
         D->state = GE_FS_BLOCKSTUN;
         D->timer = st->bstun;
         D->crouch_block = low;
-        de->hp -= st->chip;
-        if (de->hp < 0) de->hp = 0;
+        lose_hp(f, 1 - s, st->chip > 0 ? ge_clampi((int)((float)st->chip * f->damage_scale[s] + 0.5f), 1, 999) : 0);
+        if (f->model) ge_model_on_hit(f->model, f, s, st->guard, true, f->model_side);
         de->vel.x = (float)dir * st->kb_x * 0.8f;
         de->hitstop = st->hitstop / 2 + 1;
         if (melee) ae->hitstop = de->hitstop;
@@ -426,10 +581,10 @@ static void connect(GeFight *f, int s, const Stats *st, int dir, bool melee, flo
 
     float scale = 1.0f - 0.1f * (float)D->combo;   /* damage scaling keeps long combos in check */
     if (scale < 0.3f) scale = 0.3f;
-    int dmg = (int)((float)st->damage * scale + 0.5f);
+    int dmg = (int)((float)st->damage * scale * f->damage_scale[s] + 0.5f);
     if (dmg < 1) dmg = 1;
-    de->hp -= dmg;
-    if (de->hp < 0) de->hp = 0;
+    lose_hp(f, 1 - s, dmg);
+    if (f->model) ge_model_on_hit(f->model, f, s, st->guard, false, f->model_side);
     D->combo++;
     bool launch = !de->on_ground || st->kb_y < 0.0f || st->kd || D->air_hit || de->hp == 0;
     D->state = GE_FS_HITSTUN;
@@ -563,6 +718,8 @@ static void reset_round(GeFight *f) {
     }
     for (int i = 0; i < GE_MAX_SHOTS; i++) f->world.shots[i].active = false;
     f->clock = ROUND_TICKS;
+    f->fight_ticks = 0;
+    f->finisher_pending = false;
     f->phase = GE_FP_INTRO;
     f->phase_timer = 0;
     f->super_freeze = 0;
@@ -573,6 +730,7 @@ static void reset_round(GeFight *f) {
 void ge_fight_init(GeFight *f, const GeFighterDef *d0, const GeSprite *s0, const GeFighterDef *d1, const GeSprite *s1,
                    const GeWorld *backdrop, uint32_t seed) {
     memset(f, 0, sizeof *f);
+    for (int i = 0; i < 2; i++) f->cpu_style[i] = (GeCpuStyle){ 0.5f, 0.4f, 0.3f, 0.4f, 0.4f, 0.3f };   /* a middling temperament */
     GeWorld *w = &f->world;
     ge_world_init(w, 400, 240, seed);
     w->custom_combat = true;
@@ -605,6 +763,8 @@ void ge_fight_init(GeFight *f, const GeFighterDef *d0, const GeSprite *s0, const
         f->f[s].ent = ge_world_spawn(w, &defs[s]->body, sprs[s], s, 0, 0, defs[s]->max_hp);
         ent(f, s)->external = true;
     }
+    f->finisher_side = d1->undying ? 1 : d0->undying ? 0 : -1;
+    f->damage_scale[0] = f->damage_scale[1] = 1.0f;
     f->names[0] = "P1";
     f->names[1] = "P2";
     f->rounds_to_win = 2;
@@ -635,6 +795,7 @@ void ge_fight_update(GeFight *f, const GeFightInput in_[2]) {
     f->phase_timer++;
     for (int s = 0; s < 2; s++) {
         if (f->combo_show[s] > 0) f->combo_show[s]--;
+        if (f->f[s].pop_timer > 0) f->f[s].pop_timer--;
         GeFighter *F = &f->f[s];
         float hp = (float)ent(f, s)->hp;
         F->shown_hp = F->shown_hp > hp ? (F->shown_hp - 0.6f > hp ? F->shown_hp - 0.6f : hp) : hp;
@@ -644,18 +805,43 @@ void ge_fight_update(GeFight *f, const GeFightInput in_[2]) {
 
     switch (f->phase) {
     case GE_FP_INTRO:
-        if (f->phase_timer >= INTRO_TICKS) { f->phase = GE_FP_FIGHT; f->phase_timer = 0; }
+        if (f->phase_timer >= (f->intro_ticks > 0 ? f->intro_ticks : INTRO_TICKS)) { f->phase = GE_FP_FIGHT; f->phase_timer = 0; }
         break;
     case GE_FP_FIGHT:
         if (ent(f, 0)->hp <= 0 || ent(f, 1)->hp <= 0) {
             f->phase = GE_FP_KO; f->phase_timer = 0;
             end_round_decide(f, false);
             ge_world_shake(&f->world, 5.0f);
-        } else if (f->super_freeze == 0 && --f->clock <= 0) {
-            f->phase = GE_FP_TIME; f->phase_timer = 0;
-            end_round_decide(f, true);
+        } else if (f->finisher_side >= 0 && (f->finisher_pending || (f->finisher_tick > 0 && f->fight_ticks >= f->finisher_tick)) &&
+                   f->super_freeze == 0 && ent(f, 1 - f->finisher_side)->hitstop == 0) {
+            f->phase = GE_FP_FINISHER; f->phase_timer = 0;
+            for (int i = 0; i < GE_MAX_SHOTS; i++) f->world.shots[i].active = false;
+        } else if (f->super_freeze == 0) {
+            f->fight_ticks++;
+            if (!f->infinite_clock && --f->clock <= 0) {
+                f->phase = GE_FP_TIME; f->phase_timer = 0;
+                end_round_decide(f, true);
+            }
         }
         break;
+    case GE_FP_FINISHER: {
+        GeEntity *pe = ent(f, f->finisher_side), *ve = ent(f, 1 - f->finisher_side);
+        if (f->phase_timer == 1) {
+            int cl = f->f[f->finisher_side].def->clip_finisher;
+            play(pe, cl >= 0 ? cl : f->f[f->finisher_side].def->clip_idle, true);
+        }
+        if (f->phase_timer == 40) ge_world_shake(&f->world, 6.0f);
+        if (f->phase_timer == 60) {
+            ve->hp = 0;
+            f->finisher_seen = true;
+            f->finisher_pending = false;
+            f->phase = GE_FP_KO; f->phase_timer = 0;
+            end_round_decide(f, false);
+            ge_world_shake(&f->world, 9.0f);
+            ge_world_spark(&f->world, ve->pos.x, ve->pos.y - 20, -ve->facing, 24, GE_ARGB(255, 255, 255, 255));
+        }
+        break;
+    }
     case GE_FP_KO:
     case GE_FP_TIME:
         if (f->phase_timer >= 110) {
@@ -683,13 +869,16 @@ void ge_fight_update(GeFight *f, const GeFightInput in_[2]) {
         break;
     }
 
-    if (f->super_freeze > 0) { /* super flash: everything but the effects stops */
+    if (f->phase == GE_FP_FINISHER) {
+        /* everything but the effects holds still: the finisher is a scripted moment */
+    } else if (f->super_freeze > 0) { /* super flash: everything but the effects stops */
         f->super_freeze--;
     } else if (!(f->phase == GE_FP_KO && f->phase_timer < 60 && (f->phase_timer & 1))) { /* slow-motion K.O. */
         fighter_step(f, 0);
         fighter_step(f, 1);
         push_apart(f);
         resolve_hits(f);
+        if (f->model && f->phase == GE_FP_FIGHT) ge_model_tick(f->model, f, f->model_side);
     }
     ge_world_update(&f->world);   /* shots, particles, camera shake */
 
@@ -719,6 +908,78 @@ static void centered(GeImage *fb, const char *s, int y, int scale, uint32_t col)
     ge_text_outlined(fb, (fb->w - ge_text_width(s, scale)) / 2, y, s, col, GE_RGB(20, 10, 30), scale);
 }
 
+static void draw_finisher(GeFight *f, GeImage *fb, int camx, int camy, int z) {
+    int t = f->phase_timer;
+    int a = t < 24 ? t * 6 : 150;
+    ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(a, 0, 0, 12), 0);
+    for (int s = 0; s < 2; s++) {      /* the two fighters stand out of the dark */
+        GeEntity *e = ent(f, s);
+        ge_anim_draw_scaled(&e->anim, fb, ((int)e->pos.x - camx) * z, ((int)e->pos.y - camy) * z, e->facing < 0, 0, GE_WHITE, z);
+    }
+    if (t >= 44 && t < 60) {           /* one slash across the whole screen */
+        GeEntity *v = ent(f, 1 - f->finisher_side);
+        int y = ((int)v->pos.y - camy) * z - 40, grow = (t - 44) * fb->w / 6;
+        if (grow > fb->w) grow = fb->w;
+        int h = 3 + (60 - t) / 2;
+        ge_fill_rect(fb, (fb->w - grow) / 2, y - h / 2, grow, h, GE_WHITE, 0);
+    }
+    if (t >= 40 && t < 46) ge_fill_rect(fb, 0, 0, fb->w, fb->h, GE_ARGB(200 - (t - 40) * 30, 255, 255, 255), 0);
+}
+
+/* first frame index with a hitbox, or the shot frame */
+static int first_active(const GeFight *f, int s, int mi) {
+    const GeMove *m = &f->f[s].def->moves[mi];
+    const GeClip *c = clip_at(f, s, m->clip_idx);
+    if (m->shot && c->shoot >= 0) return c->shoot;
+    for (int i = 0; i < c->nframes; i++) if (c->frames[i].has_hit) return i;
+    return c->nframes;
+}
+
+static void chevron(GeImage *fb, int x, int y, bool down, uint32_t col) {
+    for (int r = 0; r < 5; r++) {
+        int w = down ? 10 - r * 2 : 2 + r * 2;
+        ge_fill_rect(fb, x - w / 2 - 1, y + r - 1, w + 2, 1, GE_ARGB(200, 20, 10, 30), 0);
+        ge_fill_rect(fb, x - w / 2, y + r, w, 1, col, 0);
+    }
+}
+
+/* What the eye needs to block: a bright guard shape in front of whoever is blocking, the word over their head,
+ * and (for hinted sides) an arrow on attacks that must be blocked low or high, shown during the wind-up. */
+static void draw_guard_cues(GeFight *f, GeImage *fb, int camx, int camy, int z) {
+    for (int s = 0; s < 2; s++) {
+        GeFighter *F = &f->f[s];
+        GeEntity *e = ent(f, s);
+        int sx = ((int)e->pos.x - camx) * z, sy = ((int)e->pos.y - camy) * z;
+        int face = e->facing >= 0 ? 1 : -1;
+        bool crouched = F->state == GE_FS_CROUCH || (F->state == GE_FS_BLOCKSTUN && F->crouch_block);
+        if (F->state == GE_FS_BLOCKSTUN || F->guarding) {
+            /* a curved shield on the side the attack comes from: tall when standing, low when crouching */
+            int top = crouched ? 20 : 30, bottom = 0, a = F->state == GE_FS_BLOCKSTUN ? 230 : 120;
+            uint32_t col = GE_ARGB(a, 140, 205, 255);
+            for (int y = -top; y <= bottom; y++) {
+                float t = (float)(y + top / 2) / (float)(top / 2 + 1);
+                int bulge = (int)(4.0f * (1.0f - t * t));
+                int x = sx + face * (12 + bulge) * z / 2;
+                ge_fill_rect(fb, x - (z > 1 ? 1 : 0), sy + y * z, z > 1 ? 3 : 2, z, col, 0);
+            }
+        }
+        if (F->pop_timer > 0 && F->pop) {
+            int a = F->pop_timer > 10 ? 255 : F->pop_timer * 25;
+            int wpx = ge_text_width(F->pop, 1), x = sx - wpx / 2;
+            x = x < 4 ? 4 : x + wpx > fb->w - 4 ? fb->w - 4 - wpx : x;
+            ge_text_outlined(fb, x, sy - 36 * z, F->pop, (F->pop_color & 0x00ffffffu) | ((uint32_t)a << 24),
+                             GE_ARGB(a, 20, 10, 30), 1);
+        }
+        /* height cue on the attacker, when the defender gets hints */
+        if (!((f->hints >> (1 - s)) & 1u) || F->state != GE_FS_MOVE) continue;
+        int guard = clip_at(f, s, F->def->moves[F->move].clip_idx)->guard;
+        if (guard != GE_GUARD_LOW && guard != GE_GUARD_HIGH) continue;
+        if (e->anim.frame > first_active(f, s, F->move)) continue;      /* only while it winds up and lands */
+        if (guard == GE_GUARD_LOW) chevron(fb, sx + face * 16 * z, sy - 4, true, GE_RGB(255, 150, 70));
+        else chevron(fb, sx, sy - 34 * z, false, GE_RGB(255, 230, 110));
+    }
+}
+
 void ge_fight_draw(GeFight *f, GeImage *fb) {
     GeWorld *w = &f->world;
     ge_world_draw(w, fb);
@@ -729,6 +990,8 @@ void ge_fight_draw(GeFight *f, GeImage *fb) {
         GeEntity *e = ent(f, f->super_side);
         ge_anim_draw_scaled(&e->anim, fb, ((int)e->pos.x - camx) * z, ((int)e->pos.y - camy) * z, e->facing < 0, 0, GE_WHITE, z);
     }
+
+    draw_guard_cues(f, fb, camx, camy, z);
 
     const uint32_t hpcol[2] = { GE_RGB(240, 200, 70), GE_RGB(240, 200, 70) };
     char buf[48];
@@ -756,14 +1019,16 @@ void ge_fight_draw(GeFight *f, GeImage *fb) {
             ge_text_outlined(fb, cx, 70, buf, GE_RGB(255, 210, 90), GE_RGB(60, 10, 20), 2);
         }
     }
-    snprintf(buf, sizeof buf, "%d", (f->clock + 59) / 60);
-    centered(fb, buf, 8, 2, f->clock < 10 * 60 ? GE_RGB(255, 120, 100) : GE_WHITE);
+    if (f->infinite_clock) snprintf(buf, sizeof buf, "--");
+    else snprintf(buf, sizeof buf, "%d", (f->clock + 59) / 60);
+    centered(fb, buf, 8, 2, (!f->infinite_clock && f->clock < 10 * 60) ? GE_RGB(255, 120, 100) : GE_WHITE);
+    if (f->phase == GE_FP_FINISHER) draw_finisher(f, fb, camx, camy, z);
 
     const char *msg = NULL;
     int scale = 3;
     switch (f->phase) {
     case GE_FP_INTRO:
-        if (f->phase_timer < 60) {
+        if (f->phase_timer < (f->intro_ticks > INTRO_TICKS ? f->intro_ticks : INTRO_TICKS) - 40) {
             bool final_round = f->f[0].wins == f->rounds_to_win - 1 && f->f[1].wins == f->rounds_to_win - 1 && f->rounds_to_win > 1;
             if (final_round) msg = "FINAL ROUND";
             else { snprintf(buf, sizeof buf, "ROUND %d", f->round); msg = buf; }
@@ -784,104 +1049,6 @@ void ge_fight_draw(GeFight *f, GeImage *fb) {
     if (msg) centered(fb, msg, 96, scale, f->phase == GE_FP_KO ? GE_RGB(255, 90, 80) : GE_RGB(255, 236, 170));
 }
 
-/* ---- CPU --------------------------------------------------------------- */
+/* (the CPU fighter lives in ge_cpu.c) */
 
-static int pick(GeFight *f, int s, int role, bool air, int min_level) {
-    const GeFighterDef *d = f->f[s].def;
-    int cand[GE_FIGHT_MAX_MOVES], n = 0;
-    for (int i = 0; i < d->nmoves; i++) {
-        const GeMove *m = &d->moves[i];
-        bool role_ok = role < 0 ? (m->ai != GE_AI_THROW && m->ai != GE_AI_ZONE && m->ai != GE_AI_NONE) : m->ai == role;
-        if (role_ok && (m->stance == ST_AIR) == air && m->level >= min_level && ge_fight_can_start(f, s, i)) cand[n++] = i;
-    }
-    return n ? cand[ge_rng_next(&f->world.rng) % (uint32_t)n] : -1;
-}
 
-void ge_fight_cpu(GeFight *f, int s, int level, GeFightInput *out) {
-    memset(out, 0, sizeof *out);
-    out->force_move = -1;
-    if (f->phase != GE_FP_FIGHT) return;
-    GeFighter *F = &f->f[s], *O = &f->f[1 - s];
-    GeEntity *e = ent(f, s), *oe = ent(f, 1 - s);
-    GeRng *r = &f->world.rng;
-    level = ge_clampi(level, 0, 3);
-    float p = 0.3f + 0.2f * (float)level;      /* 0.3 .. 0.9 */
-    float dx = oe->pos.x - e->pos.x, dist = fabsf(dx);
-    int toward = dx >= 0 ? 1 : -1;
-    if (F->ai_cd > 0) F->ai_cd--;
-
-    /* defence: block what's coming (and read lows/overheads at higher levels) */
-    bool threat = O->state == GE_FS_MOVE && dist < 95.0f;
-    for (int i = 0; i < GE_MAX_SHOTS; i++) {
-        const GeShot *sh = &f->world.shots[i];
-        if (sh->active && sh->team != s && fabsf(sh->pos.x - e->pos.x) < 110.0f && (sh->vel.x > 0) == (sh->pos.x < e->pos.x)) threat = true;
-    }
-    bool free_ground = F->state == GE_FS_STAND || F->state == GE_FS_CROUCH || F->state == GE_FS_BLOCKSTUN;
-    if (threat && free_ground) {
-        if (F->ai_block_for == 0) F->ai_block_for = ge_rng_float(r) < p ? 1 : -1;
-        if (F->ai_block_for == 1) {
-            out->x = -toward;
-            int guard = O->state == GE_FS_MOVE ? clip_at(f, 1 - s, O->def->moves[O->move].clip_idx)->guard : GE_GUARD_MID;
-            out->y = (guard == GE_GUARD_LOW && level >= 1) ? 1 : 0;
-            return;
-        }
-    } else if (!threat) {
-        F->ai_block_for = 0;
-    }
-
-    /* anti-air */
-    if (O->state == GE_FS_AIR && dist < 110.0f && F->state <= GE_FS_CROUCH && ge_rng_float(r) < p * 0.25f) {
-        int mv = pick(f, s, GE_AI_ANTIAIR, false, 0);
-        if (mv >= 0) { out->force_move = mv; return; }
-    }
-    /* combos: on a confirmed hit, cancel into something stronger */
-    if (F->state == GE_FS_MOVE && F->hit_landed) {
-        const GeMove *cur = &F->def->moves[F->move];
-        if (ge_rng_float(r) < p + 0.1f) {
-            int mv = F->meter >= GE_FIGHT_METER && ge_rng_float(r) < 0.5f ? pick(f, s, GE_AI_SUPER, false, cur->level + 1) : -1;
-            if (mv < 0) mv = pick(f, s, -1, cur->stance == ST_AIR, cur->level + 1);
-            out->force_move = mv;
-        }
-        return;
-    }
-    /* jump-ins: swing on the way down */
-    if (F->state == GE_FS_AIR && !F->air_attacked && dist < 60.0f && e->vel.y > -1.0f) {
-        out->force_move = pick(f, s, GE_AI_AIR, true, 0);
-        return;
-    }
-    if (F->state != GE_FS_STAND && F->state != GE_FS_CROUCH) return;
-
-    if (F->ai_cd > 0) { out->x = F->ai_hold_x; out->y = F->ai_hold_y; return; }
-
-    /* neutral game */
-    float roll = ge_rng_float(r);
-    int mv = -1;
-    F->ai_hold_x = 0; F->ai_hold_y = 0;
-    if (F->meter >= GE_FIGHT_METER && dist < 90.0f && roll < p * 0.4f) mv = pick(f, s, GE_AI_SUPER, false, 0);
-    else if (dist > 170.0f) {
-        if (roll < 0.25f + p * 0.3f) mv = pick(f, s, GE_AI_ZONE, false, 0);
-        else if (roll < 0.75f) F->ai_hold_x = toward;
-        else mv = pick(f, s, GE_AI_RUSH, false, 0);
-    } else if (dist > 62.0f) {
-        if (roll < 0.45f) F->ai_hold_x = toward;
-        else if (roll < 0.45f + 0.15f * p) { F->ai_hold_x = toward; F->ai_hold_y = -1; F->ai_cd = 1; }
-        else if (roll < 0.72f) mv = pick(f, s, GE_AI_RUSH, false, 0);
-        else if (roll < 0.85f) mv = pick(f, s, GE_AI_ZONE, false, 0);
-        else F->ai_hold_x = -toward;
-    } else {
-        if (level >= 1 && roll < 0.14f) mv = pick(f, s, GE_AI_THROW, false, 0);
-        else if (roll < 0.5f) mv = pick(f, s, GE_AI_POKE, false, 0);
-        else if (roll < 0.68f) mv = pick(f, s, GE_AI_LOW, false, 0);
-        else if (roll < 0.78f) mv = pick(f, s, GE_AI_OVERHEAD, false, 0);
-        else F->ai_hold_x = -toward;
-    }
-    if (mv >= 0) {
-        out->force_move = mv;
-        if (F->def->moves[mv].stance == ST_CROUCH) out->y = 1;
-        F->ai_cd = 10 + (int)(ge_rng_float(r) * (float)(26 - level * 6));
-    } else if (F->ai_cd == 0) {
-        F->ai_cd = 12 + (int)(ge_rng_float(r) * 24.0f);
-    }
-    out->x = F->ai_hold_x;
-    if (out->y == 0) out->y = F->ai_hold_y;
-}

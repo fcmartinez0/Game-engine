@@ -3,6 +3,7 @@
 
 #include "ge_anim.h"
 #include "ge_gfx.h"
+#include "ge_pattern.h"
 
 /* ---------------------------------------------------------------------------
  * The platformer world: tilemap, actors, projectiles, particles, parallax,
@@ -83,7 +84,15 @@ typedef struct {
     float air_jump_vel;
     float wall_slide_speed;   /* max fall speed while sliding down a wall; 0 = no wall moves */
     float wall_jump_vx, wall_jump_vy;
-    int wall_jump_lock;       /* ticks of no steering after a wall jump, so it pushes off */
+    int wall_jump_lock;       /* ticks of no steering after a kick off the wall, so it pushes off */
+    /* How the stick picks the wall jump (the direction held when jump is pressed, relative to the wall): AWAY from it is the
+     * kick (wall_jump_vx sideways, locked for wall_jump_lock ticks); NOTHING is a hop (wall_hop_vx away, free to steer);
+     * TOWARD it is a climb (straight up along it, free to steer, so it carries on over a ledge or back onto the wall). */
+    float wall_hop_vx;
+    float wall_chain_decay;   /* a wall jump off the same wall as the last one (no ground, no other wall between) is this
+                               * fraction of the last one's height, so one wall can be climbed a little but not forever (0 = no limit) */
+    int wall_grace_ticks;     /* a wall jump still works this many ticks after losing the wall (a press a hair late) */
+    int wall_boost_ticks;     /* after a wall jump, reversing in the air is quicker for this many ticks (getting back to the wall) */
     float dash_speed; int dash_ticks, dash_cooldown;
     bool air_dash;            /* one dash per airtime */
     bool flying;              /* no gravity; move_y steers vertically */
@@ -133,6 +142,8 @@ typedef struct {
     int air_jumps_left;
     bool air_dashed;
     int wall_dir;             /* -1/+1 while touching a wall in the air */
+    int wall_grace, wall_boost, wall_chain;   /* wall coyote ticks left, the quicker-reversal window, wall jumps in a row off one wall */
+    int8_t wall_mem, wall_last;               /* the side the wall was on when last touched / last jumped off (-1 left, +1 right) */
     int meter, ammo, ammo_timer;
     bool shot_fired;
     bool buffered_attack;
@@ -155,6 +166,7 @@ typedef struct {
     bool borrowed;            /* image owned by someone else: not freed with this world */
     uint8_t alpha;            /* baked into the image when the layer is added, then reads as 255 */
     GeSpans spans;            /* built by ge_world_add_layer */
+    bool translucent;         /* has partly see-through pixels (set by ge_world_add_layer) */
 } GeParallaxLayer;
 
 /* ---- particles ---- */
@@ -184,7 +196,9 @@ typedef enum {
     GE_EV_HAZARD,   /* a touched spikes */
     GE_EV_CHANNEL,  /* a finished channelling (e.g. heal) */
     GE_EV_POGO,     /* a bounced off something with a down-slash */
-    GE_EV_SHOOT     /* a fired shot b */
+    GE_EV_SHOOT,    /* a fired shot b */
+    GE_EV_SHOT_TILE /* a shot fired by entity a (-1: nobody) stopped against the solid cell b (row * map width + column;
+                     * -1 past the map's edge) */
 } GeEventType;
 
 /* One hit, as applied to a victim. */
@@ -215,6 +229,11 @@ typedef struct GeWorld {
     GeRng rng;
     int vignette;
     bool low_detail;          /* drop optional layers + vignette (original 3DS) */
+    bool foreground_off;      /* skip the foreground layers (e.g. indoors) */
+    bool background_off;      /* skip the clear and the background layers: the game's own art covers the view */
+    int background_clip_x;    /* if > 0: the background is only needed left of this screen column (the rest is covered) */
+    bool reference_background; /* tests: paint the background layers the plain back-to-front way */
+    GePattern *backdrop_pattern;  /* when set, drawn instead of the background layers (fight screens) */
     bool custom_combat;       /* another module resolves hits (ge_fight) */
     int zoom;                 /* draw tiles/entities/effects magnified (parallax stays native); 0 or 1 = none.
                                  cam.vw/vh are then in world units (e.g. 200x120 for a 2x view of 400x240) */
@@ -265,6 +284,7 @@ int   ge_entity_wall_contact(const GeWorld *w, const GeEntity *e); /* -1 wall on
 bool  ge_entity_physics(GeWorld *w, int idx);                  /* move + collide; false if it fell out */
 GeRect ge_entity_hurtbox(const GeEntity *e);
 bool  ge_entity_hitbox(const GeEntity *e, GeRect *out);         /* active hitbox of the current frame */
+void  ge_entity_pogo(GeWorld *w, int idx, float speed);         /* bounce up as off spikes: refreshes the air jump and dash */
 void  ge_world_apply_hit(GeWorld *w, int attacker, int victim, const GeHit *h);
 void  ge_world_event(GeWorld *w, GeEventType ev, int a, int b);
 

@@ -1,17 +1,31 @@
 #include "ge/ge_gfx.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* Pixels start on a 32-byte boundary (one cache line on the 3DS's ARM11): a row of the 400-wide screen is
+ * then exactly 50 lines, and an 8-pixel run never straddles two of them. malloc only promises 8 or 16, so
+ * the block is over-allocated and the real start is kept just before the pixels for ge_image_free. */
+#define GE_IMAGE_ALIGN 32
+
 GeImage ge_image_create(int w, int h) {
-    GeImage img = { w, h, (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t)) };
-    if (!img.px) img.w = img.h = 0;
+    GeImage img = { 0, 0, NULL };
+    if (w <= 0 || h <= 0) return img;
+    /* too big to address (a 3DS's size_t is 32 bits: a mod's huge image header must fail, not wrap around) */
+    if ((size_t)w > (SIZE_MAX - GE_IMAGE_ALIGN - sizeof(void *)) / sizeof(uint32_t) / (size_t)h) return img;
+    size_t bytes = (size_t)w * (size_t)h * sizeof(uint32_t);
+    unsigned char *raw = (unsigned char *)calloc(1, bytes + GE_IMAGE_ALIGN + sizeof(void *));
+    if (!raw) return img;
+    uintptr_t at = ((uintptr_t)(raw + sizeof(void *)) + GE_IMAGE_ALIGN - 1) & ~(uintptr_t)(GE_IMAGE_ALIGN - 1);
+    ((void **)at)[-1] = raw;
+    img.w = w; img.h = h; img.px = (uint32_t *)at;
     return img;
 }
 
 void ge_image_free(GeImage *img) {
-    free(img->px);
+    if (img->px) free(((void **)img->px)[-1]);
     img->px = NULL;
     img->w = img->h = 0;
 }
@@ -73,9 +87,15 @@ static inline uint32_t px_tint(uint32_t s, uint32_t t, int flash) {
 
 /* ---- primitives -------------------------------------------------------- */
 
+/* n pixels of one colour, eight stores per loop trip (the compiler only unrolls this loop twice by itself:
+ * on the ARM11 that's 2.5 instructions a pixel instead of under 1.5) */
+static inline void fill_px(uint32_t *d, int n, uint32_t c) {
+    for (; n >= 8; n -= 8, d += 8) { d[0] = c; d[1] = c; d[2] = c; d[3] = c; d[4] = c; d[5] = c; d[6] = c; d[7] = c; }
+    for (; n > 0; n--) *d++ = c;
+}
+
 void ge_clear(GeImage *dst, uint32_t color) {
-    size_t n = (size_t)dst->w * (size_t)dst->h;
-    for (size_t i = 0; i < n; i++) dst->px[i] = color;
+    for (int y = 0; y < dst->h; y++) fill_px(dst->px + (size_t)y * dst->w, dst->w, color);
 }
 
 void ge_fill_rect(GeImage *dst, int x, int y, int w, int h, uint32_t color, int flags) {
@@ -83,13 +103,27 @@ void ge_fill_rect(GeImage *dst, int x, int y, int w, int h, uint32_t color, int 
     int x1 = x + w > dst->w ? dst->w : x + w, y1 = y + h > dst->h ? dst->h : y + h;
     if (x1 <= x0) return;
     if ((color >> 24) == 255 && !(flags & GE_ADDITIVE)) {       /* opaque: a plain fill, no blending */
-        for (int yy = y0; yy < y1; yy++) {
-            uint32_t *row = dst->px + (size_t)yy * dst->w;
-            for (int xx = x0; xx < x1; xx++) row[xx] = color;
-        }
+        for (int yy = y0; yy < y1; yy++) fill_px(dst->px + (size_t)yy * dst->w + x0, x1 - x0, color);
         return;
     }
     if ((color >> 24) == 0) return;
+    if (!(flags & GE_ADDITIVE)) {
+        /* one colour over an opaque framebuffer (the usual dimming/flash overlay): px_blend's arithmetic
+         * with the colour's half of it worked out once */
+        uint32_t sa = color >> 24, a = sa + (sa >> 7), ia = 256 - a;
+        uint32_t srb = (color & 0x00FF00FFu) * a, sg = (color & 0x0000FF00u) * a;
+        for (int yy = y0; yy < y1; yy++) {
+            uint32_t *row = dst->px + (size_t)yy * dst->w;
+            for (int xx = x0; xx < x1; xx++) {
+                uint32_t d = row[xx];
+                if ((d >> 24) == 255)
+                    row[xx] = 0xFF000000u | (((srb + (d & 0x00FF00FFu) * ia) >> 8) & 0x00FF00FFu) |
+                              (((sg + (d & 0x0000FF00u) * ia) >> 8) & 0x0000FF00u);
+                else row[xx] = px_blend(d, color, 0);
+            }
+        }
+        return;
+    }
     for (int yy = y0; yy < y1; yy++) {
         uint32_t *row = dst->px + (size_t)yy * dst->w;
         for (int xx = x0; xx < x1; xx++) row[xx] = px_blend(row[xx], color, flags);
@@ -106,8 +140,7 @@ void ge_gradient_v(GeImage *dst, int y0, int y1, uint32_t top, uint32_t bottom) 
             int a = (top >> sh) & 255, b = (bottom >> sh) & 255;
             c |= (uint32_t)(a + (((b - a) * t) >> 8)) << sh;
         }
-        uint32_t *row = dst->px + (size_t)y * dst->w;
-        for (int x = 0; x < dst->w; x++) row[x] = c;
+        fill_px(dst->px + (size_t)y * dst->w, dst->w, c);
     }
 }
 
@@ -213,23 +246,88 @@ void ge_blit_scaled(GeImage *dst, const GeImage *src, GeIRect sr, int dx, int dy
     bool fast = plain && !(flags & (GE_ADDITIVE | GE_FLASH));
     bool opaque = (flags & GE_OPAQUE) != 0;
     int flash = flags & GE_FLASH;
-    int lx0 = (x0 - dx) / scale, sub0 = (x0 - dx) % scale;   /* once per call, not per pixel */
-    for (int y = y0; y < y1; y++) {
-        int ly = (y - dy) / scale;
-        int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
-        const uint32_t *srow = src->px + (size_t)sy * src->w;
-        uint32_t *drow = dst->px + (size_t)y * dst->w;
-        int lx = lx0, sub = sub0;
-        for (int x = x0; x < x1; x++) {
-            uint32_t s = srow[(flags & GE_FLIP_X) ? sr.x + sr.w - 1 - lx : sr.x + lx];
-            if (opaque) drow[x] = s;
-            else if (fast) { uint32_t sa = s >> 24; if (sa == 255) drow[x] = s; else if (sa) drow[x] = px_blend(drow[x], s, 0); }
-            else if (s >> 24) {
-                if (!plain) s = px_tint(s, tint, flash);
-                drow[x] = px_blend(drow[x], s, flags & ~GE_OPAQUE);
+    /* divisions once per call, not per row or pixel (the 3DS's ARM11 has no divide instruction) */
+    int lx0 = (x0 - dx) / scale, sub0 = (x0 - dx) % scale;
+    int ly = (y0 - dy) / scale, suby = (y0 - dy) % scale;
+    int step = (flags & GE_FLIP_X) ? -1 : 1;
+    if (scale == 2 && (opaque || fast)) {
+        /* The duels' 2x zoom: each source pixel is read and tested once for its whole 2x2 block, and two
+         * screen rows are written per pass where both are on screen. */
+        int n = x1 - x0;
+        for (int y = y0; y < y1; ) {
+            bool pair = suby == 0 && y + 1 < y1;
+            uint32_t *d0 = dst->px + (size_t)y * dst->w + x0, *d1 = d0 + dst->w;
+            int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
+            const uint32_t *sp = src->px + (size_t)sy * src->w + (step < 0 ? sr.x + sr.w - 1 - lx0 : sr.x + lx0);
+            int i = 0;
+#define PUT2(d, k, s) do { uint32_t sa_ = (s) >> 24;                                                       \
+                           if (opaque || sa_ == 255) d[k] = (s); else if (sa_) d[k] = px_blend(d[k], (s), 0); } while (0)
+            if (sub0) {                                     /* starting on the right half of a source pixel */
+                uint32_t c = *sp; sp += step;
+                PUT2(d0, 0, c);
+                if (pair) PUT2(d1, 0, c);
+                i = 1;
             }
-            if (++sub == scale) { sub = 0; lx++; }
+            if (pair) {
+                for (; i + 2 <= n; i += 2, sp += step) {
+                    uint32_t c = *sp, sa = c >> 24;
+                    if (opaque || sa == 255) { d0[i] = c; d0[i + 1] = c; d1[i] = c; d1[i + 1] = c; }
+                    else if (sa) {
+                        d0[i] = px_blend(d0[i], c, 0); d0[i + 1] = px_blend(d0[i + 1], c, 0);
+                        d1[i] = px_blend(d1[i], c, 0); d1[i + 1] = px_blend(d1[i + 1], c, 0);
+                    }
+                }
+                if (i < n) { uint32_t c = *sp; PUT2(d0, i, c); PUT2(d1, i, c); }
+            } else {
+                for (; i + 2 <= n; i += 2, sp += step) {
+                    uint32_t c = *sp, sa = c >> 24;
+                    if (opaque || sa == 255) { d0[i] = c; d0[i + 1] = c; }
+                    else if (sa) { d0[i] = px_blend(d0[i], c, 0); d0[i + 1] = px_blend(d0[i + 1], c, 0); }
+                }
+                if (i < n) { uint32_t c = *sp; PUT2(d0, i, c); }
+            }
+#undef PUT2
+            if (pair) { y += 2; ly++; }
+            else { y++; if (++suby == 2) { suby = 0; ly++; } }
         }
+        return;
+    }
+    const uint32_t *prev = NULL;                            /* the row above, if it came from the same source row */
+    for (int y = y0; y < y1; y++) {
+        uint32_t *drow = dst->px + (size_t)y * dst->w;
+        if (opaque && prev) {                               /* opaque: rows from the same source row are identical */
+            memcpy(drow + x0, prev + x0, sizeof(uint32_t) * (size_t)(x1 - x0));
+            prev = drow;
+            if (++suby == scale) { suby = 0; ly++; prev = NULL; }
+            continue;
+        }
+        int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
+        const uint32_t *sp = src->px + (size_t)sy * src->w + (step < 0 ? sr.x + sr.w - 1 - lx0 : sr.x + lx0);
+        int sub = sub0;
+        if (opaque) {
+            for (int x = x0; x < x1; x++) {
+                drow[x] = *sp;
+                if (++sub == scale) { sub = 0; sp += step; }
+            }
+        } else if (fast) {
+            for (int x = x0; x < x1; x++) {
+                uint32_t s = *sp, sa = s >> 24;
+                if (sa == 255) drow[x] = s;
+                else if (sa) drow[x] = px_blend(drow[x], s, 0);
+                if (++sub == scale) { sub = 0; sp += step; }
+            }
+        } else {
+            for (int x = x0; x < x1; x++) {
+                uint32_t s = *sp;
+                if (s >> 24) {
+                    if (!plain) s = px_tint(s, tint, flash);
+                    drow[x] = px_blend(drow[x], s, flags & ~GE_OPAQUE);
+                }
+                if (++sub == scale) { sub = 0; sp += step; }
+            }
+        }
+        prev = drow;
+        if (++suby == scale) { suby = 0; ly++; prev = NULL; }
     }
 }
 
@@ -281,16 +379,34 @@ int ge_spans_build(GeSpans *out, const GeImage *img) {
     }
     out->row_start[img->h] = (uint32_t)n;
     out->rows = img->h;
+    out->row_kind = (uint8_t *)malloc((size_t)img->h);   /* optional: without it the compositor isn't used */
+    if (out->row_kind)
+        for (int y = 0; y < img->h; y++) {
+            int count = 0;
+            for (uint32_t k = out->row_start[y]; k < out->row_start[y + 1]; k++)
+                if (out->spans[k].opaque) count += out->spans[k].len;
+            out->row_kind[y] = count == 0 ? GE_ROW_NONE : count == img->w ? GE_ROW_ALL : GE_ROW_SOME;
+        }
     return 0;
 }
 
 void ge_spans_free(GeSpans *s) {
-    free(s->spans); free(s->row_start);
+    free(s->spans); free(s->row_start); free(s->row_kind);
     memset(s, 0, sizeof *s);
 }
 
+void ge_blend_row(uint32_t *dst, const uint32_t *src, int n, int flags) {
+    for (int i = 0; i < n; i++) dst[i] = px_blend(dst[i], src[i], flags);
+}
+
 void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags) {
+    ge_spans_draw_wrap_x_clip(dst, src, sp, scroll_x, dy, flags, dst->w);
+}
+
+void ge_spans_draw_wrap_x_clip(GeImage *dst, const GeImage *src, const GeSpans *sp, int scroll_x, int dy, int flags, int clip_x1) {
     if (src->w <= 0 || !sp->spans) return;
+    int cw = clip_x1 < dst->w ? clip_x1 : dst->w;
+    if (cw <= 0) return;
     int off = scroll_x % src->w;
     if (off < 0) off += src->w;
     int y0 = dy < 0 ? 0 : dy, y1 = dy + src->h > dst->h ? dst->h : dy + src->h;
@@ -299,14 +415,14 @@ void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, i
         const uint32_t *srow = src->px + (size_t)(y - dy) * src->w;
         uint32_t *drow = dst->px + (size_t)y * dst->w;
         uint32_t first = sp->row_start[y - dy], last = sp->row_start[y - dy + 1];
-        for (int base = -off; base < dst->w; base += src->w) {
+        for (int base = -off; base < cw; base += src->w) {
             for (uint32_t k = first; k < last; k++) {
                 const GeSpan *g = &sp->spans[k];
                 int a = base + g->x, b = a + g->len;
-                if (b <= 0 || a >= dst->w) continue;
+                if (b <= 0 || a >= cw) continue;
                 int from = a < 0 ? -a : 0;
                 if (a < 0) a = 0;
-                if (b > dst->w) b = dst->w;
+                if (b > cw) b = cw;
                 const uint32_t *s = srow + g->x + from;
                 if (g->opaque && !add) memcpy(drow + a, s, (size_t)(b - a) * sizeof(uint32_t));
                 else for (int x = a; x < b; x++, s++) drow[x] = px_blend(drow[x], *s, flags);
@@ -319,17 +435,55 @@ void ge_spans_draw_wrap_x(GeImage *dst, const GeImage *src, const GeSpans *sp, i
 
 /* one magnified glyph pixel: written straight into the image when opaque (no call, no blend) */
 static inline void block(GeImage *dst, int x, int y, int scale, uint32_t color) {
-    if ((color >> 24) != 255) { ge_fill_rect(dst, x, y, scale, scale, color, 0); return; }
     int x0 = x < 0 ? 0 : x, x1 = x + scale > dst->w ? dst->w : x + scale;
     int y0 = y < 0 ? 0 : y, y1 = y + scale > dst->h ? dst->h : y + scale;
+    if ((color >> 24) == 0) return;
+    bool opaque = (color >> 24) == 255;   /* fading text blends here directly, not through ge_fill_rect */
     for (int yy = y0; yy < y1; yy++) {
         uint32_t *row = dst->px + (size_t)yy * dst->w;
-        for (int xx = x0; xx < x1; xx++) row[xx] = color;
+        if (opaque) for (int xx = x0; xx < x1; xx++) row[xx] = color;
+        else for (int xx = x0; xx < x1; xx++) row[xx] = px_blend(row[xx], color, 0);
+    }
+}
+
+/* Rows of a bitmap, bit (top >> col) = column col, each bit a scale x scale block of one opaque colour,
+ * the whole thing on screen: plain stores, no clipping or blending (the per-pixel block() calls were most
+ * of the cost of text). */
+static void bits_direct(GeImage *dst, int x, int y, const uint8_t *rows, int nrows, int ncols, int top, int scale, uint32_t color) {
+    for (int r = 0; r < nrows; r++) {
+        int bits = rows[r];
+        if (!bits) continue;
+        uint32_t *row = dst->px + (size_t)(y + r * scale) * dst->w + x;
+        for (int col = 0; col < ncols; ) {
+            if (!(bits & (top >> col))) { col++; continue; }
+            int c1 = col + 1;
+            while (c1 < ncols && (bits & (top >> c1))) c1++;      /* a run of set bits: one fill per pixel row */
+            for (int yy = 0; yy < scale; yy++) fill_px(row + (size_t)yy * dst->w + col * scale, (c1 - col) * scale, color);
+            col = c1;
+        }
     }
 }
 
 void ge_draw_bits(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, uint32_t color) {
     if (x >= dst->w || y >= dst->h || x + 5 * scale <= 0 || y + 7 * scale <= 0) return;
+    if (scale > 1 && (color >> 24) == 255 && x >= 0 && x + 5 * scale <= dst->w && y >= 0 && y + 7 * scale <= dst->h) {
+        bits_direct(dst, x, y, rows, 7, 5, 0x10, scale, color);
+        return;
+    }
+    if (scale == 1 && (color >> 24) == 255 && x >= 0 && x + 5 <= dst->w && y >= 0 && y + 7 <= dst->h) {
+        /* the usual HUD case: plain stores, no clipping (one call per pixel was most of the cost) */
+        uint32_t *row = dst->px + (size_t)y * dst->w + x;
+        for (int r = 0; r < 7; r++, row += dst->w) {
+            int bits = rows[r];
+            if (!bits) continue;
+            if (bits & 0x10) row[0] = color;
+            if (bits & 0x08) row[1] = color;
+            if (bits & 0x04) row[2] = color;
+            if (bits & 0x02) row[3] = color;
+            if (bits & 0x01) row[4] = color;
+        }
+        return;
+    }
     for (int r = 0; r < 7; r++) {
         int bits = rows[r];
         if (!bits) continue;
@@ -341,13 +495,36 @@ void ge_draw_bits(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, 
 /* the glyph grown by one pixel in every direction: the outline, drawn before the glyph itself */
 void ge_draw_bits_outline(GeImage *dst, int x, int y, const uint8_t rows[7], int scale, uint32_t color) {
     if (x >= dst->w + scale || y >= dst->h + scale || x + 6 * scale <= 0 || y + 8 * scale <= 0) return;
+    if (scale > 1 && (color >> 24) == 255 && x >= scale && x + 6 * scale <= dst->w && y >= scale && y + 8 * scale <= dst->h) {
+        uint8_t grown[9];
+        for (int r = -1; r <= 7; r++) {
+            int bits = 0;
+            for (int k = r - 1; k <= r + 1; k++)
+                if (k >= 0 && k < 7) bits |= (rows[k] << 2) | (rows[k] << 1) | rows[k];
+            grown[r + 1] = (uint8_t)bits;
+        }
+        bits_direct(dst, x - scale, y - scale, grown, 9, 7, 0x40, scale, color);
+        return;
+    }
+    if (scale == 1 && (color >> 24) == 255 && x >= 1 && x + 6 <= dst->w && y >= 1 && y + 8 <= dst->h) {
+        uint32_t *row = dst->px + (size_t)(y - 1) * dst->w + (x - 1);   /* as below, without the clipping */
+        for (int r = -1; r <= 7; r++, row += dst->w) {
+            int bits = 0;
+            for (int k = r - 1; k <= r + 1; k++)
+                if (k >= 0 && k < 7) bits |= (rows[k] << 2) | (rows[k] << 1) | rows[k];
+            if (!bits) continue;
+            for (int col = 0; col < 7; col++)
+                if (bits & (0x40 >> col)) row[col] = color;
+        }
+        return;
+    }
     for (int r = -1; r <= 7; r++) {
-        int bits = 0;
+        int bits = 0;   /* 7 columns, -1 .. 5: bit 0x40 is column -1 */
         for (int k = r - 1; k <= r + 1; k++)
-            if (k >= 0 && k < 7) bits |= (rows[k] << 1) | rows[k] | (rows[k] >> 1);   /* 7 columns: -1 .. 5 */
+            if (k >= 0 && k < 7) bits |= (rows[k] << 2) | (rows[k] << 1) | rows[k];
         if (!bits) continue;
         for (int col = 0; col < 7; col++)
-            if (bits & (0x20 >> col)) block(dst, x + (col - 1) * scale, y + r * scale, scale, color);
+            if (bits & (0x40 >> col)) block(dst, x + (col - 1) * scale, y + r * scale, scale, color);
     }
 }
 
@@ -355,6 +532,24 @@ void ge_draw_bits_outline(GeImage *dst, int x, int y, const uint8_t rows[7], int
 
 /* Netpbm PAM (P7, 4-channel). Trivial to export from GIMP/ImageMagick and
  * needs no third-party decoder, which keeps the 3DS build dependency-free. */
+int ge_image_save_pam(const GeImage *img, const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    fprintf(f, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", img->w, img->h);
+    unsigned char row[4 * 512];
+    for (int y = 0; y < img->h; y++)
+        for (int x0 = 0; x0 < img->w; x0 += 512) {
+            int n = img->w - x0 < 512 ? img->w - x0 : 512;
+            for (int i = 0; i < n; i++) {
+                uint32_t p = img->px[y * img->w + x0 + i];
+                row[i * 4] = (unsigned char)(p >> 16); row[i * 4 + 1] = (unsigned char)(p >> 8);
+                row[i * 4 + 2] = (unsigned char)p; row[i * 4 + 3] = (unsigned char)(p >> 24);
+            }
+            fwrite(row, 4, (size_t)n, f);
+        }
+    return fclose(f) == 0 ? 0 : -2;
+}
+
 int ge_image_load_pam(GeImage *out, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;

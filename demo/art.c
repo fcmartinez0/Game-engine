@@ -4,6 +4,7 @@
 
 #include "demo.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #define PI 3.14159265f
@@ -24,11 +25,15 @@ static void pt(float x, float y, float ang, float len, int *ox, int *oy) {
 
 /* ---- the puppet -------------------------------------------------------- */
 
-enum { HEAD_HUMAN, HEAD_MASK, HEAD_GOBLIN, HEAD_MOTH, HEAD_HELM };
+enum { HEAD_HUMAN, HEAD_MASK, HEAD_GOBLIN, HEAD_MOTH, HEAD_HELM, HEAD_PARAGON };
 
 typedef struct {
     uint32_t skin, hair, cloak, tunic, pants, boots, weapon, weapon_hi;
     int head, head_r, weapon_len, weapon_w;
+    uint32_t eye;                       /* optional glow colour for the mask's eye (0 = plain) */
+    uint32_t halo;                      /* optional ring behind the head (0 = none) */
+    int cloak_len;                      /* extra cloak length in pixels */
+    uint32_t rim;                       /* outline colour (0 = near-black) */
 } Look;
 
 enum { L_WALK, L_TUCK, L_SPREAD, L_STAND, L_CROUCH, L_KICK, L_SWEEP, L_KNEEL };
@@ -70,7 +75,8 @@ static void draw_head(GeImage *im, int hx, int hy, const Look *L) {
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
         ge_fill_rect(im, hx + r - 1, hy + 1, 3, 2, L->skin, 0);                    /* small snout */
         ge_fill_rect(im, hx + r + 1, hy + 1, 1, 2, ink, 0);
-        ge_fill_rect(im, hx + 1, hy - 2, 3, 4, ink, 0);                            /* big front eye */
+        ge_fill_rect(im, hx + 1, hy - 2, 3, 4, L->eye ? L->eye : ink, 0);          /* big front eye */
+        if (L->eye) ge_fill_rect(im, hx + 2, hy - 1, 1, 2, GE_RGB(255, 255, 255), 0);
         ge_fill_rect(im, hx - 3, hy - 1, 2, 2, mix(L->skin, ink, 0.25f), 0);       /* shading at the back of the head */
         break;
     case HEAD_GOBLIN:
@@ -107,6 +113,24 @@ static void draw_head(GeImage *im, int hx, int hy, const Look *L) {
         ge_fill_rect(im, hx + 1, hy - 2, r - 1, 3, GE_RGB(255, 140, 60), 0);       /* glowing visor: front half only */
         ge_fill_rect(im, hx + 3, hy - 1, 2, 1, GE_RGB(255, 240, 160), 0);          /* hot core of the visor */
         break;
+    case HEAD_PARAGON:
+        /* A smooth, featureless oval with one vertical slit of an eye at the front, three thin spines swept
+         * back like a crown, and a ring hanging behind. Nothing else in the game has a halo. */
+        if (L->halo) {
+            for (int i = 0; i < 20; i++) {
+                float a0 = (float)i * PI / 10.0f, a1 = (float)(i + 1) * PI / 10.0f;
+                ge_draw_line(im, hx - 4 + (int)lroundf(cosf(a0) * 5.0f), hy - 1 + (int)lroundf(sinf(a0) * 6.0f),
+                             hx - 4 + (int)lroundf(cosf(a1) * 5.0f), hy - 1 + (int)lroundf(sinf(a1) * 6.0f), 1, L->halo);
+            }
+        }
+        for (int i = 0; i < 3; i++) ge_draw_line(im, hx - 1, hy - r + i * 2, hx - 9 + i, hy - r - 3 + i * 3, 1, L->hair);
+        ge_fill_circle(im, hx, hy, r + 1, ink, 0);
+        ge_fill_circle(im, hx, hy, r, L->skin, 0);
+        ge_fill_rect(im, hx + r - 1, hy - 2, 2, 5, L->skin, 0);                    /* long chin forward */
+        ge_fill_rect(im, hx + 2, hy - 3, 2, 5, ink, 0);                            /* the slit */
+        ge_fill_rect(im, hx + 2, hy - 2, 1, 3, L->eye ? L->eye : GE_RGB(255, 210, 80), 0);
+        ge_fill_rect(im, hx - 3, hy - 2, 2, 4, mix(L->skin, ink, 0.35f), 0);
+        break;
     default:
         ge_fill_circle(im, hx, hy, r + 1, ink, 0);
         ge_fill_circle(im, hx, hy, r, L->skin, 0);
@@ -123,8 +147,9 @@ static void draw_figure(GeImage *im, int cx, int base, const Look *L, const Pose
     int hx = cx + (int)lroundf(P->lean * 1.25f), hy = shy - 4;
 
     /* cloak behind everything */
-    ge_draw_line(im, shx - 1, shy, hipx - 6, hipy + 3 + (int)P->cloak, 4, L->cloak);
-    ge_draw_line(im, shx - 2, shy + 1, hipx - 9, hipy + 1 + (int)(P->cloak * 1.5f), 2, mix(L->cloak, GE_RGB(20, 14, 30), 0.3f));
+    int cl = L->cloak_len;
+    ge_draw_line(im, shx - 1, shy, hipx - 6 - cl / 2, hipy + 3 + cl + (int)P->cloak, 4, L->cloak);
+    ge_draw_line(im, shx - 2, shy + 1, hipx - 9 - cl, hipy + 1 + cl + (int)(P->cloak * 1.5f), 2, mix(L->cloak, GE_RGB(20, 14, 30), 0.3f));
 
     float s = sinf(P->phase * 2 * PI), c = cosf(P->phase * 2 * PI);
     switch (P->legs) {   /* back leg */
@@ -161,17 +186,21 @@ static void draw_figure(GeImage *im, int cx, int base, const Look *L, const Pose
     draw_head(im, hx, hy, L);
 
     int fax, fay;
-    pt((float)shx, (float)shy, P->arm_f, 8, &fax, &fay);
+    pt((float)shx, (float)shy, P->arm_f, 9, &fax, &fay);
+    ge_fill_circle(im, shx, shy, 2, mix(L->tunic, GE_RGB(255, 255, 255), 0.15f), 0);   /* shoulder */
     ge_draw_line(im, shx, shy, fax, fay, 2, L->tunic);
     ge_fill_rect(im, fax - 1, fay - 1, 3, 3, L->skin, 0);
     if (L->weapon_len > 0) {
-        int tx, ty;
+        int tx, ty, g0x, g0y, g1x, g1y;
         pt((float)fax, (float)fay, P->sword, (float)L->weapon_len, &tx, &ty);
         ge_draw_line(im, fax, fay, tx, ty, L->weapon_w, L->weapon);
         if (L->weapon_w >= 2) ge_draw_line(im, fax, fay, tx, ty, 1, L->weapon_hi);
+        pt((float)fax, (float)fay, P->sword + PI * 0.5f, 2.5f, &g0x, &g0y);         /* cross-guard: reads as "sword" */
+        pt((float)fax, (float)fay, P->sword - PI * 0.5f, 2.5f, &g1x, &g1y);
+        ge_draw_line(im, g0x, g0y, g1x, g1y, 1, mix(L->weapon, GE_RGB(20, 14, 30), 0.35f));
     }
     if (P->arc) {
-        float r = (float)L->weapon_len + 7.0f;
+        float r = (float)L->weapon_len + 10.0f;   /* the arc follows the blade tip */
         int px = 0, py = 0;
         for (int i = 0; i <= 10; i++) {
             float t = (float)i / 10.0f, a = P->arc0 + (P->arc1 - P->arc0) * t;
@@ -192,10 +221,27 @@ static void draw_fallen(GeImage *im, int cx, int base, const Look *L) {
 }
 
 /* Each cell is drawn into a scratch image so clipping to the cell is automatic. */
+/* A one-pixel dark rim around everything solid: the single cheapest way to make a small sprite read
+ * against a busy background (slash trails, which are see-through, get no rim). */
+static void outline(GeImage *im, uint32_t rim) {
+    const uint32_t ink = rim ? rim : GE_RGB(14, 10, 22);
+    uint8_t *solid = calloc((size_t)(im->w * im->h), 1);
+    for (int i = 0; i < im->w * im->h; i++) solid[i] = (im->px[i] >> 24) >= 200;
+    for (int y = 0; y < im->h; y++)
+        for (int x = 0; x < im->w; x++) {
+            int i = y * im->w + x;
+            if ((im->px[i] >> 24) != 0) continue;
+            bool edge = (x > 0 && solid[i - 1]) || (x + 1 < im->w && solid[i + 1]) || (y > 0 && solid[i - im->w]) || (y + 1 < im->h && solid[i + im->w]);
+            if (edge) im->px[i] = ink;
+        }
+    free(solid);
+}
+
 static void put_cell(GeImage *sheet, int cw, int ch, int cell, const Look *L, const Pose *p, bool fallen) {
     GeImage tmp = ge_image_create(cw, ch);
-    if (fallen) draw_fallen(&tmp, cw / 2, ch - 1, L);
-    else draw_figure(&tmp, cw / 2, ch - 1, L, p);
+    if (fallen) draw_fallen(&tmp, HUM_BODY_X, ch - 1, L);
+    else draw_figure(&tmp, HUM_BODY_X, ch - 1, L, p);
+    outline(&tmp, L->rim);
     int cols = sheet->w / cw;
     GeIRect all = { 0, 0, cw, ch };
     ge_blit(sheet, &tmp, all, (cell % cols) * cw, (cell / cols) * ch, 0, GE_WHITE);
@@ -203,7 +249,7 @@ static void put_cell(GeImage *sheet, int cw, int ch, int cell, const Look *L, co
 }
 
 static GeImage humanoid_sheet(const Look *L) {
-    GeImage im = ge_image_create(256, 224);
+    GeImage im = ge_image_create(HUM_CELL_W * 8, HUM_CELL_H * 7);
     Pose P[H_COUNT];
     memset(P, 0, sizeof P);
 #define POSE(i, ...) P[i] = (Pose){ __VA_ARGS__ }
@@ -263,8 +309,13 @@ static GeImage humanoid_sheet(const Look *L) {
     POSE(H_WIN, .legs = L_STAND, .arm_f = -1.3f, .arm_b = 2.4f, .sword = -1.57f, .cloak = 2);
     POSE(H_HURTAIR, .lean = -5, .legs = L_SPREAD, .arm_f = -2.4f, .arm_b = -2.0f, .sword = 2.4f, .cloak = 3);
     POSE(H_JH, .lean = 3, .legs = L_TUCK, .arm_f = 0.9f, .arm_b = 0.4f, .sword = 0.9f, .arc = 1, .arc0 = -1.2f, .arc1 = 1.1f, .cloak = -2);
+    /* the long thrust (K): draw back, then the whole arm and blade straight out */
+    POSE(H_TRA, .bob = 1, .lean = -3, .legs = L_SPREAD, .arm_f = 2.9f, .arm_b = 1.0f, .sword = 0.05f, .cloak = -1);
+    POSE(H_TRB, .lean = 6, .legs = L_SPREAD, .arm_f = 0.02f, .arm_b = 2.8f, .sword = 0.0f, .cloak = 4);
+    POSE(H_TRC, .lean = 4, .legs = L_SPREAD, .arm_f = 0.3f, .arm_b = 2.6f, .sword = 0.25f, .cloak = 2);
+    POSE(H_JK, .lean = 4, .legs = L_TUCK, .arm_f = 0.5f, .arm_b = 2.6f, .sword = 0.55f, .arc = 1, .arc0 = -0.4f, .arc1 = 0.9f, .cloak = -3);
 #undef POSE
-    for (int i = 0; i < H_COUNT; i++) put_cell(&im, 32, 32, i, L, &P[i], i == H_DEAD);
+    for (int i = 0; i < H_COUNT; i++) put_cell(&im, HUM_CELL_W, HUM_CELL_H, i, L, &P[i], i == H_DEAD);
     return im;
 }
 
@@ -376,14 +427,21 @@ static void fx_cell(GeImage *im, int cell) {
 void art_make_sheets(Sprites *s) {
     memset(s, 0, sizeof *s);
     Look hero = { GE_RGB(242, 236, 228), GE_RGB(40, 30, 40), GE_RGB(200, 40, 60), GE_RGB(150, 30, 50), GE_RGB(60, 40, 60),
-                  GE_RGB(40, 30, 40), GE_RGB(220, 226, 240), GE_RGB(255, 255, 255), HEAD_MASK, 4, 12, 2 };
+                  GE_RGB(40, 30, 40), GE_RGB(220, 226, 240), GE_RGB(255, 255, 255), HEAD_MASK, 4, 17, 2, 0, 0, 0, 0 };
     Look brawler = { GE_RGB(110, 170, 80), GE_RGB(70, 100, 50), GE_RGB(120, 70, 40), GE_RGB(120, 80, 50), GE_RGB(70, 55, 45),
-                     GE_RGB(50, 40, 35), GE_RGB(120, 80, 45), GE_RGB(170, 125, 80), HEAD_GOBLIN, 5, 11, 3 };
+                     GE_RGB(50, 40, 35), GE_RGB(120, 80, 45), GE_RGB(170, 125, 80), HEAD_GOBLIN, 5, 14, 3, 0, 0, 0, 0 };
     Look fencer = { GE_RGB(210, 205, 220), GE_RGB(90, 80, 110), GE_RGB(180, 170, 210), GE_RGB(100, 90, 140), GE_RGB(60, 55, 80),
-                    GE_RGB(40, 36, 56), GE_RGB(200, 210, 240), GE_RGB(255, 255, 255), HEAD_MOTH, 4, 15, 1 };
+                    GE_RGB(40, 36, 56), GE_RGB(200, 210, 240), GE_RGB(255, 255, 255), HEAD_MOTH, 4, 21, 1, 0, 0, 0, 0 };
     Look warden = { GE_RGB(70, 66, 80), GE_RGB(180, 50, 40), GE_RGB(90, 30, 30), GE_RGB(60, 58, 72), GE_RGB(40, 38, 50),
-                    GE_RGB(30, 28, 36), GE_RGB(150, 140, 130), GE_RGB(210, 200, 190), HEAD_HELM, 5, 14, 3 };
+                    GE_RGB(30, 28, 36), GE_RGB(150, 140, 130), GE_RGB(210, 200, 190), HEAD_HELM, 5, 17, 3, 0, 0, 0, 0 };
+    /* the Paragon: the hero's own silhouette, drained of colour, with a gold eye. The same shape is the point. */
+    /* The Paragon: a porcelain mask with one gold slit, a halo, a body the colour of the space between stars,
+     * a cloak that trails to the floor, and the longest blade in the game. */
+    Look paragon = { GE_RGB(226, 218, 200), GE_RGB(200, 170, 90), GE_RGB(26, 20, 44), GE_RGB(44, 36, 72), GE_RGB(24, 20, 38),
+                     GE_RGB(16, 12, 26), GE_RGB(255, 228, 150), GE_RGB(255, 255, 240), HEAD_PARAGON, 4, 21, 1,
+                     GE_RGB(255, 200, 60), GE_RGB(240, 196, 90), 5, GE_RGB(110, 86, 44) };
     s->hero.sheet = humanoid_sheet(&hero);
+    s->paragon.sheet = humanoid_sheet(&paragon);
     s->brawler.sheet = humanoid_sheet(&brawler);
     s->fencer.sheet = humanoid_sheet(&fencer);
     GeImage w = humanoid_sheet(&warden);
@@ -411,7 +469,7 @@ void art_make_sheets(Sprites *s) {
 }
 
 void art_free(Sprites *s) {
-    GeSprite *all[] = { &s->hero, &s->brawler, &s->fencer, &s->warden, &s->crawler, &s->bat, &s->spitter, &s->fx };
+    GeSprite *all[] = { &s->hero, &s->paragon, &s->brawler, &s->fencer, &s->warden, &s->crawler, &s->bat, &s->spitter, &s->fx };
     for (unsigned i = 0; i < sizeof all / sizeof all[0]; i++) ge_sprite_free(all[i]);
 }
 
@@ -423,7 +481,7 @@ void art_make_tileset(GeImage *tiles) {
     ge_rng_seed(&r, 7);
     const uint32_t d0 = GE_RGB(86, 58, 56), d1 = GE_RGB(100, 68, 62), d2 = GE_RGB(64, 44, 48);
     const uint32_t s0 = GE_RGB(70, 66, 92), s1 = GE_RGB(84, 80, 108), s2 = GE_RGB(52, 48, 72);
-    for (int t = 0; t < TV_COUNT; t++)
+    for (int t = 0; t < TV_FIRST_PUZZLE; t++)
         for (int y = 0; y < GE_TILE; y++)
             for (int x = 0; x < GE_TILE; x++) {
                 float n = ge_rng_float(&r);
@@ -458,6 +516,43 @@ void art_make_tileset(GeImage *tiles) {
             int hw = (y + 1) / 4, x0 = TV_SPIKE * GE_TILE + k * 4 + 2 - hw;
             ge_fill_rect(tiles, x0, 4 + y, hw * 2 + 1, 1, y < 2 ? GE_RGB(240, 240, 255) : mix(GE_RGB(190, 190, 210), GE_RGB(80, 76, 100), (float)y / 12), 0);
         }
+    art_puzzle_tiles(tiles);
+}
+
+/* The puzzle cells (placeholder art): drawn after the others with their own random numbers, so adding
+ * them left every older cell exactly as it was. */
+void art_puzzle_tiles(GeImage *tiles) {
+    GeRng r;
+    ge_rng_seed(&r, 31);
+    const uint32_t s0 = GE_RGB(70, 66, 92), s1 = GE_RGB(84, 80, 108), s2 = GE_RGB(52, 48, 72);
+    int cx = TV_CRACK * GE_TILE, gx = TV_GATE * GE_TILE, bx = TV_CRATE * GE_TILE, lx = TV_LOCK * GE_TILE;
+    for (int y = 0; y < GE_TILE; y++)
+        for (int x = 0; x < GE_TILE; x++) {
+            float n = ge_rng_float(&r);
+            uint32_t c = n < 0.15f ? s2 : (n > 0.8f ? s1 : s0);              /* cracked stone: stone, lighter, */
+            if (y % 8 == 7 || (x + (y / 8) * 8) % 16 == 0) c = s2;
+            tiles->px[y * tiles->w + cx + x] = mix(c, GE_RGB(120, 110, 130), 0.25f);
+            tiles->px[y * tiles->w + gx + x] = 0;                            /* gate: see-through between bars */
+            uint32_t wood = (x + y) % 5 == 0 ? GE_RGB(132, 90, 56) : GE_RGB(150, 104, 66);   /* crate */
+            if (x == 0 || y == 0 || x == GE_TILE - 1 || y == GE_TILE - 1) wood = GE_RGB(70, 46, 40);
+            else if (x == y || x == GE_TILE - 1 - y) wood = GE_RGB(100, 68, 50);
+            tiles->px[y * tiles->w + bx + x] = wood;
+            uint32_t door = (x % 5 == 0) ? GE_RGB(54, 38, 34) : GE_RGB(80, 56, 46);       /* lock: heavy planks, */
+            if (y == 2 || y == 13) door = GE_RGB(110, 108, 124);                           /* iron bands */
+            tiles->px[y * tiles->w + lx + x] = door;
+        }
+    static const int crack[][2] = { { 3, 0 }, { 4, 3 }, { 7, 5 }, { 6, 8 }, { 9, 11 }, { 8, 15 } };
+    for (int i = 0; i + 1 < 6; i++)
+        ge_draw_line(tiles, cx + crack[i][0], crack[i][1], cx + crack[i + 1][0], crack[i + 1][1], 1, GE_RGB(24, 20, 34));
+    ge_draw_line(tiles, cx + 7, 5, cx + 12, 4, 1, GE_RGB(24, 20, 34));
+    for (int k = 0; k < 3; k++)                                                    /* gate bars */
+        for (int y = 0; y < GE_TILE; y++) {
+            tiles->px[y * tiles->w + gx + 2 + k * 5] = GE_RGB(46, 44, 58);
+            tiles->px[y * tiles->w + gx + 3 + k * 5] = GE_RGB(120, 118, 140);
+        }
+    for (int x = 0; x < GE_TILE; x++) tiles->px[4 * tiles->w + gx + x] = tiles->px[12 * tiles->w + gx + x] = GE_RGB(80, 78, 96);
+    ge_fill_rect(tiles, lx + 6, 6, 4, 4, GE_RGB(220, 180, 80), 0);               /* the keyhole plate */
+    ge_fill_rect(tiles, lx + 7, 7, 2, 3, GE_RGB(20, 14, 20), 0);
 }
 
 void art_draw_bench(GeImage *fb, int x, int y) {

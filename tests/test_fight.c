@@ -1,101 +1,6 @@
 /* Fighting-game mode tests, driven through real inputs. */
 
-#include "ge/ge_fight.h"
-
-#include <stdio.h>
-#include <string.h>
-
-static int g_checks, g_failed;
-#define CHECK(cond) do { g_checks++; if (!(cond)) { g_failed++; printf("  FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); } } while (0)
-
-static const char *CLIPS =
-    "cell 16 16\norigin 8 15\n"
-    "clip idle loop\n frame 0 10\n"
-    "clip walk loop\n frame 0 10\n"
-    "clip crouch loop\n frame 1 10\n"
-    "clip jump once\n frame 0 10\n"
-    "clip fall once\n frame 0 10\n"
-    "clip hurt once\n frame 2 99\n"
-    "clip hurt_air once\n frame 2 99\n"
-    "clip block once\n frame 3 99\n"
-    "clip block_low once\n frame 3 99\n"
-    "clip down once\n frame 2 99\n"
-    "clip ko once\n frame 2 99\n"
-    "clip win once\n frame 0 99\n"
-    "clip throw once\n frame 0 30\n"
-    "clip thrown once\n frame 2 99\n"
-    "clip dash once\n frame 0 99\n"
-    /* normals: startup / active / recovery; cancel from the active frame */
-    "clip l once dmg=4 kb=1,0 stop=4 stun=14 bstun=10 cancel=1\n frame 0 3\n frame 1 2 hit=2,-20,36,12\n frame 0 8\n"
-    "clip m once dmg=7 kb=1.5,0 stop=5 stun=18 bstun=12 cancel=1\n frame 0 5\n frame 1 3 hit=2,-20,38,12\n frame 0 12\n"
-    "clip h once dmg=11 kb=3,-4 stop=7 stun=24 bstun=14\n frame 0 7\n frame 1 3 hit=2,-22,40,14\n frame 0 16\n"
-    "clip low once dmg=3 kb=1,0 stop=3 stun=12 guard=low cancel=1\n frame 1 3\n frame 1 2 hit=2,-6,34,6\n frame 1 8\n"
-    "clip ovh once dmg=6 kb=1,0 stop=4 stun=16 guard=high\n frame 0 12\n frame 1 3 hit=2,-24,34,14\n frame 0 10\n"
-    "clip jh once dmg=8 kb=1,0 stop=5 stun=18 guard=high\n frame 0 3\n frame 1 6 hit=-4,-10,30,16\n frame 0 4\n"
-    "clip fb once shoot=1\n frame 0 6\n frame 0 20\n"
-    "clip dp once dmg=12 kb=2,-5 stop=6 stun=30 inv=8 rise=6\n frame 0 2\n frame 1 8 hit=-4,-36,26,34\n frame 0 20\n"
-    "clip sup once dmg=30 kb=4,-5 stop=10 stun=40 inv=20\n frame 0 4\n frame 1 10 hit=-20,-30,60,30\n frame 0 20\n";
-
-static GeSprite spr;
-static GeShotDef fireball = { .speed = 3.0f, .w = 10, .h = 10, .damage = 6, .kb_x = 1.5f, .hitstop = 4, .stun = 16, .blockstun = 12, .chip = 2, .life = 200 };
-
-static void make_def(GeFighterDef *d) {
-    memset(d, 0, sizeof *d);
-    d->body.gravity = 0.45f; d->body.max_fall = 9; d->body.jump_vel = 7.5f; d->body.run_speed = 1.6f;
-    d->body.body_w = 14; d->body.body_h = 28; d->body.dead_ticks = 9999;
-    d->walk_back = 1.2f; d->jump_vx = 2.0f; d->dash_speed = 4.0f; d->dash_ticks = 10;
-    d->crouch_h = 18; d->max_hp = 100; d->throw_range = 34; d->throw_damage = 12;
-#define C(n) ge_sprite_find_clip(&spr, n)
-    d->clip_idle = C("idle"); d->clip_walk_f = d->clip_walk_b = C("walk"); d->clip_crouch = C("crouch");
-    d->clip_jump = C("jump"); d->clip_fall = C("fall"); d->clip_hurt = C("hurt"); d->clip_hurt_air = C("hurt_air");
-    d->clip_block = C("block"); d->clip_block_low = C("block_low"); d->clip_down = C("down"); d->clip_ko = C("ko");
-    d->clip_win = C("win"); d->clip_throw = C("throw"); d->clip_thrown = C("thrown"); d->clip_dash = d->clip_backdash = C("dash");
-#define MV(i, c, lv, cost, sh, role) { .input = i, .clip = c, .level = lv, .meter_cost = cost, .shot = sh, .ai = role }
-    GeMove moves[] = {
-        MV("S", "sup", 4, GE_FIGHT_METER, NULL, GE_AI_SUPER),
-        MV("623H", "dp", 3, 0, NULL, GE_AI_ANTIAIR),
-        MV("236L", "fb", 3, 0, &fireball, GE_AI_ZONE),
-        MV("LM", "throw", 0, 0, NULL, GE_AI_THROW),
-        MV("6M", "ovh", 1, 0, NULL, GE_AI_OVERHEAD),
-        MV("2L", "low", 0, 0, NULL, GE_AI_LOW),
-        MV("j.H", "jh", 2, 0, NULL, GE_AI_AIR),
-        MV("5L", "l", 0, 0, NULL, GE_AI_POKE),
-        MV("5M", "m", 1, 0, NULL, GE_AI_COMBO),
-        MV("5H", "h", 2, 0, NULL, GE_AI_COMBO),
-    };
-    d->nmoves = (int)(sizeof moves / sizeof moves[0]);
-    memcpy(d->moves, moves, sizeof moves);
-}
-
-static GeFighterDef D0, D1;
-static GeFight F;
-static const GeFightInput NONE = { 0, 0, 0, 0, -1 };
-
-static bool F_live;
-static void fight_new(uint32_t seed) {
-    if (F_live) ge_fight_free(&F);
-    ge_fight_init(&F, &D0, &spr, &D1, &spr, NULL, seed);
-    F_live = true;
-}
-static void fresh(void) {
-    fight_new(7);
-    F.rounds_to_win = 1;
-    for (int i = 0; i < 200 && F.phase != GE_FP_FIGHT; i++) { GeFightInput in[2] = { NONE, NONE }; ge_fight_update(&F, in); }
-}
-static GeEntity *E(int s) { return &F.world.ents[F.f[s].ent]; }
-static void step(GeFightInput a, GeFightInput b) { GeFightInput in[2] = { a, b }; ge_fight_update(&F, in); }
-static void idle(int n) { for (int i = 0; i < n; i++) step(NONE, NONE); }
-static GeFightInput dirs(int x, int y) { GeFightInput in = NONE; in.x = x; in.y = y; return in; }
-static GeFightInput btn(int x, int y, uint8_t b) { GeFightInput in = dirs(x, y); in.pressed = in.held = b; return in; }
-static void close_in(float gap) {
-    E(0)->pos.x = 288 - gap * 0.5f; E(1)->pos.x = 288 + gap * 0.5f;
-    E(0)->facing = 1; E(1)->facing = -1;
-}
-static int move_named(int s, const char *clip) {
-    if (F.f[s].state != GE_FS_MOVE) return 0;
-    return !strcmp(spr.clips[F.f[s].def->moves[F.f[s].move].clip_idx].name, clip);
-}
-static void until_neutral(int s) { for (int i = 0; i < 200 && F.f[s].state != GE_FS_STAND && F.f[s].state != GE_FS_CROUCH; i++) idle(1); }
+#include "fight_fixture.h"
 
 static void test_notation(void) {
     puts("move notation");
@@ -148,6 +53,133 @@ static void test_motions(void) {
 static void attack_vs(GeFightInput atk, GeFightInput def, int ticks) {
     step(atk, def);
     for (int i = 0; i < ticks; i++) step(NONE, def);
+}
+
+static void test_shoulder_buttons(void) {
+    puts("K button, block button, dash button");
+    CHECK(D0.moves[10].buttons == GE_FB_K && D0.moves[10].stance == 1);
+    fresh(); close_in(30);
+    step(btn(0, 0, GE_FB_K), NONE);
+    CHECK(move_named(0, "m") && F.f[0].move == 10);
+    /* block button: guards a mid without holding back, even while pressing forward */
+    GeFightInput guard = NONE; guard.held = GE_FB_BLOCK;
+    fresh(); close_in(30);
+    attack_vs(btn(0, 0, GE_FB_L), guard, 8);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->hp == 100);
+    GeFightInput guard_fwd = dirs(-1, 0); guard_fwd.held = GE_FB_BLOCK;
+    fresh(); close_in(30);
+    float x0 = E(1)->pos.x;
+    attack_vs(btn(0, 0, GE_FB_L), guard_fwd, 8);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->pos.x >= x0 - 0.01f);   /* blocking roots you */
+    /* the guard button stops every height: a low and an overhead too (holding back still needs the right one) */
+    fresh(); close_in(30);
+    attack_vs(btn(0, 1, GE_FB_L), guard, 8);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && F.f[1].crouch_block && E(1)->hp == 100);
+    fresh(); close_in(18);
+    attack_vs(btn(1, 0, GE_FB_M), guard, 18);
+    CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->hp == 100);
+    fresh(); close_in(30);
+    attack_vs(btn(0, 1, GE_FB_L), dirs(1, 0), 8);
+    CHECK(F.f[1].state == GE_FS_HITSTUN);                          /* holding back, standing: the low gets in */
+    /* ...but a guard is thrown */
+    fresh(); close_in(20);
+    step(btn(0, 0, GE_FB_L | GE_FB_M), guard);
+    CHECK(F.f[1].state == GE_FS_THROWN);
+    /* holding back while an attack is coming shows the guard pose and stops the walk-back */
+    fresh(); close_in(60);
+    float gx = E(1)->pos.x;
+    step(btn(0, 0, GE_FB_H), dirs(1, 0)); step(NONE, dirs(1, 0)); step(NONE, dirs(1, 0));
+    CHECK(F.f[1].guarding && E(1)->pos.x <= gx + 0.01f);
+    fresh(); close_in(160);
+    gx = E(1)->pos.x;
+    step(NONE, dirs(1, 0)); step(NONE, dirs(1, 0));
+    CHECK(!F.f[1].guarding && E(1)->pos.x > gx);                  /* nothing coming: it walks back as usual */
+    /* dash button: forward from neutral, backwards while holding back */
+    GeFightInput dash = NONE; dash.pressed = GE_FB_DASH;
+    fresh(); close_in(120);
+    x0 = E(0)->pos.x;
+    step(dash, NONE); step(NONE, NONE); step(NONE, NONE);
+    CHECK(F.f[0].state == GE_FS_DASH && E(0)->pos.x > x0 + 4.0f);
+    GeFightInput back_dash = dirs(-1, 0); back_dash.pressed = GE_FB_DASH;
+    fresh(); close_in(120);
+    x0 = E(0)->pos.x;
+    step(back_dash, NONE); step(dirs(-1, 0), NONE); step(dirs(-1, 0), NONE);
+    CHECK(F.f[0].state == GE_FS_DASH && E(0)->pos.x < x0 - 4.0f);
+}
+
+/* the forgiving guard (easy / normal in the demo): L also blocks in your own move's recovery and in the air */
+static void test_forgiving_guard(void) {
+    puts("forgiving guard");
+    for (int forgiving = 0; forgiving <= 1; forgiving++) {
+        fresh(); close_in(80);                                         /* far enough that P2's heavy whiffs */
+        F.forgiving_guard = forgiving;
+        GeFightInput h = btn(0, 0, GE_FB_H); h.held |= GE_FB_BLOCK;
+        step(NONE, h);                                                 /* P2 swings a heavy, holding L */
+        GeFightInput hold = NONE; hold.held = GE_FB_BLOCK;
+        int n = 0;
+        while (n++ < 60 && !(F.f[1].state == GE_FS_MOVE && ge_fight_frames_until_free(&F, 1) < 12)) step(NONE, hold);
+        CHECK(F.f[1].state == GE_FS_MOVE);                             /* in its recovery now */
+        close_in(30);
+        attack_vs(btn(0, 0, GE_FB_L), hold, 6);
+        if (forgiving) CHECK(F.f[1].state == GE_FS_BLOCKSTUN && E(1)->hp == 100);
+        else CHECK(F.f[1].state == GE_FS_HITSTUN);
+    }
+    /* in the air: an anti-air into a jumper who holds L */
+    for (int forgiving = 0; forgiving <= 1; forgiving++) {
+        fresh(); close_in(24);
+        F.forgiving_guard = forgiving;
+        GeFightInput up = dirs(0, -1); up.held = GE_FB_BLOCK;
+        GeFightInput hold = NONE; hold.held = GE_FB_BLOCK;
+        step(NONE, up);
+        for (int i = 0; i < 4; i++) step(NONE, hold);
+        step(dirs(1, 0), hold); step(dirs(0, 1), hold); step(dirs(1, 1), hold);   /* 6 2 3 + H = rising anti-air */
+        step(btn(1, 1, GE_FB_H), hold);
+        bool blocked = false, hit = false;
+        for (int i = 0; i < 20; i++) { step(NONE, hold); blocked |= F.f[1].state == GE_FS_BLOCKSTUN; hit |= F.f[1].state == GE_FS_HITSTUN; }
+        if (forgiving) CHECK(blocked && !hit && E(1)->hp == 100);
+        else CHECK(hit);
+    }
+}
+
+static void test_buffer_and_tech(void) {
+    puts("input buffer, throw break window");
+    /* a light pressed during the last ticks of a move comes out the moment the move ends */
+    fresh(); close_in(120);
+    step(btn(0, 0, GE_FB_M), NONE);
+    int n = 0;
+    while (F.f[0].state == GE_FS_MOVE && ge_fight_frames_until_free(&F, 0) > 4 && n++ < 100) step(NONE, NONE);
+    step(btn(0, 0, GE_FB_L), NONE);                                 /* too early, by the old rules */
+    for (int i = 0; i < 8 && !move_named(0, "l"); i++) step(NONE, NONE);
+    CHECK(move_named(0, "l"));
+    /* but not forever: a press long before the end is dropped */
+    fresh(); close_in(120);
+    step(btn(0, 0, GE_FB_H), NONE);
+    step(NONE, NONE);
+    step(btn(0, 0, GE_FB_L), NONE);                                 /* 20+ ticks before 5H ends */
+    for (int i = 0; i < 40; i++) step(NONE, NONE);
+    CHECK(!move_named(0, "l"));
+    /* the throw can be broken up to 15 ticks after it starts (human reaction time) */
+    fresh(); close_in(20);
+    step(btn(0, 0, GE_FB_L | GE_FB_M), NONE);
+    CHECK(F.f[1].state == GE_FS_THROWN);
+    for (int i = 0; i < 12; i++) step(NONE, NONE);
+    step(NONE, btn(0, 0, GE_FB_L | GE_FB_M));
+    CHECK(F.f[1].state != GE_FS_THROWN && E(1)->hp == 100);
+    /* forgiving: a tap of the guard button breaks it too, a little later still; not for the other side */
+    fresh(); close_in(20);
+    F.forgiving_tech = 2u;
+    step(btn(0, 0, GE_FB_L | GE_FB_M), NONE);
+    CHECK(F.f[1].state == GE_FS_THROWN);
+    for (int i = 0; i < 18; i++) step(NONE, NONE);
+    step(NONE, btn(0, 0, GE_FB_BLOCK));
+    CHECK(F.f[1].state != GE_FS_THROWN && E(1)->hp == 100);
+    fresh(); close_in(20);
+    F.forgiving_tech = 1u;                                          /* only side 0 is forgiven */
+    step(btn(0, 0, GE_FB_L | GE_FB_M), NONE);
+    for (int i = 0; i < 4; i++) step(NONE, NONE);
+    step(NONE, btn(0, 0, GE_FB_BLOCK));
+    for (int i = 0; i < 40; i++) step(NONE, NONE);
+    CHECK(E(1)->hp < 100);
 }
 
 static void test_blocking(void) {
@@ -300,6 +332,9 @@ int main(void) {
     test_notation();
     test_motions();
     test_blocking();
+    test_shoulder_buttons();
+    test_buffer_and_tech();
+    test_forgiving_guard();
     test_throws_cancels_juggles();
     test_rounds();
     test_cpu();

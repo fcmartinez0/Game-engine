@@ -119,6 +119,49 @@ int ge_sprite_parse(GeSprite *s, const char *text) {
     return 0;
 }
 
+static void fnum(FILE *f, float v) {           /* shortest form that reads back the same */
+    if (v == (float)(int)v) fprintf(f, "%d", (int)v);
+    else fprintf(f, "%g", (double)v);
+}
+
+int ge_sprite_save_anim(const GeSprite *s, const char *anim_path) {
+    FILE *f = fopen(anim_path, "w");
+    if (!f) return -1;
+    static const char *const guards[] = { "mid", "low", "high", "none" };
+    fprintf(f, "cell %d %d\norigin %d %d\n", s->cell_w, s->cell_h, s->origin_x, s->origin_y);
+    for (int i = 0; i < s->nclips; i++) {
+        const GeClip *c = &s->clips[i];
+        fprintf(f, "clip %s %s", c->name, c->loop ? "loop" : "once");
+        if (c->is_attack) {
+            fprintf(f, " dmg=%d kb=", c->damage); fnum(f, c->kb_x); fputc(',', f); fnum(f, c->kb_y);
+            fprintf(f, " stop=%d stun=%d", c->hitstop, c->stun);
+        }
+        if (c->cancel_from >= 0) fprintf(f, " cancel=%d", c->cancel_from);
+        if (c->next_name[0]) fprintf(f, " next=%s", c->next_name);
+        if (c->lunge != 0.0f) { fputs(" lunge=", f); fnum(f, c->lunge); }
+        if (c->rise != 0.0f) { fputs(" rise=", f); fnum(f, c->rise); }
+        if (c->pogo != 0.0f) { fputs(" pogo=", f); fnum(f, c->pogo); }
+        if (c->recoil != 0.0f) { fputs(" recoil=", f); fnum(f, c->recoil); }
+        if (c->shoot >= 0) fprintf(f, " shoot=%d", c->shoot);
+        if (c->inv > 0) fprintf(f, " inv=%d", c->inv);
+        if (c->guard != GE_GUARD_MID) fprintf(f, " guard=%s", guards[c->guard & 3]);
+        if (c->blockstun > 0) fprintf(f, " bstun=%d", c->blockstun);
+        if (c->chip > 0) fprintf(f, " chip=%d", c->chip);
+        if (c->knockdown) fputs(" kd=1", f);
+        fputc('\n', f);
+        for (int k = 0; k < c->nframes; k++) {
+            const GeAnimFrame *fr = &c->frames[k];
+            fprintf(f, "  frame %d %d", fr->cell, fr->ticks);
+            if (fr->has_hit) {
+                fputs(" hit=", f); fnum(f, fr->hit.x); fputc(',', f); fnum(f, fr->hit.y); fputc(',', f);
+                fnum(f, fr->hit.w); fputc(',', f); fnum(f, fr->hit.h);
+            }
+            fputc('\n', f);
+        }
+    }
+    return fclose(f) == 0 ? 0 : -2;
+}
+
 int ge_sprite_load(GeSprite *s, const char *pam_path, const char *anim_path) {
     memset(s, 0, sizeof *s);
     if (ge_image_load_pam(&s->sheet, pam_path) != 0) return -1;

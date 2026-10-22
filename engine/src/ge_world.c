@@ -58,6 +58,9 @@ int ge_world_add_layer(GeWorld *w, GeParallaxLayer layer) {
         if (layer.alpha != 255) { ge_image_scale_alpha(&layer.img, layer.alpha); layer.alpha = 255; }
         ge_spans_build(&layer.spans, &layer.img);
     }
+    layer.translucent = false;                          /* any partly see-through pixels? (the compositor's fast path needs none) */
+    if (layer.spans.spans)
+        for (uint32_t k = 0; k < layer.spans.row_start[layer.spans.rows]; k++) if (!layer.spans.spans[k].opaque) { layer.translucent = true; break; }
     w->layers[w->nlayers] = layer;
     return w->nlayers++;
 }
@@ -233,14 +236,13 @@ void ge_world_update(GeWorld *w) {
 static void draw_layer(const GeWorld *w, GeImage *fb, const GeParallaxLayer *l, int camx, int camy) {
     int sx = (int)(camx * l->factor_x + l->auto_x * (float)w->tick);
     int dy = l->y - (int)(camy * l->factor_y);
-    if (l->spans.spans) { ge_spans_draw_wrap_x(fb, &l->img, &l->spans, sx, dy, l->additive ? GE_ADDITIVE : 0); return; }
+    int clip = w->background_clip_x > 0 && !l->foreground ? w->background_clip_x : fb->w;
+    if (l->spans.spans) { ge_spans_draw_wrap_x_clip(fb, &l->img, &l->spans, sx, dy, l->additive ? GE_ADDITIVE : 0, clip); return; }
     uint32_t tint = l->alpha == 255 ? GE_WHITE : GE_ARGB(l->alpha, 255, 255, 255);
     ge_blit_wrap_x(fb, &l->img, sx, dy, (l->additive ? GE_ADDITIVE : 0) | (l->opaque ? GE_OPAQUE : 0), tint);
 }
 
-static void draw_tiles(GeWorld *w, GeImage *fb, int camx, int camy, int z) {
-    const GeTilemap *m = &w->map;
-    if (!w->tileset.px) return;
+static void tile_opacity(GeWorld *w) {
     if (!w->tile_opaque_ready) {
         int cells = w->tileset.w / GE_TILE > 256 ? 256 : w->tileset.w / GE_TILE;
         for (int c = 0; c < cells; c++) {
@@ -252,6 +254,12 @@ static void draw_tiles(GeWorld *w, GeImage *fb, int camx, int camy, int z) {
         }
         w->tile_opaque_ready = true;
     }
+}
+
+static void draw_tiles(GeWorld *w, GeImage *fb, int camx, int camy, int z) {
+    const GeTilemap *m = &w->map;
+    if (!w->tileset.px) return;
+    tile_opacity(w);
     int tx0 = (int)floorf((float)camx / GE_TILE), tx1 = (camx + fb->w / z) / GE_TILE + 1;
     int ty0 = (int)floorf((float)camy / GE_TILE), ty1 = (camy + fb->h / z) / GE_TILE + 1;
     for (int ty = ge_clampi(ty0, 0, m->h); ty < ge_clampi(ty1 + 1, 0, m->h); ty++)
@@ -262,6 +270,358 @@ static void draw_tiles(GeWorld *w, GeImage *fb, int camx, int camy, int z) {
             ge_blit_scaled(fb, &w->tileset, sr, (tx * GE_TILE - camx) * z, (ty * GE_TILE - camy) * z, z,
                            w->tile_opaque[cell] ? GE_OPAQUE : 0, GE_WHITE);
         }
+}
+
+
+/* ---- the background compositor ----------------------------------------------------------------------
+ * Painting the parallax layers back to front writes most screen pixels two or three times (sky, then
+ * mountains over it, then hills, then trees), and on the original 3DS (16 KB of cache, no L2) that memory
+ * traffic is a large part of the frame. So the background is composed one screen row at a time, skipping
+ * what can't show: layers hidden behind a nearer one, and pixels that opaque tiles or the game's own art
+ * (past background_clip_x) will cover anyway. The result is exactly what painting everything in order
+ * gives (the tests compare the two).
+ *
+ * Two versions. The usual one (compose_background, below) handles layers whose pixels are each either
+ * solid or empty. The other (compose_owned, next) also handles translucent and additive layers: it
+ * tracks which layer owns each covered piece, so a see-through span can be blended over exactly the
+ * pixels of the layers behind it. */
+
+#define COV_MAX 96
+#define OWN_FRONT 32767      /* covered by something drawn later this frame */
+#define OWN_CLEAR (-1)       /* nothing there: the clear colour */
+#define MAX_BG 16
+
+typedef struct { int16_t a, b, owner; } Cov;
+typedef struct { const GeParallaxLayer *l; int off, dy, flags; bool add; } BgLayer;
+
+/* Add [a, b) for `owner`, filling only the parts not covered yet; `copy` (may be NULL) is called for each
+ * newly covered piece. Keeps the list sorted, merges touching pieces of the same owner. Returns false if
+ * the row has run out of room (the caller then paints that row the simple way). */
+typedef void (*CovFn)(void *ctx, int a, int b);
+
+/* Cover [a, b) for `owner`: each still-uncovered piece is handed to `copy` (may be NULL) and added to the
+ * row's sorted list. `any` merges touching pieces whatever their owner (fine when no translucent pass needs
+ * to know who owns a pixel), which keeps the list to a handful of entries. *hint remembers where the last
+ * call ended, so a layer's spans (which come left to right) don't rescan the row from the start. Returns
+ * false if the row runs out of room; the caller then paints that row the simple way. */
+static bool cov_fill(Cov *c, int *n, int *hint, int a, int b, int owner, bool any, CovFn copy, void *ctx) {
+    int i = *hint > *n ? *n : *hint;
+    while (i > 0 && c[i - 1].b > a) i--;            /* everything before i ends at or before a */
+    int pos = a;
+    while (pos < b) {
+        while (i < *n && c[i].b <= pos) i++;
+        int next = i < *n ? c[i].a : b;
+        if (next > pos) {                           /* a gap: [pos, ge) */
+            int ge = next < b ? next : b;
+            if (copy) copy(ctx, pos, ge);
+            bool left = i > 0 && c[i - 1].b == pos && (any || c[i - 1].owner == owner);
+            bool right = i < *n && c[i].a == ge && (any || c[i].owner == owner);
+            if (left && right) {
+                c[i - 1].b = c[i].b;
+                memmove(&c[i], &c[i + 1], sizeof(Cov) * (size_t)(*n - i - 1));
+                (*n)--;
+                i--;
+            } else if (left) {
+                c[i - 1].b = (int16_t)ge;
+                i--;
+            } else if (right) {
+                c[i].a = (int16_t)pos;
+            } else {
+                if (*n >= COV_MAX) return false;
+                memmove(&c[i + 1], &c[i], sizeof(Cov) * (size_t)(*n - i));
+                c[i] = (Cov){ (int16_t)pos, (int16_t)ge, (int16_t)owner };
+                (*n)++;
+            }
+            pos = ge;
+        } else {                                    /* already covered from pos: jump past it */
+            pos = c[i].b;
+            i++;
+        }
+    }
+    *hint = i > 0 ? i - 1 : 0;
+    return true;
+}
+
+typedef struct { uint32_t *drow; const uint32_t *srow; int base; } CopyCtx;
+static void copy_piece(void *ctx, int a, int b) {
+    CopyCtx *k = (CopyCtx *)ctx;
+    memcpy(k->drow + a, k->srow + (a - k->base), sizeof(uint32_t) * (size_t)(b - a));
+}
+static void clear_piece(void *ctx, int a, int b) {
+    uint32_t *drow = (uint32_t *)ctx;
+    for (int x = a; x < b; x++) drow[x] = GE_RGB(8, 6, 16);
+}
+
+/* one row the old way: every layer back to front (used if a row ever has too many pieces to track) */
+static void row_simple(GeImage *fb, int y, const BgLayer *L, int nl, int cw) {
+    uint32_t *drow = fb->px + (size_t)y * fb->w;
+    for (int x = 0; x < cw; x++) drow[x] = GE_RGB(8, 6, 16);
+    for (int i = 0; i < nl; i++) {
+        const GeParallaxLayer *l = L[i].l;
+        int ly = y - L[i].dy;
+        if (ly < 0 || ly >= l->img.h) continue;
+        const uint32_t *srow = l->img.px + (size_t)ly * l->img.w;
+        for (uint32_t k = l->spans.row_start[ly]; k < l->spans.row_start[ly + 1]; k++) {
+            const GeSpan *g = &l->spans.spans[k];
+            for (int base = -L[i].off; base < cw; base += l->img.w) {
+                int a = base + g->x, b = a + g->len;
+                if (b <= 0 || a >= cw) continue;
+                int from = a < 0 ? -a : 0;
+                if (a < 0) a = 0;
+                if (b > cw) b = cw;
+                if (g->opaque && !L[i].add) memcpy(drow + a, srow + g->x + from, sizeof(uint32_t) * (size_t)(b - a));
+                else ge_blend_row(drow + a, srow + g->x + from, b - a, L[i].flags);
+            }
+        }
+    }
+}
+
+/* Returns false when the layers can't be composed this way (a layer without compiled spans): the caller
+ * then paints them back to front as before. */
+static bool compose_owned(GeWorld *w, GeImage *fb, int camx, int camy, int z, bool covers) {
+    BgLayer L[MAX_BG], F[MAX_BG];
+    int nl = 0, nf = 0;
+    int lcamy = z > 1 ? 0 : camy;
+    for (int i = 0; i < w->nlayers; i++) {
+        const GeParallaxLayer *l = &w->layers[i];
+        if (w->low_detail && l->optional) continue;
+        if (!l->spans.spans || l->img.w <= 0) { if (!l->foreground) return false; continue; }
+        int sx = (int)((camx * z) * l->factor_x + l->auto_x * (float)w->tick);
+        int off = sx % l->img.w;
+        if (off < 0) off += l->img.w;
+        BgLayer b = { l, off, l->y - (int)(lcamy * l->factor_y), l->additive ? GE_ADDITIVE : 0, l->additive };
+        if (!l->foreground) { if (nl >= MAX_BG) return false; L[nl++] = b; }
+        else if (!w->backdrop_pattern && !w->foreground_off && !l->additive && nf < MAX_BG) {
+            /* a foreground layer worth pre-covering: few spans per row (grass blades would cost more than they save) */
+            uint32_t spans = l->spans.row_start[l->img.h] - l->spans.row_start[0];
+            if (spans <= (uint32_t)l->img.h * 16u) F[nf++] = b;
+        }
+    }
+    int cw = w->background_clip_x > 0 && w->background_clip_x < fb->w ? w->background_clip_x : fb->w;
+    /* without translucent background spans nobody needs to know which layer owns a pixel */
+    bool any = true;
+    for (int i = 0; i < nl; i++) if (L[i].l->additive || L[i].l->translucent) any = false;
+    const GeTilemap *m = &w->map;
+    bool tiles = w->tileset.px && m->type;
+    if (tiles) tile_opacity(w);
+    int tx0 = (int)floorf((float)camx / GE_TILE), tx1 = (camx + fb->w / z) / GE_TILE + 1;
+    tx0 = ge_clampi(tx0, 0, m->w); tx1 = ge_clampi(tx1 + 1, 0, m->w);
+
+    for (int y = 0; y < fb->h; y++) {
+        Cov c[COV_MAX];
+        int n = 0;
+        bool ok = true;
+        uint32_t *drow = fb->px + (size_t)y * fb->w;
+        /* 1. what will be covered later anyway */
+        int hint = 0;
+        if (cw < fb->w) ok = cov_fill(c, &n, &hint, cw, fb->w, OWN_FRONT, any, NULL, NULL);
+        if (tiles) {
+            int wy = camy + y / z, ty = wy >= 0 ? wy / GE_TILE : -1;
+            if (ty >= 0 && ty < m->h) {
+                int run_a = 0, run_b = -1;
+                for (int tx = tx0; tx < tx1 && ok; tx++) {
+                    int t = ty * m->w + tx;
+                    if (m->type[t] == GE_TILE_EMPTY || !w->tile_opaque[m->vis[t]]) continue;
+                    int a = (tx * GE_TILE - camx) * z, b = a + GE_TILE * z;
+                    if (a < 0) a = 0;
+                    if (b > fb->w) b = fb->w;
+                    if (a >= b) continue;
+                    if (a == run_b) { run_b = b; continue; }      /* neighbouring tiles: one piece */
+                    if (run_b > run_a) ok = cov_fill(c, &n, &hint, run_a, run_b, OWN_FRONT, any, NULL, NULL);
+                    run_a = a; run_b = b;
+                }
+                if (ok && run_b > run_a) ok = cov_fill(c, &n, &hint, run_a, run_b, OWN_FRONT, any, NULL, NULL);
+            }
+        }
+        for (int f = 0; f < nf && ok; f++) {
+            const GeParallaxLayer *l = F[f].l;
+            int ly = y - F[f].dy;
+            if (ly < 0 || ly >= l->img.h) continue;
+            hint = 0;
+            for (int base = -F[f].off; base < fb->w && ok; base += l->img.w)
+                for (uint32_t k = l->spans.row_start[ly]; k < l->spans.row_start[ly + 1] && ok; k++) {
+                    const GeSpan *g = &l->spans.spans[k];
+                    if (!g->opaque) continue;
+                    int a = base + g->x, b = a + g->len;
+                    if (a < 0) a = 0;
+                    if (b > fb->w) b = fb->w;
+                    if (a < b) ok = cov_fill(c, &n, &hint, a, b, OWN_FRONT, any, NULL, NULL);
+                }
+        }
+        /* 2. opaque spans, nearest layer first */
+        for (int i = nl - 1; i >= 0 && ok; i--) {
+            const GeParallaxLayer *l = L[i].l;
+            if (L[i].add) continue;
+            int ly = y - L[i].dy;
+            if (ly < 0 || ly >= l->img.h) continue;
+            CopyCtx k = { drow, l->img.px + (size_t)ly * l->img.w, 0 };
+            hint = 0;
+            for (int base = -L[i].off; base < fb->w && ok; base += l->img.w) {   /* left to right: the hint stays useful */
+                k.base = base;
+                for (uint32_t s = l->spans.row_start[ly]; s < l->spans.row_start[ly + 1] && ok; s++) {
+                    const GeSpan *g = &l->spans.spans[s];
+                    if (!g->opaque) continue;
+                    int a = base + g->x, b = a + g->len;
+                    if (b <= 0) continue;
+                    if (a >= fb->w) break;
+                    if (a < 0) a = 0;
+                    if (b > fb->w) b = fb->w;
+                    ok = cov_fill(c, &n, &hint, a, b, i, any, copy_piece, &k);
+                }
+            }
+        }
+        /* 3. the gaps get the clear colour (when the sky covers everything there are none) */
+        hint = 0;
+        if (ok) ok = cov_fill(c, &n, &hint, 0, fb->w, OWN_CLEAR, any, clear_piece, drow);
+        if (!ok) { row_simple(fb, y, L, nl, cw); continue; }
+        /* 4. translucent and additive spans, farthest first, only over pixels owned by a farther layer */
+        for (int i = 0; i < nl && !any; i++) {
+            const GeParallaxLayer *l = L[i].l;
+            int ly = y - L[i].dy;
+            if (ly < 0 || ly >= l->img.h) continue;
+            const uint32_t *srow = l->img.px + (size_t)ly * l->img.w;
+            for (uint32_t s = l->spans.row_start[ly]; s < l->spans.row_start[ly + 1]; s++) {
+                const GeSpan *g = &l->spans.spans[s];
+                if (g->opaque && !L[i].add) continue;
+                for (int base = -L[i].off; base < fb->w; base += l->img.w) {
+                    int a = base + g->x, b = a + g->len;
+                    if (a < 0) a = 0;
+                    if (b > fb->w) b = fb->w;
+                    for (int j = 0; j < n && a < b; j++) {
+                        if (c[j].b <= a || c[j].owner >= i) continue;
+                        if (c[j].a >= b) break;
+                        int pa = c[j].a > a ? c[j].a : a, pb = c[j].b < b ? c[j].b : b;
+                        ge_blend_row(drow + pa, srow + (pa - base), pb - pa, L[i].flags);
+                    }
+                }
+            }
+        }
+    }
+    (void)covers;
+    return true;
+}
+
+
+/* ---- the usual case: every background pixel solid or empty (always so in low detail) -----------------
+ * Each screen row starts at the nearest layer whose row is solid all the way across. Everything behind it
+ * is hidden, so it is copied once, straight, and the layers behind aren't touched; the layers in front of
+ * it are then painted over it span by span, back to front, as before. Pixels under opaque tiles are left
+ * for the tiles, and a row the tiles cover completely is skipped. Analogy: hang the nearest poster that
+ * covers the whole wall, skip the ones it hides, then pin the cut-outs in front on top.
+ * (Also masking the nearer layers against each other halves the memory traffic again, but on the 3DS's
+ * ARM11 that bookkeeping cost more instructions than the traffic saved: measured, not guessed.) */
+
+typedef struct { int16_t a, b; } Run;
+
+/* screen pixels [a, b) of a wrapping layer row: screen x shows image x (x + off) % img_w */
+static void copy_wrapped(uint32_t *drow, const uint32_t *src, int img_w, int off, int a, int b) {
+    int ix = a + off;
+    while (ix >= img_w) ix -= img_w;
+    while (a < b) {
+        int n = b - a < img_w - ix ? b - a : img_w - ix;
+        memcpy(drow + a, src + ix, sizeof(uint32_t) * (size_t)n);
+        a += n;
+        ix = 0;
+    }
+}
+
+static bool compose_background(GeWorld *w, GeImage *fb, int camx, int camy, int z, bool covers) {
+    BgLayer L[MAX_BG];
+    int nl = 0;
+    int lcamy = z > 1 ? 0 : camy;
+    int W = fb->w;
+    for (int i = 0; i < w->nlayers; i++) {
+        const GeParallaxLayer *l = &w->layers[i];
+        if (l->foreground || (w->low_detail && l->optional)) continue;
+        if (!l->spans.spans || !l->spans.row_kind || l->img.w <= 0) return false;
+        if (l->additive || l->translucent) return compose_owned(w, fb, camx, camy, z, covers);
+        if (nl >= MAX_BG) return false;
+        int sx = (int)((camx * z) * l->factor_x + l->auto_x * (float)w->tick);
+        int off = sx % l->img.w;
+        if (off < 0) off += l->img.w;
+        L[nl++] = (BgLayer){ l, off, l->y - (int)(lcamy * l->factor_y), 0, false };
+    }
+    int cw = w->background_clip_x > 0 && w->background_clip_x < W ? w->background_clip_x : W;
+
+    /* opaque tile runs left of cw, once per visible tile row */
+    const GeTilemap *m = &w->map;
+    bool tiles = w->tileset.px && m->type;
+    enum { TROWS = 32, TRUNS = 24 };
+    Run truns[TROWS][TRUNS];
+    int ntruns[TROWS];
+    int ty0 = 0;
+    if (tiles) {
+        tile_opacity(w);
+        int tx0 = ge_clampi((int)floorf((float)camx / GE_TILE), 0, m->w), tx1 = ge_clampi((camx + W / z) / GE_TILE + 2, 0, m->w);
+        ty0 = camy >= 0 ? camy / GE_TILE : -((-camy + GE_TILE - 1) / GE_TILE);
+        for (int r = 0; r < TROWS; r++) {
+            int ty = ty0 + r, n = 0;
+            ntruns[r] = 0;
+            if (ty < 0 || ty >= m->h) continue;
+            for (int tx = tx0; tx < tx1; tx++) {
+                int t = ty * m->w + tx;
+                if (m->type[t] == GE_TILE_EMPTY || !w->tile_opaque[m->vis[t]]) continue;
+                int a = (tx * GE_TILE - camx) * z, b = a + GE_TILE * z;
+                if (a < 0) a = 0;
+                if (b > cw) b = cw;
+                if (a >= b) continue;
+                if (n > 0 && truns[r][n - 1].b == a) { truns[r][n - 1].b = (int16_t)b; continue; }
+                if (n >= TRUNS) { n = 0; break; }                 /* too broken up: just paint under them */
+                truns[r][n++] = (Run){ (int16_t)a, (int16_t)b };
+            }
+            ntruns[r] = n;
+        }
+    }
+
+    for (int y = 0; y < fb->h; y++) {
+        uint32_t *drow = fb->px + (size_t)y * W;
+        const Run *tr = NULL;
+        int nt = 0;
+        if (tiles) {
+            int wy = camy + y / z, r = (wy >= 0 ? wy / GE_TILE : -((-wy + GE_TILE - 1) / GE_TILE)) - ty0;
+            if (r >= 0 && r < TROWS) { tr = truns[r]; nt = ntruns[r]; }
+        }
+        if (nt == 1 && tr[0].a == 0 && tr[0].b == cw) continue;   /* ground: the tiles cover it all */
+        /* the nearest layer that is solid across this row hides everything behind it */
+        int f = -1;
+        for (int i = nl - 1; i >= 0 && f < 0; i--) {
+            int ly = y - L[i].dy;
+            if (ly >= 0 && ly < L[i].l->img.h && L[i].l->spans.row_kind[ly] == GE_ROW_ALL) f = i;
+        }
+        if (f >= 0 || nl == 0 || !covers) {   /* it (or the clear colour) goes wherever no tile will */
+            const GeParallaxLayer *l = f >= 0 ? L[f].l : NULL;
+            const uint32_t *src = l ? l->img.px + (size_t)(y - L[f].dy) * (size_t)l->img.w : NULL;
+            int pos = 0;
+            for (int t = 0; t <= nt; t++) {
+                int ge = t < nt ? tr[t].a : cw;
+                if (ge > pos) {
+                    if (src) copy_wrapped(drow, src, l->img.w, L[f].off, pos, ge);
+                    else for (int x = pos; x < ge; x++) drow[x] = GE_RGB(8, 6, 16);
+                }
+                if (t < nt) pos = tr[t].b;
+            }
+        }
+        /* the layers in front of it, span by span */
+        for (int i = f + 1; i < nl; i++) {
+            const GeParallaxLayer *l = L[i].l;
+            int ly = y - L[i].dy;
+            if (ly < 0 || ly >= l->img.h || l->spans.row_kind[ly] == GE_ROW_NONE) continue;
+            const uint32_t *srow = l->img.px + (size_t)ly * (size_t)l->img.w;
+            uint32_t s0 = l->spans.row_start[ly], s1 = l->spans.row_start[ly + 1];
+            for (int base = -L[i].off; base < cw; base += l->img.w)
+                for (uint32_t k = s0; k < s1; k++) {
+                    const GeSpan *g = &l->spans.spans[k];
+                    int a = base + g->x, b = a + g->len;
+                    if (b <= 0) continue;
+                    if (a >= cw) break;
+                    int from = a < 0 ? -a : 0;
+                    if (a < 0) a = 0;
+                    if (b > cw) b = cw;
+                    memcpy(drow + a, srow + g->x + from, sizeof(uint32_t) * (size_t)(b - a));
+                }
+        }
+    }
+    return true;
 }
 
 static void draw_entity(const GeWorld *w, GeImage *fb, const GeEntity *e, int camx, int camy, int z) {
@@ -320,10 +680,17 @@ void ge_world_draw(GeWorld *w, GeImage *fb) {
     const GeParallaxLayer *l0 = w->nlayers > 0 ? &w->layers[0] : NULL;
     bool covers = l0 && l0->opaque && !l0->additive && l0->img.w >= fb->w && l0->y <= 0 && l0->y + l0->img.h >= fb->h &&
                   l0->factor_y == 0.0f && !(w->low_detail && l0->optional);
-    if (!covers) ge_clear(fb, GE_RGB(8, 6, 16));
-    for (int i = 0; i < w->nlayers; i++)
-        if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
-            draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
+    if (w->background_off) {
+        /* nothing: tiles and props cover every pixel */
+    } else if (w->backdrop_pattern) {
+        ge_pattern_draw(w->backdrop_pattern, fb, (int)w->tick);
+    } else if (w->reference_background || !compose_background(w, fb, camx, camy, z, covers)) {
+        if (!covers) ge_clear(fb, GE_RGB(8, 6, 16));
+        else if (w->background_clip_x > 0 && l0 && !l0->spans.spans) ge_clear(fb, GE_RGB(8, 6, 16));
+        for (int i = 0; i < w->nlayers; i++)
+            if (!w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
+                draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
+    }
 
     draw_tiles(w, fb, camx, camy, z);
     if (w->draw_props) w->draw_props(w->user, fb, camx, camy);
@@ -338,7 +705,7 @@ void ge_world_draw(GeWorld *w, GeImage *fb) {
     draw_shots(w, fb, camx, camy, z);
     draw_particles(w, fb, camx, camy, z);
 
-    for (int i = 0; i < w->nlayers; i++)
+    for (int i = 0; i < w->nlayers && !w->backdrop_pattern && !w->foreground_off; i++)
         if (w->layers[i].foreground && !(w->low_detail && w->layers[i].optional))
             draw_layer(w, fb, &w->layers[i], camx * z, lcamy);
 

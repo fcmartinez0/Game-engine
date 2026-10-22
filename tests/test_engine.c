@@ -3,9 +3,11 @@
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
 #include "../platform/n3ds_blit.h"
+#include "../engine/src/ge_text.h"
 #include "ge/ge_world.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_checks, g_failed;
@@ -192,7 +194,7 @@ static void test_moveset(void) {
     for (int i = 0; i < 12; i++) { w.intents[a].move_x = 1; run(&w, 1); }
     CHECK(w.ents[a].state == GE_ST_WALL && w.ents[a].vel.y <= 1.0f + 0.001f);
     CHECK(w.ents[a].air_jumps_left == 1 && w.ents[a].facing == -1); /* refilled, facing away from the wall */
-    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });         /* away from the wall: the kick */
     CHECK(w.ents[a].vel.x < -2.0f && w.ents[a].vel.y < -5.0f && w.ents[a].wall_lock > 0);
     ge_world_free(&w);
 
@@ -260,6 +262,11 @@ static void test_moveset(void) {
     CHECK_NEAR(w.ents[a].pos.y, 80.0f);
     for (int i = 0; i < 20; i++) { w.intents[a].move_y = 1; run(&w, 1); }
     CHECK(w.ents[a].pos.y > 90.0f);
+    /* ...and back up again, even with no jump tuning at all (a bug once pinned bats to the floor of spike pits) */
+    flyer.jump_cut_vel = 0.0f;
+    float low = w.ents[a].pos.y;
+    for (int i = 0; i < 30; i++) { w.intents[a].move_y = -1; run(&w, 1); }
+    CHECK(w.ents[a].pos.y < low - 10.0f);
     ge_world_free(&w);
 
     /* recoil pushes the attacker back on a hit */
@@ -271,6 +278,115 @@ static void test_moveset(void) {
     press(&w, a, (GeIntent){ .attack_pressed = true });
     run(&w, 10);
     CHECK(w.ents[a].pos.x < 99.0f && w.ents[vic].hp == 49);
+    ge_world_free(&w);
+    ge_sprite_free(&s);
+}
+
+/* A tall room with a wall (column 20) on the right of a hero sliding down it: the wall jump depends on the stick. */
+static void make_tall_world(GeWorld *w) {
+    ge_world_init(w, 400, 240, 99);
+    ge_tilemap_create(&w->map, 40, 60);
+    for (int y = 58; y < 60; y++) for (int x = 0; x < 40; x++) w->map.type[y * 40 + x] = GE_TILE_SOLID;
+    for (int y = 0; y < 58; y++) w->map.type[y * 40 + 20] = GE_TILE_SOLID;
+}
+
+/* sliding down the left face of the wall (it is on the hero's right, wall = +1) */
+static int slide_on_wall(GeWorld *w, const GeActorDef *d, const GeSprite *s, float y) {
+    make_tall_world(w);
+    int a = ge_world_spawn(w, d, s, 0, 320 - 5, y, 100);
+    w->ents[a].air_jumps_left = 0;
+    for (int i = 0; i < 14; i++) { w->intents[a].move_x = 1; run(w, 1); }
+    return a;
+}
+
+static void test_wall_jumps(void) {
+    puts("wall jumps: the stick picks the jump (kick away, hop, climb), a press a hair late or early still works, the same wall again is weaker each time");
+    GeSprite s = make_sprite();
+    GeActorDef d = make_def(&s);
+    d.air_jumps = 1; d.air_jump_vel = 6;
+    d.wall_slide_speed = 1; d.wall_jump_vx = 3; d.wall_jump_vy = 6; d.wall_jump_lock = 4;
+    d.wall_hop_vx = 1.0f; d.wall_chain_decay = 0.75f; d.wall_grace_ticks = 5; d.wall_boost_ticks = 12;
+    GeWorld w;
+
+    /* the kick: away from the wall, a long way, steering locked for a moment */
+    int a = slide_on_wall(&w, &d, &s, 40);
+    CHECK(w.ents[a].state == GE_ST_WALL);
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.x <= -2.5f && w.ents[a].vel.y <= -5.5f && w.ents[a].wall_lock > 0 && w.ents[a].facing == -1);
+    ge_world_free(&w);
+
+    /* the hop: the stick let go: up, and only a little away */
+    a = slide_on_wall(&w, &d, &s, 40);
+    press(&w, a, (GeIntent){ .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.x < -0.5f && w.ents[a].vel.x > -1.6f && w.ents[a].vel.y <= -5.5f && w.ents[a].wall_lock == 0);
+    ge_world_free(&w);
+
+    /* the climb: toward the wall: straight up it, facing it, free to steer */
+    a = slide_on_wall(&w, &d, &s, 40);
+    float x0 = w.ents[a].pos.x;
+    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+    CHECK(fabsf(w.ents[a].vel.x) < 0.8f && w.ents[a].vel.y <= -5.5f && w.ents[a].wall_lock == 0 && w.ents[a].facing == 1);
+    for (int i = 0; i < 20; i++) { w.intents[a].move_x = 1; w.intents[a].jump_held = true; run(&w, 1); }
+    CHECK(fabsf(w.ents[a].pos.x - x0) < 3.0f);                    /* it went up the wall, not away from it */
+    ge_world_free(&w);
+
+    /* after a kick it can turn back to the wall quickly: hold toward and it is on it again within half a second */
+    a = slide_on_wall(&w, &d, &s, 40);
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+    int back_at = -1;
+    for (int i = 0; i < 40 && back_at < 0; i++) { w.intents[a].move_x = 1; w.intents[a].jump_held = true; run(&w, 1); if (w.ents[a].wall_dir == 1) back_at = i; }
+    CHECK(back_at >= 0 && back_at < 30);
+    ge_world_free(&w);
+
+    /* the same wall again and again gets weaker (down to under half of the first) */
+    a = slide_on_wall(&w, &d, &s, 40);
+    float vy[5];
+    for (int k = 0; k < 5; k++) {
+        for (int i = 0; i < 60 && !(w.ents[a].state == GE_ST_WALL && w.ents[a].vel.y > 0.0f); i++) { w.intents[a].move_x = 1; run(&w, 1); }
+        press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });
+        vy[k] = w.ents[a].vel.y;
+    }
+    float k[5];                                                   /* each jump's strength as a share of the first (gravity has taken 0.4 off in the tick the press ran) */
+    for (int i = 0; i < 5; i++) k[i] = (-vy[i] + 0.4f) / 6.0f;
+    CHECK(fabsf(k[0] - 1.0f) < 0.02f && fabsf(k[1] - 0.75f) < 0.02f && fabsf(k[2] - 0.5625f) < 0.02f && fabsf(k[3] - 0.45f) < 0.02f && fabsf(k[4] - 0.45f) < 0.02f);
+    ge_world_free(&w);
+
+    /* a press just after the wall is gone still jumps off it (5 ticks of grace), too late does not */
+    int late_ok = 0;
+    for (int late = 0; late <= 8; late += 4) {
+        a = slide_on_wall(&w, &d, &s, 40);
+        w.ents[a].pos.x -= 8.0f;                                                       /* it comes off the wall */
+        w.ents[a].vel.x = 0;
+        w.ents[a].air_jumps_left = 0;                                                  /* (sliding refilled them: so only a wall jump can answer the press) */
+        for (int i = 0; i < late; i++) { w.intents[a].move_x = 0; run(&w, 1); }
+        float before = w.ents[a].vel.y;
+        press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+        bool jumped = w.ents[a].vel.y < before - 3.0f;
+        if (late == 0 || late == 4) late_ok += jumped;
+        if (late == 8) CHECK(!jumped);
+        ge_world_free(&w);
+    }
+    CHECK(late_ok == 2);
+
+    /* a press just before touching the wall is kept and fires on contact (no air jump left to use it up) */
+    make_tall_world(&w);
+    a = ge_world_spawn(&w, &d, &s, 0, 320 - 10, 40, 100);
+    w.ents[a].air_jumps_left = 0;
+    w.ents[a].vel.x = 1.2f;
+    press(&w, a, (GeIntent){ .move_x = 1, .jump_pressed = true, .jump_held = true });   /* pressed early, in the air, not yet on the wall */
+    int fired = 0;
+    for (int i = 0; i < 8 && !fired; i++) { w.intents[a].move_x = 1; w.intents[a].jump_held = true; run(&w, 1); fired = w.ents[a].vel.y < -5.0f; }
+    CHECK(fired);
+    ge_world_free(&w);
+
+    /* creatures have no wall moves at all */
+    GeActorDef c = make_def(&s);
+    make_tall_world(&w);
+    a = ge_world_spawn(&w, &c, &s, 1, 320 - 5, 40, 10);
+    for (int i = 0; i < 12; i++) { w.intents[a].move_x = 1; run(&w, 1); }
+    float vy_before = w.ents[a].vel.y;
+    press(&w, a, (GeIntent){ .move_x = -1, .jump_pressed = true, .jump_held = true });
+    CHECK(w.ents[a].vel.y >= vy_before - 0.01f && w.ents[a].state != GE_ST_WALL);
     ge_world_free(&w);
     ge_sprite_free(&s);
 }
@@ -420,6 +536,125 @@ static void test_armor_grounded_zoom_font(void) {
     ge_sprite_free(&s);
 }
 
+/* The background compositor skips hidden layers and pixels other things will cover; whatever the layers,
+ * tiles, scrolling, clipping and zoom, the frame must come out exactly as painting everything back to front
+ * does. Random worlds, both ways, compared pixel for pixel (left of the clip column: the game's own art
+ * covers the rest, so the compositor leaves it alone). */
+static GeImage rand_layer_img(GeRng *r, int w, int h, int mode) {
+    GeImage im = ge_image_create(w, h);
+    int top = (int)(ge_rng_next(r) % (uint32_t)h);
+    for (int x = 0; x < w; x++) {
+        top += (int)(ge_rng_next(r) % 7u) - 3;
+        if (top < 0) top = 0;
+        if (top > h) top = h;
+        for (int y = 0; y < h; y++) {
+            uint32_t c = ge_rng_next(r) & 0x00FFFFFFu, a = 0;
+            if (mode == 0) a = 255;                                         /* solid (a sky) */
+            else if (y >= top) a = ge_rng_next(r) % 23u == 0 ? 0 : 255;     /* a silhouette with a few holes */
+            if (mode == 2 && a && ge_rng_next(r) % 5u == 0) a = 1 + ge_rng_next(r) % 254u;   /* see-through bits */
+            if (mode == 1 && y >= h - 3) a = 255;                           /* solid bottom rows */
+            im.px[y * w + x] = (a << 24) | c;
+        }
+    }
+    return im;
+}
+
+static void test_compositor_matches_painting(void) {
+    puts("background compositor vs painting in order");
+    GeRng r;
+    ge_rng_seed(&r, 2024);
+    int bad = 0, trials = 300;
+    GeImage a = ge_image_create(400, 240), b = ge_image_create(400, 240);
+    for (int t = 0; t < trials; t++) {
+        GeWorld w;
+        ge_world_init(&w, 400, 240, (uint32_t)t);
+        if (ge_rng_next(&r) % 3u) {   /* a full-screen sky first (so nothing needs clearing), or not */
+            GeParallaxLayer sky = { .img = rand_layer_img(&r, 400 + (int)(ge_rng_next(&r) % 300u), 240, 0), .opaque = true };
+            ge_world_add_layer(&w, sky);
+        }
+        int nbg = 1 + (int)(ge_rng_next(&r) % 4u);
+        for (int i = 0; i < nbg; i++) {
+            int mode = ge_rng_next(&r) % 6u == 0 ? 2 : 1;
+            GeParallaxLayer l = { .img = rand_layer_img(&r, 32 + (int)(ge_rng_next(&r) % 700u), 10 + (int)(ge_rng_next(&r) % 200u), mode),
+                                  .factor_x = ge_rng_range(&r, 0.0f, 1.2f), .factor_y = ge_rng_next(&r) % 2u ? 0.0f : ge_rng_range(&r, 0.0f, 0.5f),
+                                  .auto_x = ge_rng_next(&r) % 3u == 0 ? ge_rng_range(&r, -0.3f, 0.3f) : 0.0f,
+                                  .y = (int)(ge_rng_next(&r) % 260u) - 30, .additive = ge_rng_next(&r) % 9u == 0,
+                                  .optional = ge_rng_next(&r) % 4u == 0 };
+            ge_world_add_layer(&w, l);
+        }
+        int nfg = (int)(ge_rng_next(&r) % 3u);
+        for (int i = 0; i < nfg; i++) {
+            GeParallaxLayer l = { .img = rand_layer_img(&r, 64 + (int)(ge_rng_next(&r) % 400u), 10 + (int)(ge_rng_next(&r) % 60u), 1 + (int)(ge_rng_next(&r) % 2u)),
+                                  .factor_x = ge_rng_range(&r, 1.0f, 1.7f), .y = (int)(ge_rng_next(&r) % 240u), .foreground = true };
+            ge_world_add_layer(&w, l);
+        }
+        if (ge_rng_next(&r) % 4u) {   /* tiles: two solid cells, one with see-through pixels */
+            w.tileset = ge_image_create(GE_TILE * 3, GE_TILE);
+            for (int i = 0; i < GE_TILE * 3 * GE_TILE; i++) {
+                int cell = (i % (GE_TILE * 3)) / GE_TILE;
+                w.tileset.px[i] = (cell == 2 && i % 3 == 0 ? 0x40000000u : 0xFF000000u) | (ge_rng_next(&r) & 0xFFFFFFu);
+            }
+            ge_tilemap_create(&w.map, 80, 30);
+            for (int i = 0; i < 80 * 30; i++) {
+                int row = i / 80;
+                bool solid = row >= 22 ? ge_rng_next(&r) % 8u != 0 : ge_rng_next(&r) % 11u == 0;
+                w.map.type[i] = solid ? GE_TILE_SOLID : GE_TILE_EMPTY;
+                w.map.vis[i] = (uint8_t)(ge_rng_next(&r) % 3u);
+            }
+        }
+        w.zoom = ge_rng_next(&r) % 4u == 0 ? 2 : 1;
+        w.low_detail = ge_rng_next(&r) % 2u;
+        w.background_clip_x = ge_rng_next(&r) % 4u == 0 ? 50 + (int)(ge_rng_next(&r) % 350u) : 0;
+        w.tick = ge_rng_next(&r) % 5000u;
+        w.cam.x = ge_rng_range(&r, -50.0f, 900.0f);
+        w.cam.y = ge_rng_range(&r, -40.0f, 300.0f);
+        for (int i = 0; i < 400 * 240; i++) a.px[i] = b.px[i] = 0xFF000000u | (uint32_t)i * 2654435761u;   /* the same leftovers */
+        w.reference_background = true;
+        ge_world_draw(&w, &a);
+        w.reference_background = false;
+        ge_world_draw(&w, &b);
+        int cw = w.background_clip_x > 0 ? w.background_clip_x : 400;
+        bool same = true;
+        for (int y = 0; y < 240 && same; y++)
+            for (int x = 0; x < cw; x++) if (a.px[y * 400 + x] != b.px[y * 400 + x]) { same = false; break; }
+        if (!same && bad++ < 3) printf("  world %d differs (layers %d, zoom %d, clip %d, low %d)\n", t, w.nlayers, w.zoom, w.background_clip_x, w.low_detail);
+        ge_world_free(&w);
+    }
+    CHECK(bad == 0);
+    ge_image_free(&a); ge_image_free(&b);
+}
+
+/* Outlined text: the direct path (scale 1, opaque, fully on screen) must draw exactly what the general
+ * clipped path draws, and the outline goes all the way round, the right side included. */
+static void test_text_outline(void) {
+    puts("outlined text");
+    GeImage a = ge_image_create(40, 12), b = ge_image_create(40, 12);
+    uint32_t ink = GE_RGB(1, 2, 3), col = GE_RGB(200, 100, 50);
+    ge_clear(&a, 0); ge_clear(&b, 0);
+    ge_text_outlined(&a, 1, 1, "E1W?", col, ink, 1);   /* direct path */
+    ge_text_outlined(&b, 0, 0, "E1W?", col, ink, 1);   /* touches the edge: the general path */
+    bool same = true;
+    for (int y = 0; y < 11; y++)
+        for (int x = 0; x < 39; x++) if (a.px[(y + 1) * 40 + x + 1] != b.px[y * 40 + x]) same = false;
+    CHECK(same);
+    /* the same at scale 2 */
+    GeImage a2 = ge_image_create(70, 24), b2 = ge_image_create(70, 24);
+    ge_clear(&a2, 0); ge_clear(&b2, 0);
+    ge_text_outlined(&a2, 2, 2, "E1W?", col, ink, 2);
+    ge_text_outlined(&b2, 0, 0, "E1W?", col, ink, 2);
+    same = true;
+    for (int y = 0; y < 22; y++)
+        for (int x = 0; x < 68; x++) if (a2.px[(y + 2) * 70 + x + 2] != b2.px[y * 70 + x]) same = false;
+    CHECK(same);
+    ge_image_free(&a2); ge_image_free(&b2);
+    GeImage e = ge_image_create(12, 12);
+    ge_clear(&e, 0);
+    ge_text_outlined(&e, 2, 2, "E", col, ink, 1);   /* E's top bar spans columns 0..4 */
+    CHECK(e.px[2 * 12 + 2] == col && e.px[2 * 12 + 6] == col);
+    CHECK(e.px[2 * 12 + 1] == ink && e.px[2 * 12 + 7] == ink && e.px[1 * 12 + 4] == ink);
+    ge_image_free(&a); ge_image_free(&b); ge_image_free(&e);
+}
+
 /* The 3DS screen copy is tiled for speed; it must match the plain per-pixel rule exactly. */
 static void test_3ds_rotate(void) {
     puts("3DS screen rotation");
@@ -427,8 +662,10 @@ static void test_3ds_rotate(void) {
     GeRng r;
     ge_rng_seed(&r, 3);
     for (int i = 0; i < 400 * 240; i++) img.px[i] = ge_rng_next(&r) | 0xFF000000u;
-    static uint8_t fast[400 * 240 * 3], slow[400 * 240 * 3];
-    memset(fast, 0xAB, sizeof fast);
+    static uint32_t fastw[400 * 240 * 3 / 4];   /* word aligned, like the real framebuffer */
+    static uint8_t slow[400 * 240 * 3];
+    uint8_t *fast = (uint8_t *)fastw;
+    memset(fast, 0xAB, sizeof fastw);
     ge_3ds_rotate_bgr8(img.px, 400, 240, fast);
     for (int x = 0; x < 400; x++)
         for (int y = 0; y < 240; y++) {
@@ -436,7 +673,7 @@ static void test_3ds_rotate(void) {
             uint8_t *o = slow + ((size_t)x * 240 + (239 - y)) * 3;
             o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
         }
-    CHECK(memcmp(fast, slow, sizeof fast) == 0);
+    CHECK(memcmp(fast, slow, sizeof slow) == 0);
     /* odd sizes take the byte-wise leftovers path; the result must still match */
     GeImage odd = ge_image_create(37, 21);
     for (int i = 0; i < 37 * 21; i++) odd.px[i] = ge_rng_next(&r) | 0xFF000000u;
@@ -449,11 +686,69 @@ static void test_3ds_rotate(void) {
             o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
         }
     CHECK(memcmp(f2, s2, sizeof f2) == 0);
+    /* the word-wise path with a ragged last column block (37 wide, 24 tall), and the byte-wise one for a
+     * destination that isn't word aligned */
+    GeImage rag = ge_image_create(37, 24);
+    for (int i = 0; i < 37 * 24; i++) rag.px[i] = ge_rng_next(&r) | 0xFF000000u;
+    static uint32_t f3w[37 * 24 + 4];
+    static uint8_t s3[37 * 24 * 3];
+    for (int x = 0; x < 37; x++)
+        for (int y = 0; y < 24; y++) {
+            uint32_t p = rag.px[y * 37 + x];
+            uint8_t *o = s3 + ((size_t)x * 24 + (23 - y)) * 3;
+            o[0] = (uint8_t)p; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p >> 16);
+        }
+    ge_3ds_rotate_bgr8(rag.px, 37, 24, (uint8_t *)f3w);
+    CHECK(memcmp(f3w, s3, sizeof s3) == 0);
+    memset(f3w, 0, sizeof f3w);
+    ge_3ds_rotate_bgr8(rag.px, 37, 24, (uint8_t *)f3w + 1);
+    CHECK(memcmp((uint8_t *)f3w + 1, s3, sizeof s3) == 0);
+    CHECK(((uintptr_t)rag.px & 31) == 0 && ((uintptr_t)img.px & 31) == 0);   /* images are cache-line aligned */
+    GeImage huge = ge_image_create(2147483647, 2147483647);              /* a size that can't be addressed fails cleanly */
+    CHECK(huge.px == NULL && huge.w == 0 && huge.h == 0);
+    ge_image_free(&rag);
     ge_image_free(&odd);
     ge_image_free(&img);
 }
 
 /* Fast paths must draw exactly what the plain blit draws -- including when clipped or off-screen. */
+/* The magnified blitter against the plain rule, pixel by pixel: random sheets (solid, see-through and empty
+ * pixels), source rects, positions clipped on every edge at odd offsets, flips, opaque or not, 2x and 3x. */
+static void test_blit_scaled_random(void) {
+    puts("magnified blits vs the plain rule");
+    GeRng r;
+    ge_rng_seed(&r, 77);
+    GeImage src = ge_image_create(20, 20), a = ge_image_create(64, 48), b = ge_image_create(64, 48);
+    int bad = 0;
+    static const int fl[] = { 0, GE_FLIP_X, GE_FLIP_Y, GE_FLIP_X | GE_FLIP_Y, GE_OPAQUE, GE_OPAQUE | GE_FLIP_X };
+    for (int t = 0; t < 2000; t++) {
+        for (int i = 0; i < 400; i++) {
+            uint32_t k = ge_rng_next(&r) % 4u, al = k == 0 ? 0 : k == 1 ? 1 + ge_rng_next(&r) % 254u : 255;
+            src.px[i] = (al << 24) | (ge_rng_next(&r) & 0xFFFFFFu);
+        }
+        for (int i = 0; i < 64 * 48; i++) a.px[i] = b.px[i] = 0xFF000000u | (ge_rng_next(&r) & 0xFFFFFFu);
+        GeIRect sr = { (int)(ge_rng_next(&r) % 10u), (int)(ge_rng_next(&r) % 10u), 1 + (int)(ge_rng_next(&r) % 10u), 1 + (int)(ge_rng_next(&r) % 10u) };
+        int scale = 2 + (int)(ge_rng_next(&r) % 2u), flags = fl[ge_rng_next(&r) % 6u];
+        int dx = (int)(ge_rng_next(&r) % 100u) - 30, dy = (int)(ge_rng_next(&r) % 80u) - 30;
+        ge_blit_scaled(&a, &src, sr, dx, dy, scale, flags, GE_WHITE);
+        for (int y = 0; y < 48; y++)
+            for (int x = 0; x < 64; x++) {
+                int lx = x - dx, ly = y - dy;
+                if (lx < 0 || ly < 0 || lx >= sr.w * scale || ly >= sr.h * scale) continue;
+                lx /= scale; ly /= scale;
+                int sx = (flags & GE_FLIP_X) ? sr.x + sr.w - 1 - lx : sr.x + lx;
+                int sy = (flags & GE_FLIP_Y) ? sr.y + sr.h - 1 - ly : sr.y + ly;
+                uint32_t c = src.px[sy * 20 + sx];
+                if (flags & GE_OPAQUE) b.px[y * 64 + x] = c;
+                else ge_blend_row(&b.px[y * 64 + x], &c, 1, 0);
+            }
+        if (memcmp(a.px, b.px, sizeof(uint32_t) * 64 * 48) != 0 && bad++ < 3)
+            printf("  case %d differs (scale %d, flags %d, at %d,%d, rect %dx%d)\n", t, scale, flags, dx, dy, sr.w, sr.h);
+    }
+    CHECK(bad == 0);
+    ge_image_free(&src); ge_image_free(&a); ge_image_free(&b);
+}
+
 static void test_blit_fast_paths(void) {
     puts("blit fast paths");
     GeImage ts = ge_image_create(GE_TILE * 2, GE_TILE), a = ge_image_create(64, 48), b = ge_image_create(64, 48);
@@ -485,6 +780,91 @@ static void test_blit_fast_paths(void) {
     CHECK(bad == 0);
     ge_spans_free(&sp);
     ge_image_free(&art); ge_image_free(&ts); ge_image_free(&a); ge_image_free(&b);
+}
+
+static void test_save_round_trip(void) {
+    puts("sprite and image round trips (for the mods folder)");
+    GeSprite a, b;
+    memset(&a, 0, sizeof a); memset(&b, 0, sizeof b);
+    a.sheet = ge_image_create(64, 32); b.sheet = ge_image_create(64, 32);
+    const char *text =
+        "cell 32 16\norigin 16 15\n"
+        "clip idle loop\n frame 0 10\n frame 1 12\n"
+        "clip hit once dmg=7 kb=1.5,-2 stop=4 stun=18 cancel=1 next=idle lunge=2.5 rise=0.5 pogo=6 recoil=1.25 shoot=1 inv=3 guard=low bstun=11 chip=2 kd=1\n"
+        "  frame 2 3\n  frame 3 4 hit=2,-20,36.5,12\n  frame 0 8\n";
+    CHECK(ge_sprite_parse(&a, text) == 0);
+    CHECK(ge_sprite_save_anim(&a, "/tmp/ge_rt.anim") == 0);
+    char *back = ge_read_file("/tmp/ge_rt.anim");
+    CHECK(back && ge_sprite_parse(&b, back) == 0);
+    free(back);
+    bool same = a.nclips == b.nclips && a.cell_w == b.cell_w && a.cell_h == b.cell_h && a.origin_x == b.origin_x && a.origin_y == b.origin_y;
+    for (int i = 0; same && i < a.nclips; i++) same = memcmp(&a.clips[i], &b.clips[i], sizeof a.clips[i]) == 0;
+    CHECK(same);
+    for (int i = 0; i < 64 * 32; i++) a.sheet.px[i] = (uint32_t)(i * 2654435761u);
+    CHECK(ge_image_save_pam(&a.sheet, "/tmp/ge_rt.pam") == 0);
+    GeImage img = { 0, 0, NULL };
+    CHECK(ge_image_load_pam(&img, "/tmp/ge_rt.pam") == 0 && img.w == 64 && img.h == 32 && memcmp(img.px, a.sheet.px, 64 * 32 * 4) == 0);
+    ge_image_free(&img);
+    remove("/tmp/ge_rt.anim"); remove("/tmp/ge_rt.pam");
+    ge_sprite_free(&a); ge_sprite_free(&b);
+}
+
+static void test_patterns(void) {
+    puts("pattern backgrounds");
+    const uint32_t pal[6] = { GE_RGB(1, 0, 0), GE_RGB(2, 0, 0), GE_RGB(3, 0, 0), GE_RGB(4, 0, 0), GE_RGB(5, 0, 0), GE_RGB(6, 0, 0) };
+    GeImage a = ge_image_create(400, 240), b = ge_image_create(400, 240);
+    static GePattern p;
+    for (int kind = 0; kind < GE_PAT_COUNT; kind++) {
+        ge_pattern_make(&p, kind, pal, 6);
+        bool in_range = true;
+        for (int i = 0; i < GE_PAT_SIZE * GE_PAT_SIZE; i++) in_range = in_range && p.idx[i] < 6;
+        CHECK(in_range);
+        ge_pattern_draw(&p, &a, 100);
+        ge_pattern_draw(&p, &b, 100);
+        CHECK(memcmp(a.px, b.px, 400 * 240 * 4) == 0);             /* same tick, same picture */
+        bool opaque = true;
+        for (int i = 0; i < 400 * 240; i++) opaque = opaque && (a.px[i] >> 24) == 255;
+        CHECK(opaque);
+    }
+    ge_pattern_make(&p, GE_PAT_RINGS, pal, 6);
+    p.wave_amp = 0; p.cycle_ticks = 4;
+    ge_pattern_draw(&p, &a, 0);
+    ge_pattern_draw(&p, &b, 4);
+    CHECK(memcmp(a.px, b.px, 400 * 240 * 4) != 0);                  /* the palette moved on */
+    ge_pattern_draw(&p, &b, 4 * 6);
+    CHECK(memcmp(a.px, b.px, 400 * 240 * 4) == 0);                  /* ...and came round again */
+    /* the tile repeats every 128 pixels at scale 2, so with no motion row y equals row y + 128 */
+    CHECK(memcmp(a.px + 10 * 400, a.px + 138 * 400, 400 * 4) == 0);
+    CHECK(memcmp(a.px + 10 * 400, a.px + 10 * 400 + 128, 200 * 4) == 0);
+    /* a clipped rect only touches its pixels, even when it hangs off the screen */
+    ge_clear(&b, 0);
+    ge_pattern_draw_rect(&p, &b, -20, 230, 50, 40, 0);
+    int touched = 0;
+    bool outside_clean = true;
+    for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 400; x++) {
+            bool in = x < 30 && y >= 230;
+            if (b.px[y * 400 + x]) { touched += in; outside_clean = outside_clean && in; }
+        }
+    CHECK(outside_clean && touched == 30 * 10);
+    /* two cycling groups stay apart: the pupil (index 0) never changes */
+    const uint32_t eye[7] = { GE_RGB(9, 9, 9), GE_RGB(1, 1, 0), GE_RGB(2, 2, 0), GE_RGB(3, 3, 0), GE_RGB(0, 0, 1), GE_RGB(0, 0, 2), GE_RGB(0, 0, 3) };
+    ge_pattern_make(&p, GE_PAT_EYES, eye, 7);
+    p.cycle_from = 1; p.cycle_split = 4; p.cycle_ticks = 1; p.wave_amp = 0;
+    bool groups_ok = true;
+    for (int t = 0; t < 6; t++) {
+        ge_pattern_draw(&p, &a, t);
+        for (int i = 0; i < GE_PAT_SIZE * GE_PAT_SIZE; i++) {
+            int x = i % GE_PAT_SIZE, y = i / GE_PAT_SIZE, v = p.idx[i];
+            uint32_t c = a.px[(y * 2) * 400 + x * 2];
+            bool blue = (c & 0xff) != 0 && ((c >> 16) & 0xff) == 0, pupil = c == eye[0];
+            if (v == 0 && !pupil) groups_ok = false;
+            if (v >= 1 && v < 4 && (blue || pupil)) groups_ok = false;
+            if (v >= 4 && !blue) groups_ok = false;
+        }
+    }
+    CHECK(groups_ok);
+    ge_image_free(&a); ge_image_free(&b);
 }
 
 static void test_gfx(void) {
@@ -711,8 +1091,8 @@ static void loop_draw(void *u, GeImage *fb) { (void)u; (void)fb; g_draws++; }
 static void test_loop(void) {
     puts("engine loop");
     ge_null_configure(120, 0, NULL, NULL, NULL);
-    GeGame game = { NULL, loop_init, loop_update, loop_draw, NULL };
-    GePlatformConfig cfg = { "t", 400, 240, 1 };
+    GeGame game = { .user = NULL, .init = loop_init, .update = loop_update, .draw = loop_draw };
+    GePlatformConfig cfg = { .title = "t", .width = 400, .height = 240, .scale = 1 };
     CHECK(ge_run(&game, &cfg) == 0);
     CHECK(g_draws == 120);
     CHECK(g_updates == 120);                       /* exactly one 1/60 s step per presented frame */
@@ -723,11 +1103,17 @@ int main(void) {
     test_asset_prep_roundtrip();
     test_layers_file();
     test_moveset();
+    test_wall_jumps();
     test_contact_shots_meter();
     test_armor_grounded_zoom_font();
     test_3ds_rotate();
+    test_text_outline();
+    test_compositor_matches_painting();
+    test_blit_scaled_random();
     test_blit_fast_paths();
     test_gfx();
+    test_patterns();
+    test_save_round_trip();
     test_tilemap();
     test_physics();
     test_combat();

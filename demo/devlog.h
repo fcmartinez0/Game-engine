@@ -8,12 +8,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-bool devlog_open(void);                 /* picks the path, appends a session separator */
+bool devlog_open(void);                 /* picks the path; starts a fresh file, the last one becomes *_previous.txt */
 bool devlog_is_open(void);
 const char *devlog_path(void);
 void devlog_set_clock(uint64_t start_us, uint64_t now_us);
-void devlog(const char *fmt, ...);
-void devlog_flush(void);
+void devlog(const char *fmt, ...);      /* collected in memory... */
+void devlog_flush(void);                /* ...and written to the file here: call it at calm moments */
+void devlog_flush_if_due(uint64_t max_age_us);   /* flush if anything has waited this long */
 void devlog_close(void);
 
 /* "hh:mm:ss" for a duration in seconds */
