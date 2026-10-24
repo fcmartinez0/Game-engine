@@ -8,10 +8,6 @@ on:
     branches: ['**']
   workflow_dispatch:
 
-concurrency:
-  group: mac-build-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -28,6 +24,10 @@ jobs:
           - name: Intel
             os: macos-15-intel
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    concurrency:
+      group: mac-tests-${{ matrix.os }}-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
       - name: Build
@@ -41,8 +41,14 @@ jobs:
   package:
     name: Build and check the app
     runs-on: macos-latest
+    timeout-minutes: 30
+    concurrency:
+      group: mac-package-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # (the app's build number counts the commits)
       - name: Remember SDL2 between runs
         uses: actions/cache@v6
         with:
@@ -69,6 +75,7 @@ jobs:
     name: Open the app on an Intel Mac
     needs: package
     runs-on: macos-15-intel
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -91,9 +98,10 @@ jobs:
     needs: [package, intel]
     if: github.event_name == 'push' && (github.ref_name == github.event.repository.default_branch || startsWith(github.ref_name, 'claude/'))
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
-    concurrency:
+    concurrency:           # (a newer push cancels a build that is still checking, never one that is publishing)
       group: mac-publish
       cancel-in-progress: false
     env:
@@ -118,9 +126,9 @@ jobs:
             "The newest Mac build of Fran's demo (commit $short, branch $GITHUB_REF_NAME)." \
             "" \
             "Download frans-demo-mac.zip, unzip it, and read READ ME FIRST.txt inside: the first time you open the app macOS asks you to approve it." \
-            "Works on Apple Silicon and Intel Macs, macOS 11 or newer." > notes.txt
+            "Works on Apple Silicon and Intel Macs, macOS 11 or newer (tried on macOS 15 and 26)." > notes.txt
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true > /dev/null 2>&1 || true   # (the tag follows the newest commit)
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true > /dev/null
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --notes-file notes.txt
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \

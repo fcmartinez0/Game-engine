@@ -1,18 +1,20 @@
 FRAN'S DEMO - for Mac
 =====================
 
-You have "Fran's demo.app": one app for Apple Silicon Macs (M1 and newer) and Intel Macs, macOS 11 (Big Sur)
-or newer. Nothing else needs installing.
+You have "Fran's demo.app": one app for Apple Silicon Macs (M1 and newer) and Intel Macs, for macOS 11 (Big
+Sur) or newer (it has been tried on macOS 15 and 26). Nothing else needs installing.
 
 OPENING IT THE FIRST TIME
   macOS is like a doorman who checks every visitor's passport. The game's maker hasn't bought one from
   Apple (it costs money every year), so this app arrives with a handwritten name tag: it's safe, the
   doorman just doesn't know it. You tell him once and he remembers.
-  1. Drag "Fran's demo" out of the zip window into Applications (or onto the desktop).
-  2. Double-click it. macOS says it can't check the app for malware. Click "Done" (not "Move to Trash").
+  1. Double-click the zip to unpack it, then drag "Fran's demo" into Applications (or onto the desktop).
+  2. Double-click the app. macOS says it can't check it for malware. Click "Done" (not "Move to Trash").
   3. Open the Apple menu > System Settings > Privacy & Security. Scroll down to the Security part: it
-     says "Fran's demo" was blocked. Click "Open Anyway", type your Mac password, click "Open".
+     says "Fran's demo" was blocked. Click "Open Anyway", type your Mac password, and confirm.
      (The button shows for about an hour after step 2; if it is gone, double-click the app again.)
+     On macOS 11 or 12 the same place is called System Preferences > Security & Privacy > General.
+     On macOS 14 or older you can also hold Control while clicking the app, choose Open, and confirm.
   From then on it opens with a double-click.
 
   If macOS says the app is "damaged" instead: open Terminal (Spotlight: type Terminal), type

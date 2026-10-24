@@ -24,7 +24,8 @@ name="Fran's demo"
 exe="frans-demo"
 tag="$(echo "$archs" | tr ';' '-')"
 
-sdl="${1:-}"
+sdl=""
+[ -z "${1:-}" ] || sdl="$(cd "$1" && pwd)"
 if [ -z "$sdl" ]; then
     sdl="$work/sdl2-$SDL_VERSION-$tag"
     if [ ! -f "$sdl/lib/libSDL2.a" ]; then
@@ -43,7 +44,7 @@ if [ -z "$sdl" ]; then
         echo "building SDL2 $SDL_VERSION ($archs), once..."
         cmake -S "$work/sdl2-src-$tag" -B "$work/sdl2-build-$tag" -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_OSX_ARCHITECTURES="$archs" -DCMAKE_OSX_DEPLOYMENT_TARGET="$target" \
-              -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST=OFF -DCMAKE_INSTALL_PREFIX="$sdl" > /dev/null
+              -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST=OFF -DSDL_CCACHE=OFF -DCMAKE_INSTALL_PREFIX="$sdl" > /dev/null
         cmake --build "$work/sdl2-build-$tag" -j "$jobs" > "$work/sdl2-build-$tag.log" 2>&1 || { tail -40 "$work/sdl2-build-$tag.log" >&2; exit 1; }
         cmake --install "$work/sdl2-build-$tag" > /dev/null
     fi
@@ -54,6 +55,7 @@ echo "building the game ($archs)..."
 cmake -S "$root" -B "$work/game-$tag" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_OSX_ARCHITECTURES="$archs" -DCMAKE_OSX_DEPLOYMENT_TARGET="$target" \
       -DCMAKE_PREFIX_PATH="$sdl" -DSDL2_DIR="$sdl/lib/cmake/SDL2" > /dev/null
+cmake --build "$work/game-$tag" --target help | grep -qw demo || { echo "CMake did not find SDL2 in $sdl, so there is no windowed game to build" >&2; exit 1; }
 cmake --build "$work/game-$tag" -j "$jobs" --target demo
 
 stage="$root/dist/mac/stage"
@@ -75,7 +77,8 @@ if [ -n "$stray" ]; then
     exit 1
 fi
 
-# sign last: nothing in the app may change after this
+# sign last: nothing in the app may change after this (a download's quarantine mark or Finder's leftovers would break the seal)
+xattr -cr "$app"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
 

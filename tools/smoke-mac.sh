@@ -19,6 +19,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 save="$HOME/Library/Application Support/Fran's demo"
 fail() { echo "SMOKE TEST FAILED: $*" >&2; exit 1; }
+[ -n "${CI:-}" ] || [ -n "${SMOKE_ALLOW_REAL_HOME:-}" ] || fail "this plays the app into your real save folder ($save); set SMOKE_ALLOW_REAL_HOME=1 if that is fine"
 
 ditto -x -k "$zip" "$tmp/unzipped"
 app="$tmp/unzipped/Fran's demo.app"
@@ -27,6 +28,7 @@ exe="$app/Contents/MacOS/frans-demo"
 [ -f "$tmp/unzipped/READ ME FIRST.txt" ] || fail "no READ ME FIRST.txt next to the app"
 [ -f "$app/Contents/Resources/icon.icns" ] || fail "no icon in the app"
 plutil -lint "$app/Contents/Info.plist" || fail "Info.plist is not valid"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = frans-demo ] || fail "Info.plist names a different program than the one in the app"
 codesign --verify --deep --strict --verbose=2 "$app" || fail "the signature does not verify"
 
 have="$(lipo -archs "$exe")"
@@ -48,13 +50,13 @@ run() {
          perl -e 'alarm shift; exec @ARGV' 90 arch "-$a" "$exe" "$@") > "$log" 2>&1
     rc=$?
     set -e
-    sed 's/^/    | /' "$log"
+    LC_ALL=C sed 's/^/    | /' "$log"
     [ "$rc" = 0 ] || fail "$a $label: the app ended with status $rc"
     grep -q "^saving in $save/\$" "$log" || fail "$a $label: the app did not move into its save folder '$save/'"
     [ -f "$save/screenshot.png" ] || fail "$a $label: nothing was saved in '$save'"
     [ -f "$save/gloamwood_profile.txt" ] || fail "$a $label: no Paragon profile in the save folder"
-    python3 -I "$here/png_stats.py" "$save/screenshot.png" --min-colors 100 --width 100 || fail "$a $label: the window drew a blank picture"
     [ -z "$keep" ] || cp "$save/screenshot.png" "$keep/$a-$label.png"
+    python3 -I "$here/png_stats.py" "$save/screenshot.png" --min-colors 100 --width 100 || fail "$a $label: the window drew a blank picture"
 }
 
 # desktop <arch>: leave the game open for a few seconds and photograph the whole screen, for the screenshots

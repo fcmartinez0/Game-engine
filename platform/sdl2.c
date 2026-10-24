@@ -43,9 +43,11 @@ static void enter_save_folder(const char *title) {
 static int init_failed(int code, const char *what) {
     fprintf(stderr, "%s: %s\n", what, SDL_GetError());
 #ifdef __APPLE__
-    char msg[512];
-    snprintf(msg, sizeof msg, "%s.\n\n%s", what, SDL_GetError());
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fran's demo", msg, NULL);
+    if (!getenv("GE_QUIT_AFTER")) {   /* (a scripted run has nobody to click it) */
+        char msg[512];
+        snprintf(msg, sizeof msg, "%s.\n\n%s", what, SDL_GetError());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fran's demo", msg, NULL);
+    }
 #endif
     return code;
 }
