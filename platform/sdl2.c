@@ -4,6 +4,12 @@
 #include "ge/ge_platform.h"
 
 #include <SDL.h>
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef __APPLE__
+#include <unistd.h>
+#include "bundle_path.h"
+#endif
 
 static SDL_Window *g_win;
 static SDL_Renderer *g_ren;
@@ -15,9 +21,42 @@ static int g_saved_scale;                 /* the pixel size the window had befor
 static int g_mouse_down, g_mx, g_my;      /* logical coordinates */
 static SDL_GameController *g_pad;
 static int g_shot_requested;
+static int g_quit_after, g_presented, g_quit_now;   /* GE_QUIT_AFTER=<n>: show n frames, save the last as screenshot.png, quit (a smoke test of the real window) */
+
+#ifdef __APPLE__
+/* Finder starts an app with "/" as its working directory, and the game saves to relative paths (its settings, the
+ * Paragon's memory, the mods folder, screenshots). From inside an .app it works in the player's own folder instead:
+ * ~/Library/Application Support/<title>/. Run from a terminal nothing changes. */
+static void enter_save_folder(const char *title) {
+    char *base = SDL_GetBasePath();
+    bool bundled = ge_base_is_app_bundle(base);
+    SDL_free(base);
+    if (!bundled) return;
+    char *dir = SDL_GetPrefPath(NULL, title);
+    if (dir && chdir(dir) == 0) fprintf(stderr, "saving in %s\n", dir);
+    else fprintf(stderr, "can't open the save folder: saving in the current folder\n");
+    SDL_free(dir);
+}
+#endif
+
+/* A double-clicked app has no console: on the Mac say why the window didn't open. */
+static int init_failed(int code, const char *what) {
+    fprintf(stderr, "%s: %s\n", what, SDL_GetError());
+#ifdef __APPLE__
+    char msg[512];
+    snprintf(msg, sizeof msg, "%s.\n\n%s", what, SDL_GetError());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fran's demo", msg, NULL);
+#endif
+    return code;
+}
 
 int ge_plat_init(const GePlatformConfig *cfg) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) return -1;
+#ifdef __APPLE__
+    enter_save_folder(cfg->title ? cfg->title : "ge");
+#endif
+    const char *qa = getenv("GE_QUIT_AFTER");
+    g_quit_after = qa ? atoi(qa) : 0;
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) return init_failed(-1, "The game can't start its video system");
     /* The window is the main view alone. A game with a bottom screen (the world editor, the dev menu) can ask for it
      * with ge_plat_set_bottom: under the main view like a 3DS (the window grows), or over it. */
     g_w = cfg->width; g_two = cfg->two_screens; g_top_h = cfg->height;
@@ -26,12 +65,16 @@ int ge_plat_init(const GePlatformConfig *cfg) {
     SDL_DisplayMode dm;
     if (SDL_GetDesktopDisplayMode(0, &dm) == 0)
         while (scale > 1 && (g_top_h * scale > dm.h - 80 || g_w * scale > dm.w)) scale--;   /* fit the screen (it shrinks a step if the bottom screen is asked for) */
+    Uint32 wflags = SDL_WINDOW_RESIZABLE;
+#ifdef __APPLE__
+    wflags |= SDL_WINDOW_ALLOW_HIGHDPI;   /* a Retina screen gets real pixels (crisp), not a blurred 1x picture */
+#endif
     g_win = SDL_CreateWindow(cfg->title ? cfg->title : "ge", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             g_w * scale, g_h * scale, SDL_WINDOW_RESIZABLE);
-    if (!g_win) return -2;
+                             g_w * scale, g_h * scale, wflags);
+    if (!g_win) return init_failed(-2, "The game window can't be opened");
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!g_ren) g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_SOFTWARE);
-    if (!g_ren) return -3;
+    if (!g_ren) return init_failed(-3, "The game can't draw to its window");
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); /* crisp pixels */
     SDL_RenderSetLogicalSize(g_ren, g_w, g_h);
     g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, cfg->width, cfg->height);
@@ -55,6 +98,7 @@ void ge_plat_shutdown(void) {
 }
 
 int ge_plat_poll(uint32_t *buttons) {
+    if (g_quit_now) return 0;
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) return 0;
@@ -146,6 +190,7 @@ void ge_plat_present_bottom(const GeImage *fb) {
 }
 
 void ge_plat_present(const GeImage *fb) {
+    if (g_quit_after > 0 && ++g_presented >= g_quit_after) { g_shot_requested = 1; g_quit_now = 1; }
     if (g_shot_requested) {
         g_shot_requested = 0;
         ge_image_save_png(fb, "screenshot.png");

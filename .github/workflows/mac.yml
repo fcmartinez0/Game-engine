@@ -1,0 +1,123 @@
+# Builds Fran's demo for the Mac on real Macs in GitHub's cloud, tests it, and puts the zip on the Releases page.
+#   Actions tab > "Mac build" > a run > "Artifacts" has the zip of every build;
+#   the Releases page (the "Fran's demo for Mac" pre-release) always has the newest one.
+name: Mac build
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+concurrency:
+  group: mac-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The game's own test-suite, on both kinds of Mac (the headless build: no window needed).
+  tests:
+    name: Tests, ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple Silicon
+            os: macos-latest
+          - name: Intel
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j3
+      - name: Run the tests
+        run: ctest --test-dir build -j3 --output-on-failure --timeout 1200
+
+  # The app itself: both kinds of Mac in one, SDL2 inside it, signed ad hoc, then opened for real.
+  package:
+    name: Build and check the app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Remember SDL2 between runs
+        uses: actions/cache@v6
+        with:
+          path: build-mac/sdl2-2.32.10-arm64-x86_64
+          key: sdl2-2.32.10-arm64-x86_64-v1
+      - name: Build, sign and zip the app
+        run: sh tools/package-mac.sh
+      - name: Open it like a player would (from "/", on this Mac's own kind of CPU and through Rosetta)
+        run: sh tools/smoke-mac.sh dist/frans-demo-mac.zip dist/smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frans-demo-mac
+          path: dist/frans-demo-mac.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots-apple-silicon
+          path: dist/smoke
+          if-no-files-found: ignore
+
+  # The same zip on a real Intel Mac.
+  intel:
+    name: Open the app on an Intel Mac
+    needs: package
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: frans-demo-mac
+          path: dist
+      - name: Open it like a player would
+        run: sh tools/smoke-mac.sh dist/frans-demo-mac.zip dist/smoke
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots-intel
+          path: dist/smoke
+          if-no-files-found: ignore
+
+  # Newest build on the Releases page: one pre-release called "Fran's demo for Mac", its zip replaced each time.
+  # (Only for pushes to the main branch or a claude/ work branch, and only once the app has opened on both kinds of Mac.)
+  publish:
+    name: Put the zip on the Releases page
+    needs: [package, intel]
+    if: github.event_name == 'push' && (github.ref_name == github.event.repository.default_branch || startsWith(github.ref_name, 'claude/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: mac-publish
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: mac-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: frans-demo-mac
+          path: dist
+      - name: Update the release
+        run: |
+          set -eu
+          short="$(echo "$GITHUB_SHA" | cut -c1-7)"
+          printf '%s\n' \
+            "The newest Mac build of Fran's demo (commit $short, branch $GITHUB_REF_NAME)." \
+            "" \
+            "Download frans-demo-mac.zip, unzip it, and read READ ME FIRST.txt inside: the first time you open the app macOS asks you to approve it." \
+            "Works on Apple Silicon and Intel Macs, macOS 11 or newer." > notes.txt
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --notes-file notes.txt
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "Fran's demo for Mac (newest build)" --notes-file notes.txt
+          fi
+          gh release upload "$TAG" dist/frans-demo-mac.zip --repo "$GITHUB_REPOSITORY" --clobber

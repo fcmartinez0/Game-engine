@@ -14,9 +14,13 @@ WINDOWS (this zip)
   A picture plays for three seconds when the game starts; after the first
   second any of A, B, X, Y or START (the keys listed below) skips it.
 
-LINUX / MAC (build it yourself, it takes a minute)
+MAC
+  Use the Mac zip (frans-demo-mac.zip, from the Releases page of the project on GitHub): an app for Apple
+  Silicon and Intel Macs. Its READ ME FIRST.txt says how to open it the first time.
+
+LINUX (build it yourself, it takes a minute)
   Linux:  sudo apt install cmake gcc libsdl2-dev        (or your distro's names)
-  Mac:    brew install cmake sdl2
+  (On a Mac you can also build it like this: brew install cmake sdl2)
   Then, in the project folder:
           cmake -S . -B build && cmake --build build -j
           ./build/demo

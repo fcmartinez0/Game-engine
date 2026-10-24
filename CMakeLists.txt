@@ -74,6 +74,8 @@ add_test(NAME cpu_tests COMMAND cpu_tests)
 add_executable(paragon_tests tests/test_paragon.c)
 target_link_libraries(paragon_tests ge)
 add_test(NAME paragon_tests COMMAND paragon_tests)
+add_executable(bundle_tests tests/test_bundle.c)
+add_test(NAME bundle_tests COMMAND bundle_tests)
 
 # the whole story end to end: walk into the Paragon's hall, lose to it as designed, see the report
 add_test(NAME paragon_demo COMMAND demo_headless --no-mods --autoplay --god --paragon --fresh --profile paragon_test_profile.txt --frames 9000)

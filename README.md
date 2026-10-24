@@ -17,6 +17,8 @@ ctest --test-dir build             # a dozen test programs, no window needed
 ./build/demo_headless --autoplay --frames 3000 --dump-every 300 --dump-dir shots   # PNGs, no display
 ```
 
+**On a Mac.** GitHub builds the Mac app on real Macs (Apple Silicon and Intel in the one app, SDL2 inside it) after every push: `.github/workflows/mac.yml` runs the tests on both kinds of Mac, builds `Fran's demo.app` with `tools/package-mac.sh`, opens it from `/` the way Finder does (`tools/smoke-mac.sh`: signature, no stray libraries, a real window, a drawn frame, saving into `~/Library/Application Support/Fran's demo/`), and keeps the newest zip on the Releases page. The first open needs the player's approval because the app is signed ad hoc, not notarized (`pc/README-MAC.txt`, the file inside the zip, says how). To build it yourself on a Mac: `sh tools/package-mac.sh`.
+
 **The picture before the game.** Every normal start shows a picture for three seconds (it fades in and out; after the first second any of A, B, X, Y or START skips it) while the game waits behind it. A scripted run (`--autoplay`, `--warp`, `--room`, `--paragon`, taps) goes straight to the game; `--no-intro` skips it and `--intro` forces it. The picture is in the code like every other image (`demo/intro_img.c`, 180x240 in 5-6-5 colour, 86 KB); to change it run `python3 tools/make_intro.py photo.jpg`.
 
 ## Controls
