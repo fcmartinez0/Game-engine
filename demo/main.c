@@ -371,9 +371,10 @@ static void spawn_level_part(bool ordinary_only) {
         e->ai_y0 = y;
         e->ai_state = -1;
         if (ordinary_only)   /* a puff where each one comes back, so a respawn can be seen */
-            for (int k = 0; k < 10; k++)
-                ge_world_emit(&g.world, x + ge_rng_range(&g.world.rng, -8, 8), y - ge_rng_range(&g.world.rng, 0, 14), ge_rng_range(&g.world.rng, -0.6f, 0.6f),
-                              -0.5f, 0, 40, GE_ARGB(220, 200, 170, 255), 2, GE_P_ADD);
+            for (int k = 0; k < 10; k++) {
+                float vx = ge_rng_range(&g.world.rng, -0.6f, 0.6f), py = y - ge_rng_range(&g.world.rng, 0, 14), px = x + ge_rng_range(&g.world.rng, -8, 8);
+                ge_world_emit(&g.world, px, py, vx, -0.5f, 0, 40, GE_ARGB(220, 200, 170, 255), 2, GE_P_ADD);
+            }
     }
 }
 
@@ -535,9 +536,10 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
             g.boss_engaged = false;
             LOG("boss defeated");
             if (g.boss_spawn >= 0) BEATEN(g.boss_spawn) = true;
-            for (int i = 0; i < 40; i++)
-                ge_world_emit(w, w->ents[b].pos.x, w->ents[b].pos.y - 30, ge_rng_range(&w->rng, -3, 3), ge_rng_range(&w->rng, -4, 0), 0.08f, 60,
-                              GE_ARGB(255, 255, 200, 120), 3, GE_P_ADD);
+            for (int i = 0; i < 40; i++) {
+                float vy = ge_rng_range(&w->rng, -4, 0), vx = ge_rng_range(&w->rng, -3, 3);
+                ge_world_emit(w, w->ents[b].pos.x, w->ents[b].pos.y - 30, vx, vy, 0.08f, 60, GE_ARGB(255, 255, 200, 120), 3, GE_P_ADD);
+            }
         }
         g.kills++;
         int s = spawn_of(b);
@@ -579,8 +581,10 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
         p->hp = p->hp + 2 > p->max_hp ? p->max_hp : p->hp + 2;
         g.heals++;
         g.model.ow[GE_OW_HEAL]++;
-        for (int i = 0; i < 16; i++)
-            ge_world_emit(w, p->pos.x, p->pos.y - 12, ge_rng_range(&w->rng, -1.5f, 1.5f), ge_rng_range(&w->rng, -2, 0), 0, 30, GE_ARGB(255, 255, 255, 255), 2, GE_P_ADD);
+        for (int i = 0; i < 16; i++) {
+            float vy = ge_rng_range(&w->rng, -2, 0), vx = ge_rng_range(&w->rng, -1.5f, 1.5f);
+            ge_world_emit(w, p->pos.x, p->pos.y - 12, vx, vy, 0, 30, GE_ARGB(255, 255, 255, 255), 2, GE_P_ADD);
+        }
     }
 }
 
@@ -608,9 +612,11 @@ static void enemy_ai(int idx) {
         float dx = p ? p->pos.x - e->pos.x : 9999.0f;
         if (++e->ai_timer > 150) { e->ai_timer = 0; e->facing = -e->facing; }
         if (p && fabsf(dx) < 60.0f) e->facing = dx > 0 ? 1 : -1;
-        if ((w->tick + idx * 5) % 7 == 0)
-            ge_world_emit(w, e->pos.x + ge_rng_range(&w->rng, -8, 8), e->pos.y - ge_rng_range(&w->rng, 0, 20), 0, -0.4f, 0, 40,
+        if ((w->tick + idx * 5) % 7 == 0) {
+            float py = e->pos.y - ge_rng_range(&w->rng, 0, 20), px = e->pos.x + ge_rng_range(&w->rng, -8, 8);
+            ge_world_emit(w, px, py, 0, -0.4f, 0, 40,
                           spawn_of(idx) == g.paragon_spawn ? GE_ARGB(220, 255, 210, 110) : GE_ARGB(200, 190, 120, 255), 2, GE_P_ADD);
+        }
         return;
     }
     ai_think(w, idx, p, it);
@@ -970,9 +976,10 @@ static void end_battle(void) {
         if (g.duel >= 0) BEATEN(g.duel) = true;
         if (ent >= 0) {
             GeEntity *e = &g.world.ents[ent];
-            for (int i = 0; i < 24; i++)
-                ge_world_emit(&g.world, e->pos.x, e->pos.y - 12, ge_rng_range(&g.world.rng, -2, 2), ge_rng_range(&g.world.rng, -3, 0), 0.05f, 50,
-                              GE_ARGB(255, 200, 140, 255), 2, GE_P_ADD);
+            for (int i = 0; i < 24; i++) {
+                float vy = ge_rng_range(&g.world.rng, -3, 0), vx = ge_rng_range(&g.world.rng, -2, 2);
+                ge_world_emit(&g.world, e->pos.x, e->pos.y - 12, vx, vy, 0.05f, 50, GE_ARGB(255, 200, 140, 255), 2, GE_P_ADD);
+            }
             e->active = false;
             if (g.duel >= 0) g.ent_of[g.duel] = -1;
         }
@@ -1726,10 +1733,12 @@ static void demo_update_inner(const GeInput *in) {
         w->background_off = open_x <= 0;
         w->background_clip_x = open_x > 0 && open_x < SCREEN_W ? open_x : 0;
         if (in_hall && !g.hall_named) { g.hall_named = true; say("THE STILL HALL", 150); }
-        if (w->tick % 9 == 0 && ge_world_particle_count(w) < 90)   /* fireflies; in the hall, slow gold dust */
-            ge_world_emit(w, w->cam.x + ge_rng_range(&w->rng, 0, SCREEN_W), w->cam.y + ge_rng_range(&w->rng, in_hall ? 100 : 70, 200), 0,
-                          in_hall ? 0.05f : 0.0f, 0, 260 + (int)ge_rng_range(&w->rng, 0, 160),
+        if (w->tick % 9 == 0 && ge_world_particle_count(w) < 90) {   /* fireflies; in the hall, slow gold dust */
+            int life = 260 + (int)ge_rng_range(&w->rng, 0, 160);
+            float py = w->cam.y + ge_rng_range(&w->rng, in_hall ? 100 : 70, 200), px = w->cam.x + ge_rng_range(&w->rng, 0, SCREEN_W);
+            ge_world_emit(w, px, py, 0, in_hall ? 0.05f : 0.0f, 0, life,
                           in_hall ? GE_ARGB(255, 255, 214, 120) : GE_ARGB(255, 190, 255, 140), in_hall ? 1 : 2, GE_P_ADD | GE_P_WANDER | GE_P_TWINKLE);
+        }
         ge_world_update(w);
         hero_bookkeeping();
         puzzle_update(&g.pz, in);

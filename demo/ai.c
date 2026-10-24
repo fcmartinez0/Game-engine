@@ -472,10 +472,11 @@ void boss_think(GeWorld *w, int idx, const GeEntity *h, BossBrain *b, const Boss
                 b->mode = B_DAZED; b->timer = 18 + (enraged ? 50 : 75);
                 b->slams++;
                 ge_world_shake(w, 8.0f);
-                for (int i = 0; i < 14; i++)
-                    ge_world_emit(w, e->pos.x + (float)e->facing * 12.0f, e->pos.y - ge_rng_range(&w->rng, 2, 46),
-                                  -(float)e->facing * (float)ge_rng_range(&w->rng, 0, 3), (float)ge_rng_range(&w->rng, -3, 1), 0.1f, 40,
-                                  GE_ARGB(255, 200, 175, 130), 3, GE_P_ADD);
+                for (int i = 0; i < 14; i++) {
+                    float vy = (float)ge_rng_range(&w->rng, -3, 1), vx = -(float)e->facing * (float)ge_rng_range(&w->rng, 0, 3);
+                    float py = e->pos.y - ge_rng_range(&w->rng, 2, 46);
+                    ge_world_emit(w, e->pos.x + (float)e->facing * 12.0f, py, vx, vy, 0.1f, 40, GE_ARGB(255, 200, 175, 130), 3, GE_P_ADD);
+                }
                 break;
             }
             e->vel.x = (float)e->facing * (enraged ? 6.5f : 5.5f);

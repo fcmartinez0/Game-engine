@@ -29,5 +29,8 @@ static inline uint32_t ge_rng_next(GeRng *r) {
 }
 static inline float ge_rng_float(GeRng *r) { return (float)(ge_rng_next(r) >> 8) * (1.0f / 16777216.0f); }
 static inline float ge_rng_range(GeRng *r, float lo, float hi) { return lo + (hi - lo) * ge_rng_float(r); }
+/* Never draw two numbers inside one argument list or expression: C leaves the order open, gcc and clang choose
+ * differently, and the same seed then gives a different game (and different test pictures). Draw into locals,
+ * one declarator or statement after the other. (The existing call sites draw the last argument first: gcc's order.) */
 
 #endif

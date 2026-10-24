@@ -98,9 +98,10 @@ static void play(GeEntity *e, int clip, bool restart) {
 }
 
 static void dust(GeWorld *w, float x, float y, int n) {
-    for (int i = 0; i < n; i++)
-        ge_world_emit(w, x + ge_rng_range(&w->rng, -4, 4), y - 1, ge_rng_range(&w->rng, -0.6f, 0.6f), -0.3f, 0.02f, 14,
-                      GE_ARGB(150, 210, 200, 180), 2, 0);
+    for (int i = 0; i < n; i++) {
+        float vx = ge_rng_range(&w->rng, -0.6f, 0.6f), px = x + ge_rng_range(&w->rng, -4, 4);
+        ge_world_emit(w, px, y - 1, vx, -0.3f, 0.02f, 14, GE_ARGB(150, 210, 200, 180), 2, 0);
+    }
 }
 
 /* ---- state helpers ----------------------------------------------------- */
@@ -334,9 +335,10 @@ void ge_actor_update(GeWorld *w, int idx) {
         if (!ge_entity_physics(w, idx)) return;
         if (--e->dead_timer <= 0) {
             e->active = false;
-            for (int i = 0; i < 12; i++)
-                ge_world_emit(w, e->pos.x, e->pos.y - 6, ge_rng_range(&w->rng, -1.2f, 1.2f), ge_rng_range(&w->rng, -1.6f, -0.2f),
-                              0.05f, 24, GE_ARGB(200, 220, 210, 200), 3, 0);
+            for (int i = 0; i < 12; i++) {
+                float vy = ge_rng_range(&w->rng, -1.6f, -0.2f), vx = ge_rng_range(&w->rng, -1.2f, 1.2f);
+                ge_world_emit(w, e->pos.x, e->pos.y - 6, vx, vy, 0.05f, 24, GE_ARGB(200, 220, 210, 200), 3, 0);
+            }
         }
         break;
     case GE_ST_HURT:
@@ -433,9 +435,10 @@ static void overlap_centre(GeRect a, GeRect b, float *x, float *y) {
 
 static void kill_shot(GeWorld *w, GeShot *s) {
     s->active = false;
-    for (int i = 0; i < 5; i++)
-        ge_world_emit(w, s->pos.x, s->pos.y, ge_rng_range(&w->rng, -1, 1), ge_rng_range(&w->rng, -1, 0.5f), 0.08f, 12,
-                      GE_ARGB(200, 255, 240, 200), 2, GE_P_ADD);
+    for (int i = 0; i < 5; i++) {
+        float vy = ge_rng_range(&w->rng, -1, 0.5f), vx = ge_rng_range(&w->rng, -1, 1);
+        ge_world_emit(w, s->pos.x, s->pos.y, vx, vy, 0.08f, 12, GE_ARGB(200, 255, 240, 200), 2, GE_P_ADD);
+    }
 }
 
 void ge_shots_update(GeWorld *w) {

@@ -80,7 +80,10 @@ static GeImage make_hills(int w, int h) {
     for (int i = 0; i < 46; i++) {
         int x = (int)(ge_rng_float(&r) * w);
         int y = (int)(60 + ridge(x, w, 16, 7, 3)) + 4;
-        draw_pine(&im, x, y, 20 + (int)(ge_rng_float(&r) * 16), mix(GE_RGB(32, 22, 62), GE_RGB(44, 28, 74), ge_rng_float(&r)));
+        /* (two random numbers in one argument list would be drawn in whatever order the compiler likes: gcc and clang
+         * differ, and so did the trees. The colour is drawn first, which is the order the saved pictures were made in.) */
+        uint32_t shade = mix(GE_RGB(32, 22, 62), GE_RGB(44, 28, 74), ge_rng_float(&r));
+        draw_pine(&im, x, y, 20 + (int)(ge_rng_float(&r) * 16), shade);
     }
     return im;
 }

@@ -69,8 +69,10 @@ static void push_event(Puzzle *pz, PuzzleEventKind k, int thing) {
 }
 
 static void sparks(Puzzle *pz, float x, float y, uint32_t c, int n) {
-    for (int k = 0; k < n; k++)
-        ge_world_emit(pz->w, x, y, ge_rng_range(&pz->w->rng, -1.5f, 1.5f), ge_rng_range(&pz->w->rng, -2.0f, 0.5f), 0.08f, 24, c, 2, GE_P_ADD);
+    for (int k = 0; k < n; k++) {
+        float vy = ge_rng_range(&pz->w->rng, -2.0f, 0.5f), vx = ge_rng_range(&pz->w->rng, -1.5f, 1.5f);
+        ge_world_emit(pz->w, x, y, vx, vy, 0.08f, 24, c, 2, GE_P_ADD);
+    }
 }
 
 /* the hero's slash this tick, if it can reach the rect (and whether it is a down-slash: those bounce) */
@@ -326,9 +328,10 @@ static void crack_hit(Puzzle *pz, int col, int row, bool down) {
             pz->prog->broken[pz->prog->nbroken][1] = grp[k][1];
             pz->prog->nbroken++;
         }
-        for (int q = 0; q < 4; q++)
-            ge_world_emit(pz->w, grp[k][0] * T + 8.0f, grp[k][1] * T + 8.0f, ge_rng_range(&pz->w->rng, -2, 2), ge_rng_range(&pz->w->rng, -3, 0),
-                          0.15f, 40, GE_RGB(110, 104, 130), 3, 0);
+        for (int q = 0; q < 4; q++) {
+            float vy = ge_rng_range(&pz->w->rng, -3, 0), vx = ge_rng_range(&pz->w->rng, -2, 2);
+            ge_world_emit(pz->w, grp[k][0] * T + 8.0f, grp[k][1] * T + 8.0f, vx, vy, 0.15f, 40, GE_RGB(110, 104, 130), 3, 0);
+        }
     }
     pz->cracks[e] = pz->cracks[--pz->ncracks];
     ge_world_shake(pz->w, 4.0f);

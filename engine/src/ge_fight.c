@@ -416,9 +416,10 @@ static void fighter_step(GeFight *f, int s) {
                 e->vel.x = 0;
                 play(e, d->clip_down, true);
                 ge_world_shake(w, 2.0f);
-                for (int i = 0; i < 6; i++)
-                    ge_world_emit(w, e->pos.x + ge_rng_range(&w->rng, -10, 10), e->pos.y - 1, ge_rng_range(&w->rng, -1, 1), -0.5f, 0.03f,
-                                  18, GE_ARGB(160, 210, 200, 180), 3, 0);
+                for (int i = 0; i < 6; i++) {
+                    float vx = ge_rng_range(&w->rng, -1, 1), px = e->pos.x + ge_rng_range(&w->rng, -10, 10);
+                    ge_world_emit(w, px, e->pos.y - 1, vx, -0.5f, 0.03f, 18, GE_ARGB(160, 210, 200, 180), 3, 0);
+                }
             }
         } else if (F->timer <= 0) {
             to_neutral(F, e);
