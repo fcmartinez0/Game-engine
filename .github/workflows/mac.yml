@@ -104,6 +104,12 @@ jobs:
         with:
           name: frans-demo-mac
           path: dist
+      - name: Fetch the screenshots the checks took
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: screenshots-*
+          path: dist/shots
       - name: Update the release
         run: |
           set -eu
@@ -121,3 +127,7 @@ jobs:
               --title "Fran's demo for Mac (newest build)" --notes-file notes.txt
           fi
           gh release upload "$TAG" dist/frans-demo-mac.zip --repo "$GITHUB_REPOSITORY" --clobber
+          if [ -d dist/shots ]; then   # what the build checks saw on each kind of Mac (the opening picture, the game, the desktop)
+            (cd dist/shots && zip -qr ../what-the-build-checks-saw.zip .)
+            gh release upload "$TAG" dist/what-the-build-checks-saw.zip --repo "$GITHUB_REPOSITORY" --clobber
+          fi
