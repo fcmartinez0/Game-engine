@@ -75,7 +75,7 @@ ran=0
 for a in $have; do
     if ! arch "-$a" /usr/bin/true 2> /dev/null; then echo "(this Mac can't run $a code: skipped)"; continue; fi
     run "$a" intro 40
-    run "$a" game 150 --no-intro
+    run "$a" game 150 --no-intro --no-title
     desktop "$a"
     ran=$((ran + 1))
 done

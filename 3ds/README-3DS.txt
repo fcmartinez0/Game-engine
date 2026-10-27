@@ -6,9 +6,19 @@ INSTALL
   1. Copy the "3ds" folder from this zip onto the root of your SD card.
      You should end up with:  SD:/3ds/gloamwood/gloamwood.3dsx
   2. Put the card back, open the Homebrew Launcher, pick Fran's demo.
-  Quit with START + SELECT (that also writes the end-of-session summary).
+  Quit with START + SELECT (that also writes the end-of-session summary), or
+  QUIT on the title screen.
   A picture plays for three seconds when the game starts; after the first
-  second any of A, B, X, Y or START skips it.
+  second any of A, B, X, Y or START skips it. Then the TITLE: CONTINUE (when
+  there is a save), NEW GAME, DIFFICULTY, QUIT - the D-pad and A, or tap the
+  buttons on the bottom screen.
+
+SAVING
+  The game saves itself at every bench (UP), after a duel won, the boss, a
+  relic, a key or a lock, and when you choose SAVE AND QUIT TO TITLE in the
+  pause menu. CONTINUE wakes you at the last bench you rested at, with all of
+  it kept. The save is SD:/3ds/gloamwood/save.txt (delete it to start over, or
+  choose NEW GAME, which asks twice).
 
 CONTROLS - exploring
   D-pad / Circle Pad   move, aim up/down
@@ -22,7 +32,9 @@ CONTROLS - exploring
   X                    throw a needle (3 charges, they refill)
   A                    silk spin (uses 1 silk segment)
   hold L               heal 2 masks (uses 1 silk segment)
-  UP at a bench        rest: full health, respawn point
+  UP at a bench        rest: full health, respawn point, and the game is saved
+  START                pause: RESUME, WORLD EDITOR, DIFFICULTY, SAVE AND QUIT TO TITLE
+                       (START or B again: back to the game)
 
 CONTROLS - duels (when a duelist spots you)
   hold L               GUARD: blocks everything (low, high, jump-ins) except
@@ -66,7 +78,7 @@ DEV MENU - always on the BOTTOM (touch) screen
   PRACTICE DUEL    a no-stakes duel against a beginner (or press DOWN at any bench)
   RELOAD MODS / EXPORT CHARACTERS   see MODS below
   WIPE PARAGON MEMORY forgets everything the final boss has learned about you
-  EDIT WORLD       the world editor (or just press START): see below
+  EDIT WORLD       the world editor (or START > WORLD EDITOR): see below
   UP/DOWN to choose, A or LEFT/RIGHT to change, SELECT or B to close.
 
 THE CREATURES now have eyes: they only know where you are while nothing solid
@@ -77,6 +89,13 @@ THE CREATURES now have eyes: they only know where you are while nothing solid
   it. A bat draws back for a moment before it dives (that is your warning), and
   never dives through rock. A spitter only spits at what it can see.
 
+THE OLD TOWER - the door beside the forest's second bench. Climb it with the
+  wall jump: kick from wall to wall up its shaft (a crack half way up hides a
+  mask), cross the planks over the spikes, climb the chimney, and at the top
+  get onto the ledge (double jump, or hold toward it and jump to climb it).
+  The key there opens THE ROAD EAST, the locked gate before Avery The Cat.
+  DOWN + B drops through a plank, the quick way back down.
+
 THE CAVES - walk LEFT from the start to the stone door at the forest's edge
   and press UP: the Hollow, then (its door "down") the Deep. Puzzle pieces:
   levers (slash them, or throw a needle), gates and bridges that follow
@@ -84,7 +103,7 @@ THE CAVES - walk LEFT from the start to the stone door at the forest's edge
   keys and locked gates, relics. A gate that opens out of sight shows a
   blinking arrow at the screen's edge.
 
-THE WORLD EDITOR - press START while exploring (or dev menu > EDIT WORLD)
+THE WORLD EDITOR - START > WORLD EDITOR while exploring (or dev menu > EDIT WORLD)
   Think of it as a model railway's table: the BOTTOM screen is the table
   seen from above (the map, 8 pixels a tile), the TOP screen is a camera
   at the trains' height, START runs a train over what you just laid.

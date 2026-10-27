@@ -15,8 +15,8 @@
 /* What the session remembers about a room: once-levers pulled, keys and relics taken, locks opened, broken
  * stone, and crates left on plates. Toggle and timed levers start over each time you come into the room, and
  * so do crates, at their place as built or on the last plate they came to rest on: a crate shoved into a
- * corner can never lock a room for good, and a gate you solved with a crate stays solved. (Not saved between
- * sessions yet.) */
+ * corner can never lock a room for good, and a gate you solved with a crate stays solved. (Saved with the game:
+ * save.c.) */
 #define ROOM_MAX_BROKEN 256
 typedef struct {
     bool done[ROOM_MAX_THINGS];

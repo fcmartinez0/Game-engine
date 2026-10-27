@@ -22,11 +22,14 @@ OPENING IT THE FIRST TIME
   followed by a space, drag "Fran's demo" onto the Terminal window, and press Return. Then open it again.
 
 PLAYING
-  Quit with ESC, Cmd+Q or the red button. A picture plays for three seconds when the game starts; after
-  the first second any of A, B, X, Y or START (the keys below) skips it.
+  Quit with ESC, Cmd+Q, the red button, or QUIT on the title screen. A picture plays for three seconds
+  when the game starts; after the first second any of A, B, X, Y or START (the keys below) skips it.
+  Then the title: CONTINUE (when there is a save), NEW GAME, DIFFICULTY, QUIT.
+  The game saves itself at every bench, after a duel won, the boss, a relic or a key, and when you
+  leave; CONTINUE wakes you at the last bench you rested at.
   The window is just the game (a Mac has no bottom screen: that is the 3DS's second screen).
   Backspace (SELECT) opens the dev menu over the paused game; click its rows with the mouse. The WORLD
-  EDITOR (Enter) makes the window taller to show its map and panels; the mouse is the stylus there.
+  EDITOR (Enter, then WORLD EDITOR) makes the window taller to show its map and panels; the mouse is the stylus there.
   On a Mac keyboard Backspace is the "delete" key, and F12 (screenshot) needs the fn key held.
   The window can be resized, and the green button makes it full screen.
 
@@ -40,12 +43,18 @@ KEYS (a game controller works too: buttons by position, like a 3DS)
   X  needle       V or I
   A  silk spin    C or L
   L  heal / guard Q or U      (hold)
-  START           Enter       (opens the world editor while exploring)
+  START           Enter       (pause menu: resume, world editor, difficulty, save and quit)
   SELECT          Backspace   (pauses, opens the dev menu)
   F12             saves screenshot.png in the save folder
   Duels use the same keys: Y/X/A = light/medium/heavy (X/V/C), B = sword thrust (Z),
   L = guard (Q), R = dash (E). Full list in the project's README.md.
   The super (a duel move): press right, down, left, then the slash key (X) together with right.
+
+THE OLD TOWER
+  The door beside the forest's second bench. Kick from wall to wall up its shaft (a crack half way up
+  hides a mask), cross the planks over the spikes, climb the chimney, and get onto the top ledge
+  (double jump, or hold toward it and jump). Its key opens the road east, the locked gate before
+  Avery The Cat. DOWN + jump drops through a plank: the quick way back down.
 
 THE CAVES
   Walk LEFT from the start to the stone door at the forest's edge and press UP.
@@ -53,11 +62,11 @@ THE CAVES
 WHERE THE GAME SAVES
   In your own folder, so the app can sit in Applications:
       ~/Library/Application Support/Fran's demo/
-  To open it: in Finder choose Go > Go to Folder... and paste that line. It holds the settings, the
-  final boss's memory of you (gloamwood_profile.txt), screenshots and the "mods" folder (your world.txt
-  from the world editor). Deleting the folder starts the game fresh.
+  To open it: in Finder choose Go > Go to Folder... and paste that line. It holds your progress
+  (gloamwood_save.txt), the settings, the final boss's memory of you (gloamwood_profile.txt), screenshots
+  and the "mods" folder (your world.txt from the world editor). Deleting the folder starts the game fresh.
 
-THE WORLD EDITOR (press Enter while exploring)
+THE WORLD EDITOR (Enter while exploring, then WORLD EDITOR)
   Click a brush under the map, then click or drag on the map. Click a piece to change its settings, drag
   it to move it, drop it on ERASER to remove it. Q undoes. Arrow keys scroll the map.
   Quickest first try: PUZZLE tab, LEVER, click the map, GATE, click the map beside it, Enter to play it,
