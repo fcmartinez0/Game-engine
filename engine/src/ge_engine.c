@@ -3,7 +3,9 @@
 #include <string.h>
 
 static GeFrameTimes g_times;
+static bool g_quit;
 GeFrameTimes ge_frame_times(void) { return g_times; }
+void ge_request_quit(void) { g_quit = true; }
 
 int ge_run(const GeGame *game, const GePlatformConfig *cfg) {
     GePlatformConfig c = *cfg;
@@ -24,7 +26,8 @@ int ge_run(const GeGame *game, const GePlatformConfig *cfg) {
     memset(&in, 0, sizeof in);
     uint32_t buttons = 0;
 
-    while (rc == 0 && ge_plat_poll(&buttons)) {
+    g_quit = false;
+    while (rc == 0 && !g_quit && ge_plat_poll(&buttons)) {
         uint64_t now = ge_plat_time_us();
         acc += now - last;
         last = now;

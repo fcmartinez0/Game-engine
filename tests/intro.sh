@@ -1,11 +1,12 @@
 #!/bin/sh
 # The three-second picture before the game: it plays on a normal start, the game waits behind it and starts exactly when it
 # ends, a press only skips it after the first second, and scripted runs (autoplay, warps, taps) don't see it.
+# (--no-title: here the game comes straight after the picture; tests/frontend.sh has the title that normally follows.)
 #   intro.sh <demo_headless>
 bin="$1"
 tmp="$(mktemp -d)"
 fail=0
-sum() { (cd "$tmp" && "$bin" --no-mods --no-hints --fresh --profile ./p.txt "$@" 2>/dev/null | sed -n 's/.*checksum=\([0-9a-f]*\).*/\1/p'); }
+sum() { (cd "$tmp" && "$bin" --no-mods --no-hints --no-title --fresh --profile ./p.txt "$@" 2>/dev/null | sed -n 's/.*checksum=\([0-9a-f]*\).*/\1/p'); }
 check() { if ! eval "$2"; then echo "FAILED: $1"; fail=1; fi; }
 
 pic=$(sum --frames 100)                                  # a normal start: the picture

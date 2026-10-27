@@ -29,5 +29,7 @@ GeFrameTimes ge_frame_times(void);
  * and frame data behave identically on a 60 fps desktop and the 3DS), and
  * rendering happens once per loop. Returns 0 on a clean exit. */
 int ge_run(const GeGame *game, const GePlatformConfig *cfg);
+/* Ask ge_run to finish after this frame (a game's own QUIT): shutdown runs as on any exit. */
+void ge_request_quit(void);
 
 #endif

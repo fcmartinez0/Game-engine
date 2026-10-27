@@ -8,6 +8,8 @@
 #include "ai.h"
 #include "intro_img.h"
 #include "editor.h"
+#include "front.h"
+#include "save.h"
 #include "ge/ge_engine.h"
 #include "ge/ge_font.h"
 #include "ge/ge_platform.h"
@@ -27,11 +29,13 @@
 #endif
 #ifdef __3DS__
 #include <3ds.h>
+#include <sys/stat.h>
 #endif
 
 #define DUEL_PRACTICE (-2)        /* g.duel for a practice duel: nobody in the room */
 
 typedef enum { M_OVERWORLD, M_ALERT, M_TRANS_IN, M_BATTLE, M_TRANS_OUT, M_VICTORY, M_REPORT } Mode;
+enum { FR_NONE, FR_TITLE, FR_PAUSE, FR_STORY, FR_CREDITS };   /* the screens around the game (front.c), over everything */
 
 typedef struct {
     Sprites spr;
@@ -100,6 +104,20 @@ typedef struct {
     char coach_facts[5][72];
     bool coach_was_showing;
     int confirm_item, confirm_timer;      /* a pending "tap again to confirm" */
+
+    /* the screens around the game (front.c) and the saved game (save.c) */
+    int front;                            /* FR_*: the title, the pause menu, the story or the credits */
+    int front_t;                          /* ticks the story or the credits have shown */
+    FrontMenu fmenu;                      /* the title's or the pause menu's choices */
+    bool title_wanted;                    /* a normal start shows the title after the picture (not a scripted run; --title forces it) */
+    bool playing;                         /* a game is under way (NEW GAME, CONTINUE, or a start straight into play): it is saved */
+    bool has_save;                        /* CONTINUE is on the title */
+    const char *save_path;                /* where the game is saved; NULL: never (scripted runs and tests, unless --save) */
+    bool save_due;                        /* something worth keeping happened: save after this tick */
+    bool ending_seen;                     /* the credits have rolled once (after that the Paragon's report is the end) */
+    uint32_t play_ticks;                  /* time played, every session */
+    uint32_t hint_tick;                   /* g.tick when play began: the controls show for the first seconds */
+    float title_cam_x;
 
     int boss_spawn;
     BossBrain boss;                       /* Avery The Cat's mind (ai.h) */
@@ -219,8 +237,10 @@ static float duel_cpu_damage(void) { return g.difficulty < 0 ? 0.5f : g.difficul
 static float duel_player_damage(void) { return g.difficulty < 0 ? 1.4f : g.difficulty > 0 ? 1.0f : 1.15f; }
 #ifdef __3DS__
 #define SETTINGS_PATH "sdmc:/3ds/gloamwood/settings.txt"
+#define SAVE_PATH "sdmc:/3ds/gloamwood/save.txt"
 #else
 #define SETTINGS_PATH "gloamwood_settings.txt"
+#define SAVE_PATH "gloamwood_save.txt"
 #endif
 static void save_settings(void) {
     FILE *f = fopen(SETTINGS_PATH, "w");
@@ -236,6 +256,8 @@ static void load_settings(void) {
     fclose(f);
 }
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
+static void save_game(const char *why);
+static void open_title(void);
 
 /* ---- rooms ---------------------------------------------------------------- */
 
@@ -536,6 +558,7 @@ static void on_event(void *user, GeEventType ev, int a, int b) {
             g.boss_engaged = false;
             LOG("boss defeated");
             if (g.boss_spawn >= 0) BEATEN(g.boss_spawn) = true;
+            g.save_due = true;
             for (int i = 0; i < 40; i++) {
                 float vy = ge_rng_range(&w->rng, -4, 0), vx = ge_rng_range(&w->rng, -3, 3);
                 ge_world_emit(w, w->ents[b].pos.x, w->ents[b].pos.y - 30, vx, vy, 0.08f, 60, GE_ARGB(255, 255, 200, 120), 3, GE_P_ADD);
@@ -688,12 +711,13 @@ static void hero_intent(const GeInput *in) {
             g.bench_col = t->col;
             g.bench_row = t->row;
             g.bench_room = g.room;
-            say("RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
+            say(g.save_path ? "RESTED AND SAVED. THE CREATURES RETURN" : "RESTED HERE. THE FOREST'S CREATURES RETURN", 150);
             for (int r = 0; r < g.wd.nrooms; r++)          /* every room's creatures, the way Hollow Knight does it */
                 for (int k = 0; k < g.wd.rooms[r].nthings; k++)
                     if (ordinary_enemy(thing_entity_kind(g.wd.rooms[r].things[k].kind))) g.beaten[r][k] = false;
             respawn_enemies();
             LOG("rested at the bench in column %d", g.bench_col);
+            save_game("rested at a bench");
             calm_flush();
         } else if (fabsf(p->pos.x - bx) < 18.0f && p->on_ground && (in->pressed & GE_BTN_DOWN)) {
             start_practice();                       /* DOWN at a bench: a no-stakes practice duel */
@@ -995,6 +1019,7 @@ static void end_battle(void) {
     p = hero();
     p->invuln = 60;
     if (!g.test_play) paragon_profile_save(&g.model);     /* (a test play teaches the Paragon nothing: its model is put back) */
+    g.save_due = true;
 }
 
 /* ---- game callbacks ---------------------------------------------------- */
@@ -1107,6 +1132,7 @@ static int demo_init(void *user) {
         if (r < 0) { fprintf(stderr, "no room called %s\n", g.start_room); return 1; }
         if (r != 0) room_enter(r, NULL);
     }
+    if (g.title_wanted && !g.intro_on && g.front == FR_NONE) open_title();
     return 0;
 }
 
@@ -1190,8 +1216,8 @@ static void puzzle_events(void) {
         const Thing *t = e->thing >= 0 ? thing(e->thing) : NULL;
         char buf[72];
         switch (e->kind) {
-        case PZ_KEY: say("A KEY. IT OPENS A LOCKED GATE", 120); LOG("key taken in %s (carrying %d)", room()->name, g.keys); break;
-        case PZ_UNLOCK: say("UNLOCKED", 90); LOG("locked gate opened in %s", room()->name); break;
+        case PZ_KEY: say("A KEY. IT OPENS A LOCKED GATE", 120); LOG("key taken in %s (carrying %d)", room()->name, g.keys); g.save_due = true; break;
+        case PZ_UNLOCK: say("UNLOCKED", 90); LOG("locked gate opened in %s", room()->name); g.save_due = true; break;
         case PZ_SECRET: say("A WAY THROUGH", 90); LOG("breakable stone broken in %s", room()->name); break;
         case PZ_GATE: if (t) LOG("%s at %d,%d open in %s", t->invert ? "bridge" : "gate", t->col, t->row, room()->name); break;
         case PZ_LEVER: if (t) LOG("lever (wire %d, %s) %s in %s", t->ch, t->mode == LEVER_ONCE ? "once" : t->mode == LEVER_TOGGLE ? "toggle" : "timed",
@@ -1205,6 +1231,7 @@ static void puzzle_events(void) {
             snprintf(buf, sizeof buf, "FOUND %.24s%s", t ? t->name : "A RELIC", gift);
             say(buf, 180);
             LOG("relic found in %s: %s (%d of %d here)", room()->name, t ? t->name : "?", count_relics(g.room, true), count_relics(g.room, false));
+            g.save_due = true;
             break;
         }
         case PZ_DOOR:
@@ -1441,6 +1468,247 @@ static void menu_input(const GeInput *in) {
     if (dir || act) menu_apply(g.menu_sel, dir, act);
 }
 
+/* ---- the saved game, and the screens around the game (save.c, front.c) ---------------------------------
+ * The game is saved at benches and after anything worth keeping (a duel won, the boss, a relic, a key, a lock);
+ * CONTINUE brings you back at the last bench you rested at, with all of it kept. */
+
+static void save_game(const char *why) {
+    if (!g.save_path || !g.playing || g.test_play || g.editing) return;
+    static SaveGame s;                     /* (too big for the 3DS's stack) */
+    memset(&s, 0, sizeof s);
+    snprintf(s.bench_room, sizeof s.bench_room, "%s", g.wd.rooms[g.bench_room].name);
+    s.bench_col = g.bench_col; s.bench_row = g.bench_row;
+    s.bonus_masks = g.bonus_masks; s.bonus_ammo = g.bonus_ammo; s.keys = g.keys;
+    s.kills = g.kills; s.deaths = g.deaths; s.duels_won = g.duels_won; s.duels_lost = g.duels_lost; s.heals = g.heals;
+    s.play_ticks = g.play_ticks;
+    s.ending_seen = g.ending_seen;
+    s.nrooms = g.wd.nrooms;
+    for (int r = 0; r < g.wd.nrooms; r++) {
+        const Room *rm = &g.wd.rooms[r];
+        SaveRoom *sr = &s.rooms[r];
+        snprintf(sr->name, sizeof sr->name, "%s", rm->name);
+        sr->nthings = rm->nthings;
+        for (int i = 0; i < rm->nthings; i++) { sr->kinds[i] = rm->things[i].kind; sr->beaten[i] = g.beaten[r][i]; }
+        sr->progress = g.progress[r];
+    }
+#ifdef __3DS__
+    mkdir("sdmc:/3ds", 0777);              /* in case the game was copied somewhere else */
+    mkdir("sdmc:/3ds/gloamwood", 0777);
+#endif
+    g.save_due = false;
+    if (save_write(&s, g.save_path) == 0) LOG("saved (%s)", why);
+    else { LOG("COULDN'T SAVE (%s) to %s", why, g.save_path); say("COULDN'T SAVE: IS THE SD CARD LOCKED OR FULL?", 180); }
+}
+
+/* everything a game has done, undone (the Paragon's memory of you stays: that is its point) */
+static void clear_progress(void) {
+    memset(g.beaten, 0, sizeof g.beaten);
+    memset(g.progress, 0, sizeof g.progress);
+    g.keys = g.bonus_masks = g.bonus_ammo = 0;
+    apply_relic_ammo();
+    g.kills = g.deaths = g.duels_won = g.duels_lost = g.heals = 0;
+    g.play_ticks = 0;
+    g.ending_seen = g.hall_named = false;
+    g.mode = M_OVERWORLD;
+    g.mode_timer = 0;
+    g.paragon_report = false;
+}
+
+/* into room r at a spot: the hero (re)made there with full masks, the room as the game remembers it */
+static void enter_at(int r, const char *door, float x, float y_from) {
+    hero()->active = false;
+    room_enter(r, door);
+    spawn_hero_at(x, y_from);
+    puzzle_enter(&g.pz, room(), &g.progress[g.room], &g.world, g.player, &g.keys);
+    g.hint_tick = g.tick;
+}
+
+static void new_game(void) {
+    clear_progress();
+    const Room *r0 = &g.wd.rooms[0];
+    int start = room_find(r0, TH_START, 0), bench = room_find(r0, TH_BENCH, 0);
+    g.bench_room = 0;
+    g.bench_col = bench >= 0 ? r0->things[bench].col : 0;
+    g.bench_row = bench >= 0 ? r0->things[bench].row : r0->h - 2;
+    float x = (start >= 0 ? r0->things[start].col : 1) * GE_TILE + 8.0f;
+    enter_at(0, NULL, x, start >= 0 ? (float)(r0->things[start].row * GE_TILE) : 0.0f);
+    g.playing = true;
+    LOG("new game");
+}
+
+static bool load_game(void) {
+    static SaveGame s;
+    char err[96];
+    int rc = save_read(&s, g.save_path, err, sizeof err);
+    if (rc) { LOG("save: %s (%s line %d)", err, g.save_path, rc); return false; }
+    clear_progress();
+    for (int r = 0; r < g.wd.nrooms; r++) {
+        const Room *rm = &g.wd.rooms[r];
+        const SaveRoom *sr = save_find_room(&s, rm->name);
+        if (!sr) continue;
+        bool same = sr->nthings == rm->nthings;
+        for (int i = 0; same && i < rm->nthings; i++) same = sr->kinds[i] == rm->things[i].kind;
+        if (!same) { LOG("save: room %s has changed since it was saved: it starts as new", rm->name); continue; }
+        for (int i = 0; i < rm->nthings; i++)                 /* (creatures come back, as after a rest at the bench) */
+            g.beaten[r][i] = sr->beaten[i] && !ordinary_enemy(thing_entity_kind(rm->things[i].kind));
+        g.progress[r] = sr->progress;
+    }
+    g.keys = s.keys; g.bonus_masks = s.bonus_masks; g.bonus_ammo = s.bonus_ammo;
+    apply_relic_ammo();
+    g.kills = s.kills; g.deaths = s.deaths; g.duels_won = s.duels_won; g.duels_lost = s.duels_lost; g.heals = s.heals;
+    g.play_ticks = s.play_ticks;
+    g.ending_seen = s.ending_seen;
+    int br = world_find_room(&g.wd, s.bench_room);
+    bool found = false;
+    for (int i = 0; br >= 0 && i < g.wd.rooms[br].nthings && !found; i++) {
+        const Thing *t = &g.wd.rooms[br].things[i];
+        found = t->kind == TH_BENCH && t->col == s.bench_col && t->row == s.bench_row;
+    }
+    if (found) { g.bench_room = br; g.bench_col = s.bench_col; g.bench_row = s.bench_row; }
+    else {
+        const Room *r0 = &g.wd.rooms[0];
+        int bench = room_find(r0, TH_BENCH, 0);
+        g.bench_room = 0;
+        g.bench_col = bench >= 0 ? r0->things[bench].col : 0;
+        g.bench_row = bench >= 0 ? r0->things[bench].row : r0->h - 2;
+        LOG("save: its bench (%s %d,%d) is gone: back at the first one", s.bench_room, s.bench_col, s.bench_row);
+    }
+    enter_at(g.bench_room, NULL, g.bench_col * GE_TILE + 8.0f, (float)((g.bench_row + 1) * GE_TILE - 20));
+    g.playing = true;
+    LOG("continued from the save: %s, bench at %d,%d, played %u s", g.wd.rooms[g.bench_room].name, g.bench_col, g.bench_row,
+        (unsigned)(g.play_ticks / 60));
+    return true;
+}
+
+static bool front_confirm(int item) { return item == FI_NEW && g.has_save; }
+
+static const char *difficulty_name(void) { return g.difficulty < 0 ? "EASY" : g.difficulty > 0 ? "HARD" : "NORMAL"; }
+
+static void open_title(void) {
+    g.has_save = g.save_path && save_exists(g.save_path);
+    FrontItem items[4];
+    int n = 0;
+    if (g.has_save) items[n++] = FI_CONTINUE;
+    items[n++] = FI_NEW;
+    items[n++] = FI_DIFFICULTY;
+    items[n++] = FI_QUIT;
+    front_menu_open(&g.fmenu, items, n);
+    g.front = FR_TITLE;
+    g.menu_open = false;
+    g.title_cam_x = g.world.cam.x;
+    g.bottom_dirty = true;
+    LOG("title screen%s", g.has_save ? " (there is a save)" : "");
+}
+
+static void open_pause(void) {
+    const FrontItem items[] = { FI_RESUME, FI_EDITOR, FI_DIFFICULTY, FI_TITLE };
+    front_menu_open(&g.fmenu, items, 4);
+    g.front = FR_PAUSE;
+    g.bottom_dirty = true;
+    calm_flush();
+}
+
+static void front_choose(int item, int step) {
+    switch (item) {
+    case FI_CONTINUE:
+        g.front = FR_NONE;
+        if (load_game()) say("WELCOME BACK", 120);
+        else { new_game(); say("THE SAVE COULDN'T BE READ: A NEW GAME", 180); }
+        break;
+    case FI_NEW:
+        if (g.has_save && g.save_path) save_remove(g.save_path);
+        new_game();
+        g.front = FR_STORY;
+        g.front_t = 0;
+        break;
+    case FI_DIFFICULTY:
+        g.difficulty = (g.difficulty + 1 + (step < 0 ? 2 : 1)) % 3 - 1;   /* EASY > NORMAL > HARD > EASY */
+        apply_difficulty();
+        save_settings();
+        break;
+    case FI_QUIT: LOG("quit from the title"); ge_request_quit(); break;
+    case FI_RESUME: g.front = FR_NONE; break;
+    case FI_EDITOR:
+        g.front = FR_NONE;
+        if (can_edit()) open_editor();
+        else say(g.boss_engaged ? "NOT DURING A BOSS FIGHT" : "NOT RIGHT NOW", 90);
+        break;
+    case FI_TITLE:
+        save_game("quit to the title");
+        g.playing = false;
+        open_title();
+        break;
+    default: break;
+    }
+}
+
+/* the credits are over: the end is kept, then the title (or, in a scripted run, the game again) */
+static void credits_done(void) {
+    g.ending_seen = true;
+    save_game("the end");
+    if (g.title_wanted) { g.playing = false; open_title(); }
+    else g.front = FR_NONE;
+    say("THE PARAGON REMEMBERS", 150);
+}
+
+static void front_update(const GeInput *in) {
+    const uint32_t ok = GE_BTN_A | GE_BTN_B | GE_BTN_START;
+    int step = 0, item = -1;
+    switch (g.front) {
+    case FR_TITLE: case FR_PAUSE: {
+        GeInput keys = *in;
+        if (g.front == FR_PAUSE) {               /* START and B close the pause menu; A chooses */
+            if (g.fmenu.t >= 8 && (in->pressed & (GE_BTN_START | GE_BTN_B))) { g.front = FR_NONE; g.bottom_dirty = true; return; }
+            keys.pressed &= ~(GE_BTN_START | GE_BTN_B);
+        } else {
+            g.world.tick++;                      /* the clouds drift, the view sways a little */
+            float x = g.title_cam_x + sinf((float)g.fmenu.t / 260.0f) * 48.0f, maxx = (float)(g.world.map.w * GE_TILE - SCREEN_W);
+            g.world.cam.x = ge_clampf(x, 0.0f, maxx > 0 ? maxx : 0.0f);
+            float maxy = (float)(g.world.map.h * GE_TILE - SCREEN_H);
+            g.world.cam.y = ge_clampf(g.world.cam.y, 0.0f, maxy > 0 ? maxy : 0.0f);
+        }
+        item = front_menu_input(&g.fmenu, &keys, front_confirm, &step);
+        if (item < 0 && in->touch_pressed) {
+            item = front_menu_touch(&g.fmenu, in->touch_x, in->touch_y, front_confirm);
+            if (item == FI_DIFFICULTY) step = 1;
+        }
+        if (g.fmenu.dirty) { g.bottom_dirty = true; g.fmenu.dirty = false; }
+        if (item >= 0) front_choose(item, step);
+        break;
+    }
+    case FR_STORY:
+        if (++g.front_t >= FRONT_STORY_TICKS || (g.front_t > 30 && (in->pressed & ok))) {
+            g.front = FR_NONE;
+            g.hint_tick = g.tick;
+            say(room_title(), 120);
+            LOG("story %s", g.front_t >= FRONT_STORY_TICKS ? "told" : "skipped");
+        }
+        break;
+    case FR_CREDITS:
+        g.front_t++;
+        if (g.front_t > 30 && g.front_t < FRONT_CREDITS_ROLL && (in->pressed & GE_BTN_START)) g.front_t = FRONT_CREDITS_ROLL;
+        else if ((g.front_t > FRONT_CREDITS_ROLL + 20 && (in->pressed & ok)) || (!g.title_wanted && g.front_t > FRONT_CREDITS_ROLL + 60))
+            credits_done();
+        break;
+    default: g.front = FR_NONE; break;
+    }
+}
+
+static void draw_front(GeImage *fb) {
+    switch (g.front) {
+    case FR_TITLE: ge_world_draw(&g.world, fb); front_draw_title(fb, &g.fmenu, difficulty_name(), g.world.tick); break;
+    case FR_PAUSE: ge_world_draw(&g.world, fb); front_draw_pause(fb, &g.fmenu, difficulty_name(), room_title()); break;
+    case FR_STORY: front_draw_story(fb, g.front_t); break;
+    case FR_CREDITS: {
+        FrontStats st = { g.play_ticks, g.deaths, g.duels_won, g.kills, g.heals, 0, 0, (int)(ge_model_confidence(&g.model) * 100.0f) };
+        for (int r = 0; r < g.wd.nrooms; r++) { st.relics_found += count_relics(r, true); st.relics += count_relics(r, false); }
+        front_draw_credits(fb, &st, g.front_t);
+        break;
+    }
+    default: break;
+    }
+}
+
 /* ---- the bottom screen: the dev menu lives here --------------------------
  * On a 3DS this is the touch screen; on a PC it is the panel under the game,
  * and the mouse taps it. It is always showing and always tappable; SELECT also
@@ -1571,6 +1839,13 @@ static bool draw_bottom(void *user, GeImage *fb) {
 #ifdef PC_WINDOW
     if (bottom_mode() == GE_BOTTOM_HIDDEN) return false;          /* nobody can see it: don't draw it (it is drawn again when it shows) */
 #endif
+    if (g.front != FR_NONE) {                                    /* the title's and the pause menu's buttons, to tap */
+        if (!g.bottom_dirty) return false;
+        g.bottom_dirty = false;
+        if (g.front == FR_TITLE || g.front == FR_PAUSE) front_draw_menu_bottom(fb, &g.fmenu, difficulty_name(), g.front == FR_TITLE);
+        else ge_clear(fb, GE_RGB(8, 4, 16));
+        return true;
+    }
     if (g.editing) return editor_draw_bottom(fb);
     if (g.test_play && !coach_showing() && !g.menu_open) {
         bool force = g.bottom_dirty;
@@ -1657,7 +1932,16 @@ static void demo_update(void *user, const GeInput *in) {
     if (g.intro_on) {                                      /* the picture: the game waits behind it */
         g.intro_t++;
         bool skip = g.intro_t > 60 && (in->pressed & (GE_BTN_A | GE_BTN_B | GE_BTN_X | GE_BTN_Y | GE_BTN_START));   /* after the first second a press moves on */
-        if (g.intro_t >= INTRO_TICKS || skip) { g.intro_on = false; LOG("intro over after %d ticks%s", g.intro_t, skip ? " (skipped)" : ""); }
+        if (g.intro_t >= INTRO_TICKS || skip) {
+            g.intro_on = false;
+            LOG("intro over after %d ticks%s", g.intro_t, skip ? " (skipped)" : "");
+            if (g.title_wanted) open_title();
+        }
+        return;
+    }
+    if (g.front != FR_NONE) {                              /* the title, the pause menu, the story, the credits: the game waits */
+        front_update(in);
+        g.update_ms += ((float)(ge_plat_time_us() - t0) / 1000.0f - g.update_ms) * 0.1f;
         return;
     }
     if (g.editing) {                                       /* the editor has both screens; the game waits */
@@ -1676,8 +1960,9 @@ static void demo_update(void *user, const GeInput *in) {
     }
     if (g.menu_open) menu_input(in);                       /* the game is paused underneath */
     else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; g.bottom_dirty = true; calm_flush(); }
-    else if ((in->pressed & GE_BTN_START) && g.mode == M_OVERWORLD && !g.autoplay) {   /* START: the world editor */
-        if (can_edit()) open_editor();
+    else if ((in->pressed & GE_BTN_START) && g.mode == M_OVERWORLD && !g.autoplay) {
+        if (!g.test_play) open_pause();                    /* START: the pause menu (the world editor is one of its choices) */
+        else if (can_edit()) open_editor();                /* ...but in a test play, straight back to the editor */
         else say(g.boss_engaged ? "NOT DURING A BOSS FIGHT" : "NOT RIGHT NOW", 90);
     }
     else {
@@ -1689,6 +1974,7 @@ static void demo_update(void *user, const GeInput *in) {
 
 static void demo_update_inner(const GeInput *in) {
     g.tick++;
+    if (g.playing && !g.test_play) g.play_ticks++;
     GeWorld *w = &g.world;
     GeInput bot;
     if (g.autoplay) {
@@ -1777,10 +2063,12 @@ static void demo_update_inner(const GeInput *in) {
     case M_REPORT:
         if (g.mode_timer > 150 && ((in->pressed & (GE_BTN_A | GE_BTN_START)) || (g.autoplay && g.mode_timer > 420))) {
             g.mode = M_OVERWORLD; g.mode_timer = 0;
-            say("THE PARAGON REMEMBERS", 150);
+            if (!g.ending_seen && g.title_wanted && !g.test_play) { g.front = FR_CREDITS; g.front_t = 0; LOG("the credits roll"); }
+            else say("THE PARAGON REMEMBERS", 150);
         }
         break;
     }
+    if (g.save_due && (g.mode == M_OVERWORLD || g.mode == M_VICTORY || g.mode == M_REPORT)) save_game("progress");
 }
 
 /* ---- drawing ----------------------------------------------------------- */
@@ -1844,11 +2132,12 @@ static void draw_hud(GeImage *fb) {
             ge_fill_rect(fb, kx + 4, 24, 5, 2, GE_RGB(255, 214, 110), 0);
         }
     }
-    if (g.tick < 420 && !g.no_hints && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds */
+    uint32_t since = g.tick - g.hint_tick;
+    if (since < 420 && !g.no_hints && g.mode == M_OVERWORLD && !g.menu_open) {   /* controls, for the first few seconds of play */
         const char *l1 = "B JUMP (AGAIN IN THE AIR)   Y SLASH (+UP / +DOWN)   R DASH";
         const char *l2 = "X THROW NEEDLE   A SILK SPIN   HOLD L TO HEAL   UP AT A BENCH";
         const char *l3 = "JUMP OFF A WALL: AWAY = KICK   NOTHING = HOP   TOWARD = CLIMB";
-        int a = g.tick > 360 ? (420 - (int)g.tick) * 255 / 60 : 255;
+        int a = since > 360 ? (420 - (int)since) * 255 / 60 : 255;
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l1, 1)) / 2, 44, l1, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l2, 1)) / 2, 55, l2, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
         ge_text_outlined(fb, (SCREEN_W - ge_text_width(l3, 1)) / 2, 66, l3, GE_ARGB(a, 230, 220, 250), GE_ARGB(a, 20, 14, 30), 1);
@@ -2003,6 +2292,7 @@ static void draw_intro(GeImage *fb) {
 
 static void demo_draw_inner(GeImage *fb) {
     if (g.intro_on) { draw_intro(fb); return; }
+    if (g.front != FR_NONE) { draw_front(fb); return; }
     if (g.editing) { ge_world_draw(&g.world, fb); editor_draw_top(fb); return; }
     if (g.mode == M_BATTLE || (g.mode == M_TRANS_OUT && g.fight_live)) {
         ge_fight_draw(&g.fight, fb);
@@ -2059,11 +2349,12 @@ static void demo_shutdown(void *user) {
                g.tot.frames ? g.tot.slow * 100 / g.tot.frames : 0);
         devlog_close();
     }
+    if (g.playing && g.front != FR_TITLE) save_game("leaving the game");
 #ifdef DEMO_HEADLESS
     GeEntity *p = hero();
-    printf("mode=%d x=%.0f (col %d) masks=%d kills=%d duels_won=%d duels_lost=%d deaths=%d heals=%d boss=%s room=%s editing=%d "
+    printf("mode=%d front=%d row=%d x=%.0f (col %d) masks=%d kills=%d duels_won=%d duels_lost=%d deaths=%d heals=%d boss=%s room=%s editing=%d "
            "checksum=%08x bottom=%08x\n",
-           g.mode, p->pos.x, (int)(p->pos.x / GE_TILE), p->active ? p->hp : 0, g.kills, g.duels_won, g.duels_lost, g.deaths, g.heals,
+           g.mode, g.front, (int)((p->pos.y - 1.0f) / GE_TILE), p->pos.x, (int)(p->pos.x / GE_TILE), p->active ? p->hp : 0, g.kills, g.duels_won, g.duels_lost, g.deaths, g.heals,
            boss_beaten_anywhere() ? "defeated" : (g.boss_engaged ? "fighting" : "waiting"), room()->name, g.editing ? 1 : (g.test_play ? 2 : 0),
            ge_null_last_checksum(), ge_null_bottom_checksum());
 #endif
@@ -2137,7 +2428,8 @@ int main(int argc, char **argv) {
     g.difficulty = -1;   /* new players start on easy; the setting is saved once changed */
     g_log = getenv("GLOAM_LOG") != NULL;
     const char *dump_dir = ".";
-    bool no_intro = false, force_intro = false;
+    bool no_intro = false, force_intro = false, force_title = false, no_title = false, no_save = false, credits = false;
+    const char *save_arg = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--autoplay")) g.autoplay = true;
         else if (!strcmp(argv[i], "--low-detail")) g.low_detail = true;
@@ -2153,6 +2445,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-hints")) g.no_hints = true;                                /* benchmarks: skip the opening controls text */
         else if (!strcmp(argv[i], "--no-intro")) no_intro = true;                                  /* skip the picture before the game */
         else if (!strcmp(argv[i], "--intro")) force_intro = true;                                  /* ...or show it in a scripted run too (tests) */
+        else if (!strcmp(argv[i], "--no-title")) no_title = true;                                  /* straight into the game, no title screen */
+        else if (!strcmp(argv[i], "--title")) force_title = true;                                  /* ...or the title in a scripted run too (tests) */
+        else if (!strcmp(argv[i], "--save") && i + 1 < argc) save_arg = argv[++i];                 /* save the game here */
+        else if (!strcmp(argv[i], "--no-save")) no_save = true;                                    /* never read or write the save */
+        else if (!strcmp(argv[i], "--credits")) credits = true;                                    /* dev: the credits at once */
         else if (!strcmp(argv[i], "--fresh")) g.fresh_profile = true;                              /* ignore the saved Paragon memory */
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc) paragon_set_profile_path(argv[++i]);
         else if (!strcmp(argv[i], "--paragon")) g.to_paragon = true;                              /* straight to its hall */
@@ -2183,6 +2480,17 @@ int main(int argc, char **argv) {
     scripted = scripted || g_ntaps || g_ntouches;
 #endif
     g.intro_on = !no_intro && (force_intro || !scripted);
+    /* The title follows the picture on a normal start. A scripted run goes straight into play, and doesn't touch the
+     * player's save unless given one with --save (the test backend never saves without it). */
+    g.title_wanted = !no_title && (force_title || !scripted);
+    g.playing = !g.title_wanted;
+#ifdef DEMO_HEADLESS
+    g.save_path = save_arg;
+#else
+    g.save_path = save_arg ? save_arg : (scripted ? NULL : SAVE_PATH);
+#endif
+    if (no_save) g.save_path = NULL;
+    if (credits) { g.intro_on = false; g.front = FR_CREDITS; g.playing = true; }   /* (as at the end of a game) */
 #ifdef DEMO_HEADLESS
     ge_null_configure(frames, dump_every, dump_dir, g_ntaps ? tap_script : NULL, NULL);
     if (g_ntouches) ge_null_set_touch(touch_script);
