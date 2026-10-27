@@ -469,6 +469,145 @@ static void test_deep_route(void) {
     CHECK(count_events(PZ_DOOR) == 1 && pz.door_near == nth(r, TH_DOOR, 1));
 }
 
+/* Up a shaft the way a player does it: off a wall, kick away to the other one; on the ground, jump; in the air,
+ * keep heading for the next wall; hold the jump while rising. Once the feet are above `top`, head `exit`
+ * (-1 left, +1 right) and land there. Nothing can knock the hero off: the climb is what is tested. */
+static bool climb(float top, int exit, uint32_t first, int limit) {
+    uint32_t prev = 0;
+    for (int i = 0; i < limit; i++) {
+        GeEntity *p = hero();
+        if (p->on_ground && p->pos.y <= top + 0.5f && i > 0) { wait(4); return true; }
+        uint32_t b;
+        bool want = false;
+        if (p->pos.y < top - 2.0f) b = exit > 0 ? GE_BTN_RIGHT : GE_BTN_LEFT;              /* over the top */
+        else if (p->wall_dir != 0) { b = p->wall_dir > 0 ? GE_BTN_LEFT : GE_BTN_RIGHT; want = true; }
+        else if (p->on_ground) { b = first; want = true; }
+        else b = p->vel.x < 0 ? GE_BTN_LEFT : GE_BTN_RIGHT;
+        if (want && !(prev & GE_BTN_B)) b |= GE_BTN_B;
+        else if (!p->on_ground && p->vel.y < 0) b |= GE_BTN_B;
+        step(b);
+        prev = b;
+        hero()->invuln = 2;
+    }
+    printf("  (climb stopped at x %.0f, y %.0f, wanted above %.0f)\n", hero()->pos.x, hero()->pos.y, top);
+    return false;
+}
+static bool standing_in(int row) { return hero()->on_ground && fabsf(hero()->pos.y - (row + 1.0f) * GE_TILE) < 0.5f; }
+static void unhurt(int n) { for (int i = 0; i < n; i++) { hero()->invuln = 2; step(0); } }
+/* walk to a column with nothing able to knock the hero about */
+static bool walk_safe(int col) {
+    for (int i = 0; i < 600; i++) {
+        hero()->invuln = 2;
+        float dx = col * GE_TILE + 8.0f - hero()->pos.x;
+        if (fabsf(dx) < 2.0f && hero()->on_ground) { unhurt(4); return true; }
+        step(dx > 0 ? GE_BTN_RIGHT : GE_BTN_LEFT);
+    }
+    printf("  (stuck at x %.0f, y %.0f on the way to column %d)\n", hero()->pos.x, hero()->pos.y, col);
+    return false;
+}
+static void land(void) { for (int i = 0; i < 120 && !hero()->on_ground; i++) { hero()->invuln = 2; step(0); } unhurt(4); }
+static void jump_toward(uint32_t dir, int up, int then) {   /* a jump held `up` ticks, the stick held on for `then` more */
+    for (int i = 0; i < up; i++) { hero()->invuln = 2; step(dir | GE_BTN_B); }
+    for (int i = 0; i < then; i++) { hero()->invuln = 2; step(dir); }
+}
+
+static void test_tower_route(void) {
+    puts("the Old Tower, played through: the hall, the shaft, the gallery, the chimney, the ledge, the key");
+    Room *r = builtin_room("tower");
+    CHECK(r != NULL);
+    if (!r) return;
+    enter_at(r, 6, 36, false);                    /* the bench */
+    wait(10);
+    CHECK(walk_safe(17));                          /* two planks up to the shaft */
+    jump_toward(GE_BTN_RIGHT, 14, 20);
+    land();
+    CHECK(standing_in(33));
+    CHECK(walk_safe(21));
+    jump_toward(GE_BTN_RIGHT, 14, 16);
+    land();
+    CHECK(standing_in(31));
+    CHECK(walk_safe(25));
+    CHECK(climb(18.0f * GE_TILE, -1, GE_BTN_RIGHT, 1200));   /* kick up the shaft, off onto the gallery's floor */
+    CHECK(standing_in(17) && hero()->pos.x < 24.0f * GE_TILE);
+    /* the gallery: left over the spikes by its planks */
+    CHECK(walk_safe(19));
+    jump_toward(GE_BTN_LEFT, 14, 12);
+    land();
+    CHECK(standing_in(14));
+    CHECK(walk_safe(15));
+    jump_toward(GE_BTN_LEFT, 10, 14);
+    land();
+    CHECK(standing_in(14));
+    CHECK(walk_safe(11));
+    jump_toward(GE_BTN_LEFT, 12, 24);
+    land();
+    CHECK(standing_in(17) && hero()->pos.x < 8.0f * GE_TILE);
+    CHECK(walk_safe(2));                           /* under the hanging wall, into the chimney */
+    CHECK(climb(9.0f * GE_TILE, 1, GE_BTN_RIGHT, 1200));     /* up it, out onto the top floor */
+    CHECK(standing_in(8) && hero()->pos.x > 4.0f * GE_TILE);
+    /* the ledge, four tiles up: with the second jump... */
+    CHECK(walk_safe(13));
+    jump_toward(GE_BTN_RIGHT, 14, 0);
+    jump_toward(GE_BTN_RIGHT, 1, 0); step(GE_BTN_RIGHT);      /* (a fresh press: the jump again, in the air) */
+    jump_toward(GE_BTN_RIGHT, 16, 24);
+    CHECK(standing_in(4) && hero()->pos.x > 15.0f * GE_TILE);
+    CHECK(walk_safe(23));
+    CHECK(keys == 1 && prog.done[nth(r, TH_KEY, 0)]);
+    /* ...and by climbing it: up against the wall, the jump with the stick toward it */
+    enter_at(r, 13, 8, true);
+    wait(6);
+    bool climbed = false;
+    for (int i = 0; i < 240 && !climbed; i++) {
+        GeEntity *p = hero();
+        uint32_t b = GE_BTN_RIGHT;
+        if ((p->on_ground && i % 40 == 2) || (p->wall_dir > 0 && i % 6 == 0)) b |= GE_BTN_B;
+        p->invuln = 2;
+        step(b);
+        climbed = standing_in(4);
+    }
+    CHECK(climbed);
+
+    puts("the Old Tower: the keeper's mask behind the crack in the shaft, and the way back down");
+    enter_at(r, 24, 24, true);                     /* on the shaft's plank, beside the crack */
+    unhurt(6);
+    step(GE_BTN_LEFT); unhurt(2);                  /* face it */
+    for (int k = 0; k < 2; k++) { step(GE_BTN_Y); unhurt(24); }
+    CHECK(cell(23, 23) == GE_TILE_EMPTY);
+    for (int k = 0; k < 2; k++) { for (int i = 0; i < 9; i++) { hero()->invuln = 2; step(GE_BTN_LEFT | GE_BTN_B); } step(GE_BTN_LEFT | GE_BTN_Y); unhurt(40); }
+    CHECK(cell(23, 22) == GE_TILE_EMPTY);
+    jump_toward(GE_BTN_LEFT, 10, 30);
+    CHECK(prog.done[nth(r, TH_RELIC, 0)]);
+    enter_at(r, 25, 24, true);                     /* down through the planks */
+    unhurt(6);
+    step(GE_BTN_DOWN | GE_BTN_B); hold(GE_BTN_DOWN, 4); unhurt(60);
+    CHECK(standing_in(31));
+    step(GE_BTN_DOWN | GE_BTN_B); hold(GE_BTN_DOWN, 4); unhurt(60);
+    CHECK(standing_in(36));
+}
+
+static void test_road_east(void) {
+    puts("the road east: locked until the tower's key comes");
+    Room *r = builtin_room("gloamwood");
+    CHECK(r != NULL);
+    if (!r) return;
+    int gate = -1;
+    for (int i = room_find(r, TH_GATE, 0); i >= 0; i = room_find(r, TH_GATE, i + 1)) if (r->things[i].lock && r->things[i].col == 149) gate = i;
+    CHECK(gate >= 0);
+    enter_at(r, 147, 11, false);
+    unhurt(10);
+    for (int i = 0; i < 90; i++) { hero()->invuln = 2; step(GE_BTN_RIGHT); }
+    CHECK(gate_shut(149, 9, 11) && hero()->pos.x < 149.0f * GE_TILE);   /* no key: it stays shut */
+    for (int i = 0; i < 40; i++) { hero()->invuln = 2; step(GE_BTN_UP | GE_BTN_B); step(GE_BTN_RIGHT); }   /* nor can it be jumped */
+    CHECK(hero()->pos.x < 149.0f * GE_TILE);
+    keys = 1;
+    for (int i = 0; i < 90; i++) { hero()->invuln = 2; step(GE_BTN_RIGHT); }
+    CHECK(keys == 0 && prog.done[gate]);
+    CHECK(hero()->pos.x > 150.0f * GE_TILE);
+    int door = -1;
+    for (int i = room_find(r, TH_DOOR, 0); i >= 0; i = room_find(r, TH_DOOR, i + 1)) if (!strcmp(r->things[i].target, "tower:in")) door = i;
+    CHECK(door >= 0 && r->things[door].col == 108);
+}
+
 int main(void) {
     art_make_sheets(&spr);
     if (chars_init(&ch, &spr) != 0) { puts("characters failed to build"); return 1; }
@@ -488,6 +627,8 @@ int main(void) {
     test_gate_arrow();
     test_hollow_route();
     test_deep_route();
+    test_tower_route();
+    test_road_east();
     world_free(&wd);
     ge_world_free(&w);
     art_free(&spr);

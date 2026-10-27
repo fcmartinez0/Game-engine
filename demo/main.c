@@ -130,7 +130,7 @@ typedef struct {
     bool intro_on;                        /* the three-second picture before the game starts is showing */
     int intro_t;                          /* ticks it has shown for */
     const char *layers_path;
-    int warp_col;
+    int warp_col, warp_row;       /* --warp COL[:ROW] (no row: the first floor from the top of the column) */
     GeInput bot_in;
     uint32_t bot_prev;
     int bot_climb;
@@ -258,6 +258,7 @@ static void load_settings(void) {
 static void say(const char *s, int ticks) { snprintf(g.msg, sizeof g.msg, "%s", s); g.msg_timer = ticks; }
 static void save_game(const char *why);
 static void open_title(void);
+static void warp_to(int col, int row);
 
 /* ---- rooms ---------------------------------------------------------------- */
 
@@ -1131,6 +1132,7 @@ static int demo_init(void *user) {
         int r = world_find_room(&g.wd, g.start_room);
         if (r < 0) { fprintf(stderr, "no room called %s\n", g.start_room); return 1; }
         if (r != 0) room_enter(r, NULL);
+        if (r != 0 && g.warp_col > 0) warp_to(g.warp_col, g.warp_row);   /* --room ROOM --warp COL[:ROW] */
     }
     if (g.title_wanted && !g.intro_on && g.front == FR_NONE) open_title();
     return 0;
@@ -2457,7 +2459,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--room") && i + 1 < argc) g.start_room = argv[++i];            /* start in this room */
         else if (!strcmp(argv[i], "--export-world") && i + 1 < argc) g.export_world = argv[++i];  /* write the world out and stop */
         else if (!strcmp(argv[i], "--layers") && i + 1 < argc) g.layers_path = argv[++i];
-        else if (!strcmp(argv[i], "--warp") && i + 1 < argc) g.warp_col = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--warp") && i + 1 < argc) {                                    /* start at a column (and row) */
+            const char *a = argv[++i], *colon = strchr(a, ':');
+            g.warp_col = atoi(a);
+            g.warp_row = colon ? atoi(colon + 1) : -1;
+        }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) dump_every = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dump-dir") && i + 1 < argc) dump_dir = argv[++i];

@@ -76,6 +76,7 @@ int arena_exit_col(const Thing *a) { return a->col + a->w; }
 void room_display_name(const char *name, char *out, size_t n) {
     if (n == 0) return;
     if (!strcmp(name, "gloamwood")) name = "fran's demo";
+    else if (!strcmp(name, "tower")) name = "the old tower";
     size_t k = 0;
     for (; name[k] && k + 1 < n; k++) out[k] = (name[k] >= 'a' && name[k] <= 'z') ? (char)(name[k] - 32) : name[k];
     out[k] = 0;
@@ -357,12 +358,19 @@ static void add_relic(Room *r, int col, int row, const char *name, int gives) {
     room_add_thing(r, t);
 }
 
+/* a room drawn as text, one string per row (as wide as the room) */
+static void paint(Room *r, const char *const *rows) {
+    for (int y = 0; y < r->h; y++)
+        for (int x = 0; x < r->w && rows[y][x]; x++) room_set_tile(r, x, y, rows[y][x]);
+}
+
 /* "Gloamwood": one Silksong-style slice, left to right.
  *   0  bench, crawlers        26 spike pit (pogo the bat)    44 spitter on a ledge
  *   51 wall-jump shaft up to a plateau -- duelist 1 waits on top
  *   87 duelist 2              92 spike floor with planks     105 bench
  *   121 duelist 3             132 second spike pit + bats    146 the champion (best of 3)
  *   154-175 boss arena: the gate shuts behind you; the far door (176) opens when the boss falls
+ *   108 the door to the Old Tower (its key opens the road east, the locked gate at 149)
  *   178-211 the Paragon's hall: a bench at 182, the Paragon waits at 200 */
 static void build_gloamwood(World *w) {
     const int W = 214, H = 15, G = 12;   /* G: the ground row */
@@ -385,6 +393,7 @@ static void build_gloamwood(World *w) {
     fill(r, 152, 153, 0, 8, 'S');          /* boss arena: a doorway in, a wall at the far end */
     fill(r, 176, 177, 0, 8, 'S');
     fill(r, 176, 176, 9, 11, 'S');         /* the far door, shut until the boss falls */
+    fill(r, 149, 149, 0, 8, 'S');          /* the road east: a stone gatepost over its locked gate */
     fill(r, 178, W - 1, 0, 5, 'S');        /* the Paragon's hall: a long low stone room, with a ceiling and a wall at the end */
     fill(r, W - 2, W - 1, 0, G - 1, 'S');
     fill(r, 178, W - 1, G, G, 'T');        /* its floor is dressed stone, not grass */
@@ -423,6 +432,9 @@ static void build_gloamwood(World *w) {
     snprintf(mark.name, sizeof mark.name, "WALL SHAFT");
     room_add_thing(r, mark);
     add_door(r, 2, G - 1, "hollow", "hollow:in");   /* the way down to the caves (last: things keep their order) */
+    add_door(r, 108, G - 1, "tower", "tower:in");    /* the Old Tower: its key opens the road east */
+    add_gate(r, 149, G - 1, 1, 3, 0, false, false, true);
+    add_sign(r, 148, G - 1, "LOCKED. ITS KEY IS AT THE TOP OF THE OLD TOWER, BY THE BENCH");
 }
 
 /* "The Hollow": the caves under the Gloamwood, one puzzle idea at a time, left to right. Things stand in row 11.
@@ -510,11 +522,84 @@ static void build_deep(World *w) {
     add_door(r, 4, 20, "short", "hollow:down");
 }
 
+/* "The Old Tower": a climb, bottom to top, for the wall jump (off a wall the stick picks the jump).
+ *   the hall (rows 30-36): the way in, a bench, two planks up to the shaft (rows 34 and 32)
+ *   the shaft (cols 24-26): walls three tiles apart to kick between, a plank half way to rest on, and a crack in
+ *     its left wall at rows 22-23 with the keeper's mask behind it
+ *   the gallery (rows 10-17): planks over spikes, a bat; at its far end the chimney (cols 1-3), up between the
+ *     tower's wall and a hanging one, walked into under it
+ *   the top (rows 2-8): a grunt, and a ledge four tiles up (climb it: toward the wall) with the key on it.
+ *   Back down: drop through the planks (DOWN + jump). */
+static void build_tower(World *w) {
+    static const char *const rows[] = {
+        "SSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "SSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "S..........................S",
+        "S..........................S",
+        "S..........................S",
+        "S..............SSSSSSSSSSSSS",
+        "S..............SSSSSSSSSSSSS",
+        "S..............SSSSSSSSSSSSS",
+        "S..............SSSSSSSSSSSSS",
+        "S...SSSSSSSSSSSSSSSSSSSSSSSS",
+        "S...S......................S",
+        "S...S......................S",
+        "S...S......................S",
+        "S...S......................S",
+        "S...S......................S",
+        "S..........==..==..........S",
+        "S..........................S",
+        "S.......^^^^^^^^^^^........S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSS..C...S",
+        "SSSSSSSSSSSSSSSSSSSSS..C...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS===S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "SSSSSSSSSSSSSSSSSSSSSSSS...S",
+        "S..........................S",
+        "S..........................S",
+        "S.....................=====S",
+        "S..........................S",
+        "S.................====.....S",
+        "S..........................S",
+        "S..........................S",
+        "SSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "SSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "SSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+    };
+    Room *r = world_add_room(w, "tower", 28, (int)(sizeof rows / sizeof rows[0]), BD_CAVE);
+    if (!r) return;
+    paint(r, rows);
+    add_door(r, 3, 36, "in", "gloamwood:tower");
+    add(r, TH_START, 4, 36);
+    add(r, TH_BENCH, 6, 36);
+    add_sign(r, 9, 36, "THE OLD TOWER. ITS KEEPER LEFT A KEY AT THE TOP");
+    add(r, TH_CRAWLER, 15, 36);
+    add_sign(r, 20, 36, "UP THE SHAFT: KICK FROM WALL TO WALL");
+    add_relic(r, 21, 23, "KEEPER'S MASK", GIVE_MASK);
+    add(r, TH_BAT, 13, 11);
+    add_sign(r, 6, 17, "UP THE CHIMNEY. AT THE TOP, HOLD TOWARD THE LEDGE");
+    add(r, TH_GRUNT, 10, 8);
+    Thing key = thing_default(TH_KEY, 23, 4);
+    room_add_thing(r, key);
+    add_sign(r, 19, 4, "THE KEEPER'S KEY. IT OPENS THE ROAD EAST");
+    Thing mark = thing_default(TH_MARK, 20, 4);
+    snprintf(mark.name, sizeof mark.name, "TOWER TOP");
+    room_add_thing(r, mark);
+}
+
 void world_builtin(World *w) {
     world_free(w);
     build_gloamwood(w);
     build_hollow(w);
     build_deep(w);
+    build_tower(w);
 }
 
 /* ---- the file ---------------------------------------------------------------- */

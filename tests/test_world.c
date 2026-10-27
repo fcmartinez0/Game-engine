@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GLOAMWOOD_TILEMAP_HASH 0xc53e6169u   /* the old level.c's, cell for cell */
+#define GLOAMWOOD_TILEMAP_HASH 0x4cbe3808u   /* the old level.c's, cell for cell, plus the road east's gatepost (column 149) */
 static int checks, failures;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; printf("  FAILED %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
@@ -178,6 +178,8 @@ static void test_room_names_on_screen(void) {
     CHECK(!strcmp(out, "FRAN'S DEMO"));                    /* the forest's name in the data stays gloamwood; the player sees this */
     room_display_name("hollow", out, sizeof out);
     CHECK(!strcmp(out, "HOLLOW"));
+    room_display_name("tower", out, sizeof out);
+    CHECK(!strcmp(out, "THE OLD TOWER"));
     char small[6];
     room_display_name("gloamwood", small, sizeof small);
     CHECK(!strcmp(small, "FRAN'") && strlen(small) == 5);  /* cut to fit, always terminated */
@@ -231,7 +233,7 @@ static void test_builtin_doors(void) {
     puts("the built-in world: every door leads to a door that exists, and the sample rooms are caves");
     static World w;
     world_builtin(&w);
-    CHECK(world_find_room(&w, "hollow") >= 0 && world_find_room(&w, "deep") >= 0);
+    CHECK(world_find_room(&w, "hollow") >= 0 && world_find_room(&w, "deep") >= 0 && world_find_room(&w, "tower") >= 0);
     int doors = 0;
     for (int r = 0; r < w.nrooms; r++)
         for (int i = 0; i < w.rooms[r].nthings; i++) {
@@ -244,11 +246,16 @@ static void test_builtin_doors(void) {
             for (int k = room_find(&w.rooms[r], TH_BENCH, 0); k >= 0; k = room_find(&w.rooms[r], TH_BENCH, k + 1))
                 CHECK(abs(w.rooms[r].things[k].col - t->col) >= 2 || w.rooms[r].things[k].row != t->row);   /* UP rests at a bench */
         }
-    CHECK(doors == 5);
-    CHECK(w.rooms[world_find_room(&w, "hollow")].backdrop == BD_CAVE && w.rooms[world_find_room(&w, "deep")].backdrop == BD_CAVE);
-    /* the Gloamwood's door is its last thing, so everything before it spawns as it always did */
+    CHECK(doors == 7);
+    CHECK(w.rooms[world_find_room(&w, "hollow")].backdrop == BD_CAVE && w.rooms[world_find_room(&w, "deep")].backdrop == BD_CAVE &&
+          w.rooms[world_find_room(&w, "tower")].backdrop == BD_CAVE);
+    /* what was added to the Gloamwood later (the caves' door, then the tower's door, the road east's lock and its sign)
+     * comes after everything else and spawns nothing, so everything before it spawns as it always did */
     const Room *gw = &w.rooms[0];
-    CHECK(gw->things[gw->nthings - 1].kind == TH_DOOR);
+    int first_door = room_find(gw, TH_DOOR, 0);
+    CHECK(first_door >= 0 && !strcmp(gw->things[first_door].name, "hollow"));
+    for (int i = first_door; i >= 0 && i < gw->nthings; i++)
+        CHECK(gw->things[i].kind == TH_DOOR || gw->things[i].kind == TH_GATE || gw->things[i].kind == TH_SIGN);
     world_free(&w);
 }
 
