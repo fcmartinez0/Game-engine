@@ -397,7 +397,10 @@ void puzzle_enter(Puzzle *pz, Room *r, RoomProgress *prog, GeWorld *w, int hero_
     pz->room = r; pz->prog = prog; pz->w = w; pz->hero = hero_idx; pz->keys = keys;
     pz->sign_near = pz->door_near = -1;
     for (int i = 0; i < r->nthings; i++) { pz->p[i].col = -100; pz->p[i].row = -100; }   /* (no crate anywhere yet) */
-    for (int k = 0; k < prog->nbroken; k++) break_cell(pz, prog->broken[k][0], prog->broken[k][1]);
+    for (int k = 0; k < prog->nbroken; k++) {                /* stone broken before (only where it still is breakable stone: */
+        char t = room_tile(r, prog->broken[k][0], prog->broken[k][1]);   /* the room may have been redrawn since it was saved) */
+        if (t == 'C' || t == 'H') break_cell(pz, prog->broken[k][0], prog->broken[k][1]);
+    }
     for (int i = 0; i < r->nthings; i++) {
         const Thing *t = &r->things[i];
         Piece *p = &pz->p[i];

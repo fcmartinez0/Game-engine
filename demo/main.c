@@ -113,10 +113,14 @@ typedef struct {
     bool playing;                         /* a game is under way (NEW GAME, CONTINUE, or a start straight into play): it is saved */
     bool has_save;                        /* CONTINUE is on the title */
     const char *save_path;                /* where the game is saved; NULL: never (scripted runs and tests, unless --save) */
-    bool save_due;                        /* something worth keeping happened: save after this tick */
+    bool save_due;                        /* something worth keeping happened: save at the next quiet moment */
+    uint32_t save_due_tick;               /* since when */
     bool ending_seen;                     /* the credits have rolled once (after that the Paragon's report is the end) */
     uint32_t play_ticks;                  /* time played, every session */
     uint32_t hint_tick;                   /* g.tick when play began: the controls show for the first seconds */
+    SaveRoom kept[WORLD_MAX_ROOMS];       /* rooms in the save that this world doesn't have (a world.txt that didn't load...): */
+    int nkept;                            /*   written back as they were, so they aren't lost */
+    char title_note[64];                  /* a word on the title: the save couldn't be written or read */
     float title_cam_x;
 
     int boss_spawn;
@@ -470,7 +474,10 @@ static void room_enter(int r, const char *door) {
     w->cam.locked = false;
     room_build(r);
     set_backdrop(room()->backdrop);
+    bool hero_was = w->ents[g.player].active;      /* (a hero between lives keeps its slot: a creature spawned into it */
+    w->ents[g.player].active = true;               /*  would be moved to the door below, on top of the new hero) */
     spawn_level();
+    w->ents[g.player].active = hero_was;
     if (boss_beaten()) arena_set_exit(false);
     const Thing *at = NULL;
     for (int i = room_find(room(), TH_DOOR, 0); door && i >= 0 && !at; i = room_find(room(), TH_DOOR, i + 1))
@@ -1020,7 +1027,7 @@ static void end_battle(void) {
     p = hero();
     p->invuln = 60;
     if (!g.test_play) paragon_profile_save(&g.model);     /* (a test play teaches the Paragon nothing: its model is put back) */
-    g.save_due = true;
+    save_game("a duel");                                  /* (the screen is black) */
 }
 
 /* ---- game callbacks ---------------------------------------------------- */
@@ -1493,13 +1500,20 @@ static void save_game(const char *why) {
         for (int i = 0; i < rm->nthings; i++) { sr->kinds[i] = rm->things[i].kind; sr->beaten[i] = g.beaten[r][i]; }
         sr->progress = g.progress[r];
     }
+    for (int k = 0; k < g.nkept && s.nrooms < WORLD_MAX_ROOMS; k++)
+        if (world_find_room(&g.wd, g.kept[k].name) < 0) s.rooms[s.nrooms++] = g.kept[k];
 #ifdef __3DS__
     mkdir("sdmc:/3ds", 0777);              /* in case the game was copied somewhere else */
     mkdir("sdmc:/3ds/gloamwood", 0777);
 #endif
     g.save_due = false;
-    if (save_write(&s, g.save_path) == 0) LOG("saved (%s)", why);
-    else { LOG("COULDN'T SAVE (%s) to %s", why, g.save_path); say("COULDN'T SAVE: IS THE SD CARD LOCKED OR FULL?", 180); }
+    g.save_due_tick = 0;
+    if (save_write(&s, g.save_path) == 0) { LOG("saved (%s)", why); g.title_note[0] = 0; }
+    else {
+        LOG("COULDN'T SAVE (%s) to %s", why, g.save_path);
+        say("COULDN'T SAVE: IS THE SD CARD LOCKED OR FULL?", 180);
+        snprintf(g.title_note, sizeof g.title_note, "THE GAME COULDN'T BE SAVED: IS THE SD CARD LOCKED OR FULL?");
+    }
 }
 
 /* everything a game has done, undone (the Paragon's memory of you stays: that is its point) */
@@ -1514,6 +1528,12 @@ static void clear_progress(void) {
     g.mode = M_OVERWORLD;
     g.mode_timer = 0;
     g.paragon_report = false;
+    g.door_fade = g.warp_fade = 0;           /* (a door or a spike return half way through when the game was left) */
+    g.hero_dying = false;
+    g.respawn_timer = 0;
+    g.save_due = false;
+    g.save_due_tick = 0;
+    g.nkept = 0;
 }
 
 /* into room r at a spot: the hero (re)made there with full masks, the room as the game remembers it */
@@ -1521,6 +1541,7 @@ static void enter_at(int r, const char *door, float x, float y_from) {
     hero()->active = false;
     room_enter(r, door);
     spawn_hero_at(x, y_from);
+    hero()->invuln = 60;
     puzzle_enter(&g.pz, room(), &g.progress[g.room], &g.world, g.player, &g.keys);
     g.hint_tick = g.tick;
 }
@@ -1544,24 +1565,43 @@ static bool load_game(void) {
     int rc = save_read(&s, g.save_path, err, sizeof err);
     if (rc) { LOG("save: %s (%s line %d)", err, g.save_path, rc); return false; }
     clear_progress();
+    bool fresh[WORLD_MAX_ROOMS] = { false };
     for (int r = 0; r < g.wd.nrooms; r++) {
         const Room *rm = &g.wd.rooms[r];
         const SaveRoom *sr = save_find_room(&s, rm->name);
-        if (!sr) continue;
+        if (!sr) { fresh[r] = true; continue; }
         bool same = sr->nthings == rm->nthings;
         for (int i = 0; same && i < rm->nthings; i++) same = sr->kinds[i] == rm->things[i].kind;
-        if (!same) { LOG("save: room %s has changed since it was saved: it starts as new", rm->name); continue; }
+        if (!same) { fresh[r] = true; LOG("save: room %s has changed since it was saved: it starts as new", rm->name); continue; }
         for (int i = 0; i < rm->nthings; i++)                 /* (creatures come back, as after a rest at the bench) */
             g.beaten[r][i] = sr->beaten[i] && !ordinary_enemy(thing_entity_kind(rm->things[i].kind));
         g.progress[r] = sr->progress;
     }
-    g.keys = s.keys; g.bonus_masks = s.bonus_masks; g.bonus_ammo = s.bonus_ammo;
+    for (int k = 0; k < s.nrooms; k++)                        /* rooms this world doesn't have: kept for the next save */
+        if (world_find_room(&g.wd, s.rooms[k].name) < 0 && g.nkept < WORLD_MAX_ROOMS) g.kept[g.nkept++] = s.rooms[k];
+    /* Keys and the relics' gifts come from what was taken, not from the numbers saved with them, so a room that starts
+     * as new gives its relic and its key again and nothing is had twice: keys carried = keys taken - locks opened. */
+    int keys = 0;
+    for (int r = 0; r < g.wd.nrooms; r++)
+        for (int i = 0; i < g.wd.rooms[r].nthings; i++) {
+            const Thing *t = &g.wd.rooms[r].things[i];
+            if (!g.progress[r].done[i]) continue;
+            if (t->kind == TH_KEY) keys++;
+            else if (t->kind == TH_GATE && t->lock) keys--;
+            else if (t->kind == TH_RELIC && t->gives == GIVE_MASK) g.bonus_masks++;
+            else if (t->kind == TH_RELIC && t->gives == GIVE_NEEDLE) g.bonus_ammo++;
+        }
+    g.keys = keys > 0 ? keys : 0;
+    if (g.keys != s.keys || g.bonus_masks != s.bonus_masks || g.bonus_ammo != s.bonus_ammo)
+        LOG("save: keys %d, masks +%d, needles +%d from what was taken (the save said %d, +%d, +%d)", g.keys, g.bonus_masks, g.bonus_ammo,
+            s.keys, s.bonus_masks, s.bonus_ammo);
     apply_relic_ammo();
     g.kills = s.kills; g.deaths = s.deaths; g.duels_won = s.duels_won; g.duels_lost = s.duels_lost; g.heals = s.heals;
     g.play_ticks = s.play_ticks;
     g.ending_seen = s.ending_seen;
     int br = world_find_room(&g.wd, s.bench_room);
     bool found = false;
+    if (br >= 0 && fresh[br]) br = -1;                        /* a room that starts as new: its bench may lie past what it locks */
     for (int i = 0; br >= 0 && i < g.wd.rooms[br].nthings && !found; i++) {
         const Thing *t = &g.wd.rooms[br].things[i];
         found = t->kind == TH_BENCH && t->col == s.bench_col && t->row == s.bench_row;
@@ -1573,7 +1613,7 @@ static bool load_game(void) {
         g.bench_room = 0;
         g.bench_col = bench >= 0 ? r0->things[bench].col : 0;
         g.bench_row = bench >= 0 ? r0->things[bench].row : r0->h - 2;
-        LOG("save: its bench (%s %d,%d) is gone: back at the first one", s.bench_room, s.bench_col, s.bench_row);
+        LOG("save: its bench (%s %d,%d) is gone or its room starts as new: back at the first one", s.bench_room, s.bench_col, s.bench_row);
     }
     enter_at(g.bench_room, NULL, g.bench_col * GE_TILE + 8.0f, (float)((g.bench_row + 1) * GE_TILE - 20));
     g.playing = true;
@@ -1586,11 +1626,18 @@ static bool front_confirm(int item) { return item == FI_NEW && g.has_save; }
 
 static const char *difficulty_name(void) { return g.difficulty < 0 ? "EASY" : g.difficulty > 0 ? "HARD" : "NORMAL"; }
 
+static bool file_there(const char *path) { FILE *f = fopen(path, "r"); if (f) fclose(f); return f != NULL; }
+
 static void open_title(void) {
-    g.has_save = g.save_path && save_exists(g.save_path);
+    bool readable = g.save_path && save_exists(g.save_path);
+    char bak[256];
+    if (g.save_path) snprintf(bak, sizeof bak, "%s.bak", g.save_path);
+    g.has_save = readable || (g.save_path && (file_there(g.save_path) || file_there(bak)));   /* (NEW GAME asks before replacing it) */
+    if (g.has_save && !readable && !g.title_note[0])
+        snprintf(g.title_note, sizeof g.title_note, "YOUR SAVE CAN'T BE READ: A NEW GAME WOULD REPLACE IT");
     FrontItem items[4];
     int n = 0;
-    if (g.has_save) items[n++] = FI_CONTINUE;
+    if (readable) items[n++] = FI_CONTINUE;
     items[n++] = FI_NEW;
     items[n++] = FI_DIFFICULTY;
     items[n++] = FI_QUIT;
@@ -1603,6 +1650,7 @@ static void open_title(void) {
 }
 
 static void open_pause(void) {
+    if (g.save_due) save_game("progress");                 /* (a quiet moment) */
     const FrontItem items[] = { FI_RESUME, FI_EDITOR, FI_DIFFICULTY, FI_TITLE };
     front_menu_open(&g.fmenu, items, 4);
     g.front = FR_PAUSE;
@@ -1613,12 +1661,12 @@ static void open_pause(void) {
 static void front_choose(int item, int step) {
     switch (item) {
     case FI_CONTINUE:
-        g.front = FR_NONE;
-        if (load_game()) say("WELCOME BACK", 120);
-        else { new_game(); say("THE SAVE COULDN'T BE READ: A NEW GAME", 180); }
+        if (load_game()) { g.front = FR_NONE; g.title_note[0] = 0; say("WELCOME BACK", 120); }
+        else { snprintf(g.title_note, sizeof g.title_note, "YOUR SAVE CAN'T BE READ: A NEW GAME WOULD REPLACE IT"); open_title(); }
         break;
     case FI_NEW:
         if (g.has_save && g.save_path) save_remove(g.save_path);
+        g.title_note[0] = 0;
         new_game();
         g.front = FR_STORY;
         g.front_t = 0;
@@ -1698,7 +1746,7 @@ static void front_update(const GeInput *in) {
 
 static void draw_front(GeImage *fb) {
     switch (g.front) {
-    case FR_TITLE: ge_world_draw(&g.world, fb); front_draw_title(fb, &g.fmenu, difficulty_name(), g.world.tick); break;
+    case FR_TITLE: ge_world_draw(&g.world, fb); front_draw_title(fb, &g.fmenu, difficulty_name(), g.title_note, g.world.tick); break;
     case FR_PAUSE: ge_world_draw(&g.world, fb); front_draw_pause(fb, &g.fmenu, difficulty_name(), room_title()); break;
     case FR_STORY: front_draw_story(fb, g.front_t); break;
     case FR_CREDITS: {
@@ -1963,7 +2011,7 @@ static void demo_update(void *user, const GeInput *in) {
     if (g.menu_open) menu_input(in);                       /* the game is paused underneath */
     else if (in->pressed & GE_BTN_SELECT) { g.menu_open = true; g.menu_sel = 0; g.bottom_dirty = true; calm_flush(); }
     else if ((in->pressed & GE_BTN_START) && g.mode == M_OVERWORLD && !g.autoplay) {
-        if (!g.test_play) open_pause();                    /* START: the pause menu (the world editor is one of its choices) */
+        if (!g.test_play) { if (g.door_fade == 0 && g.warp_fade == 0) open_pause(); }   /* START: the pause menu (the world editor is one of its choices) */
         else if (can_edit()) open_editor();                /* ...but in a test play, straight back to the editor */
         else say(g.boss_engaged ? "NOT DURING A BOSS FIGHT" : "NOT RIGHT NOW", 90);
     }
@@ -1979,6 +2027,17 @@ static void demo_update_inner(const GeInput *in) {
     if (g.playing && !g.test_play) g.play_ticks++;
     GeWorld *w = &g.world;
     GeInput bot;
+    if (g.autoplay && g.keys == 0 && g.mode == M_OVERWORLD) {   /* the bot doesn't climb the tower: it is given the road's key */
+        const GeEntity *p = hero();
+        for (int i = room_find(room(), TH_GATE, 0); i >= 0; i = room_find(room(), TH_GATE, i + 1)) {
+            const Thing *t = thing(i);
+            float dx = t->col * GE_TILE - p->pos.x;
+            if (t->lock && !g.progress[g.room].done[i] && dx > 0 && dx < 3 * GE_TILE && fabsf(p->pos.y - thing_feet(t)) < 8.0f) {
+                g.keys = 1;
+                LOG("bot: given a key for the lock at column %d", t->col);
+            }
+        }
+    }
     if (g.autoplay) {
         uint32_t b = g.mode == M_OVERWORLD ? bot_buttons() : 0;
         ge_input_update(&g.bot_in, b);
@@ -2065,12 +2124,21 @@ static void demo_update_inner(const GeInput *in) {
     case M_REPORT:
         if (g.mode_timer > 150 && ((in->pressed & (GE_BTN_A | GE_BTN_START)) || (g.autoplay && g.mode_timer > 420))) {
             g.mode = M_OVERWORLD; g.mode_timer = 0;
-            if (!g.ending_seen && g.title_wanted && !g.test_play) { g.front = FR_CREDITS; g.front_t = 0; LOG("the credits roll"); }
+            if (!g.ending_seen && g.title_wanted && !g.test_play) {
+                g.front = FR_CREDITS; g.front_t = 0; g.ending_seen = true; g.bottom_dirty = true;
+                LOG("the credits roll");
+            }
             else say("THE PARAGON REMEMBERS", 150);
         }
         break;
     }
-    if (g.save_due && (g.mode == M_OVERWORLD || g.mode == M_VICTORY || g.mode == M_REPORT)) save_game("progress");
+    /* something worth keeping happened (a relic, a key, a lock, the boss): saved at the next quiet moment -- the victory
+     * banner, the black of a door or a spike return, the pause menu -- so the card isn't written in the middle of a jump */
+    if (g.save_due) {
+        if (!g.save_due_tick) g.save_due_tick = g.tick;
+        bool quiet = g.mode == M_VICTORY || g.mode == M_REPORT || g.door_fade == 20 || g.warp_fade == 20;
+        if (quiet || (g.tick - g.save_due_tick > 1800 && !g.boss_engaged && g.mode == M_OVERWORLD)) save_game("progress");
+    }
 }
 
 /* ---- drawing ----------------------------------------------------------- */
@@ -2493,7 +2561,7 @@ int main(int argc, char **argv) {
 #ifdef DEMO_HEADLESS
     g.save_path = save_arg;
 #else
-    g.save_path = save_arg ? save_arg : (scripted ? NULL : SAVE_PATH);
+    g.save_path = save_arg ? save_arg : (scripted || no_title || credits ? NULL : SAVE_PATH);   /* (no title, no CONTINUE: don't overwrite the save) */
 #endif
     if (no_save) g.save_path = NULL;
     if (credits) { g.intro_on = false; g.front = FR_CREDITS; g.playing = true; }   /* (as at the end of a game) */

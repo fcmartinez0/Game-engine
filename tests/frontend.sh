@@ -48,27 +48,28 @@ check "the save names the bench" has "$d/save.txt" "^bench gloamwood 4 11"
 check "it is whole" has "$d/save.txt" "^end"
 check "the saying" has "$d/run.log" "rested at the bench"
 
-# CONTINUE: a save made by hand, in the caves, with a key, a relic taken and a mask from it
+# CONTINUE: a save with the Hollow's relic taken (a game started beside it), moved by hand to the Hollow's bench
 d="$tmp/continue"
-mkdir -p "$d"
-cat > "$d/save.txt" <<'EOF'
-fransdemo-save 1
-bench hollow 46 11
-relics 1 0
-keys 1
-stats 5 2 1 0 3 7200
-ending 0
-end
-EOF
+run "$d" --room hollow --warp 49 --save save.txt --frames 60
+check "the relic is taken and saved" has "$d/run.log" "relic found in hollow"
+sed -e 's/^bench .*/bench hollow 46 11/' -e 's/^stats .*/stats 5 2 1 0 3 7200/' "$d/save.txt" > "$d/edited.txt" && mv "$d/edited.txt" "$d/save.txt"
 run "$d" --no-intro --title --save save.txt --frames 120 --press "A@40"
 check "CONTINUE is the first choice with a save" has "$d/run.log" "title screen (there is a save)"
 check "continued" has "$d/run.log" "continued from the save: hollow, bench at 46,11"
 check "back at that bench" [ "$(field "$d" room)" = hollow ] && [ "$(field "$d" front)" = 0 ]
-check "with the mask the relic gave" [ "$(field "$d" masks)" = 9 ]   # (easy: 8 masks, and one more)
+check "with the mask the relic gave" [ "$(field "$d" masks)" = 9 ]   # (easy: 8 masks, and one more: from what was taken)
 check "and its numbers" [ "$(field "$d" kills)" = 5 ] && [ "$(field "$d" deaths)" = 2 ]
 check "leaving saves the time played" has "$d/save.txt" "^stats 5 2 1 0 3 7[2-9][0-9][0-9]"
 
-# a save from a different world: a room that has changed starts fresh, the rest is kept
+# a game ended in a small room (few creatures), then NEW GAME: no creature may take the hero's place at the start
+d="$tmp/slot"
+mkdir -p "$d"
+printf 'fransdemo-save 1\nbench tower 6 36\nend\n' > "$d/save.txt"
+run "$d" --no-intro --title --save save.txt --frames 260 --press "A@40,START@60,DOWN@70,DOWN@72,DOWN@74,A@76,DOWN@90,A@92,A@94,A@130"
+check "a new game after a tower session starts unhurt at the start" [ "$(field "$d" masks)" = 8 ] && [ "$(field "$d" room)" = gloamwood ]
+check "where it should" sh -c "grep -q '(col 5)' '$d/out.txt'"
+
+# a save from a different world: a room that has changed starts fresh (and a bench in it may lie past what it locks)
 d="$tmp/changed"
 mkdir -p "$d"
 cat > "$d/save.txt" <<'EOF'
@@ -81,15 +82,17 @@ end
 EOF
 run "$d" --no-intro --title --save save.txt --frames 100 --press "A@40"
 check "a changed room is noticed" has "$d/run.log" "room gloamwood has changed since it was saved"
-check "but the bench is still found" has "$d/run.log" "bench at 105,11"
+check "and its bench isn't trusted: back at the first one" has "$d/run.log" "continued from the save: gloamwood, bench at 4,11"
 
-# a broken save: no CONTINUE (NEW GAME is first), and the game starts fine
+# a broken save: no CONTINUE (NEW GAME is first), but NEW GAME still asks before it replaces it
 d="$tmp/broken"
 mkdir -p "$d"
 printf 'fransdemo-save 1\nbench gloamwood 105\n' > "$d/save.txt"
 run "$d" --no-intro --title --save save.txt --frames 100 --press "B@40"
-check "a broken save offers no CONTINUE" has "$d/run.log" "title screen$"
-check "NEW GAME then" has "$d/run.log" "new game"
+check "a broken save offers no CONTINUE" has "$d/run.log" "title screen (there is a save)"
+check "one press doesn't replace it" sh -c "! grep -q 'new game' '$d/run.log'"
+run "$d" --no-intro --title --save save.txt --frames 100 --press "B@40,B@42"
+check "NEW GAME on the second press" has "$d/run.log" "new game"
 
 # NEW GAME over a save asks twice, then the save is gone
 d="$tmp/over"
@@ -113,6 +116,12 @@ run "$d" --warp 20 --frames 60 --press "START@20,START@40"
 check "START again resumes" [ "$(field "$d" front)" = 0 ]
 run "$d" --warp 20 --frames 60 --press "START@20,B@40"
 check "B resumes too" [ "$(field "$d" front)" = 0 ]
+
+# no pause in the middle of going through a door (the fade would carry into the next game)
+d="$tmp/fade"
+run "$d" --warp 2 --frames 80 --press "UP@20,START@22"
+check "no pause mid-door" [ "$(field "$d" front)" = 0 ]
+check "and the door is gone through" [ "$(field "$d" room)" = hollow ]
 
 # SAVE AND QUIT TO TITLE: saved, and the title offers CONTINUE
 d="$tmp/quit"

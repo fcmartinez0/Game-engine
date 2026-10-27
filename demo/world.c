@@ -526,7 +526,8 @@ static void build_deep(World *w) {
  *   the hall (rows 30-36): the way in, a bench, two planks up to the shaft (rows 34 and 32)
  *   the shaft (cols 24-26): walls three tiles apart to kick between, a plank half way to rest on, and a crack in
  *     its left wall at rows 22-23 with the keeper's mask behind it
- *   the gallery (rows 10-17): planks over spikes, a bat; at its far end the chimney (cols 1-3), up between the
+ *   the gallery (rows 10-17): planks over spikes (cols 8-17: the floor east of them is wide enough to be come back to
+ *     after a fall), a bat; at its far end the chimney (cols 1-3), up between the
  *     tower's wall and a hanging one, walked into under it
  *   the top (rows 2-8): a grunt, and a ledge four tiles up (climb it: toward the wall) with the key on it.
  *   Back down: drop through the planks (DOWN + jump). */
@@ -549,7 +550,7 @@ static void build_tower(World *w) {
         "S...S......................S",
         "S..........==..==..........S",
         "S..........................S",
-        "S.......^^^^^^^^^^^........S",
+        "S.......^^^^^^^^^^.........S",
         "SSSSSSSSSSSSSSSSSSSSSSSS...S",
         "SSSSSSSSSSSSSSSSSSSSSSSS...S",
         "SSSSSSSSSSSSSSSSSSSSSSSS...S",

@@ -16,7 +16,7 @@ typedef enum { FI_CONTINUE, FI_NEW, FI_DIFFICULTY, FI_QUIT, FI_RESUME, FI_EDITOR
 typedef struct {
     uint8_t items[6];
     int n, sel;
-    int confirm;              /* the row waiting for a second press (NEW GAME over a save, QUIT), or -1 */
+    int confirm;              /* the row waiting for a second press (NEW GAME over a save), or -1 */
     int confirm_t;            /* ticks left to give it */
     int t;                    /* ticks open */
     bool dirty;               /* the bottom screen should be drawn again */
@@ -31,7 +31,7 @@ int  front_menu_input(FrontMenu *m, const GeInput *in, bool (*needs_confirm)(int
 int  front_menu_touch(FrontMenu *m, int x, int y, bool (*needs_confirm)(int item));
 
 /* labels: the difficulty's name; the screens draw over whatever is already in fb */
-void front_draw_title(GeImage *fb, const FrontMenu *m, const char *difficulty, uint32_t tick);
+void front_draw_title(GeImage *fb, const FrontMenu *m, const char *difficulty, const char *note, uint32_t tick);   /* note: a word under the choices, or NULL */
 void front_draw_pause(GeImage *fb, const FrontMenu *m, const char *difficulty, const char *where);
 void front_draw_menu_bottom(GeImage *fb, const FrontMenu *m, const char *difficulty, bool title);
 

@@ -31,10 +31,15 @@ int  ge_tilemap_create(GeTilemap *m, int w, int h);
 void ge_tilemap_free(GeTilemap *m);
 /* '#' solid, '=' one-way platform, '^' spikes, anything else empty. Rows must be equal width. */
 int  ge_tilemap_from_ascii(GeTilemap *m, const char *const *rows, int nrows);
-/* Outside the left/right edges counts as solid (walls); above/below as empty. */
+/* Outside the left/right edges counts as solid (walls), below as empty. Above the top a column goes on as its top
+ * cell is, for three rows: a wall that reaches the top of the room can't be climbed over, an open column is open sky;
+ * and over those three rows lies a lid, so climbing a wall that goes on up stops there. */
+#define GE_SKY_ROWS 3
 static inline int ge_tilemap_get(const GeTilemap *m, int tx, int ty) {
     if (tx < 0 || tx >= m->w) return GE_TILE_SOLID;
-    if (ty < 0 || ty >= m->h) return GE_TILE_EMPTY;
+    if (ty >= m->h || m->h <= 0) return GE_TILE_EMPTY;
+    if (ty < -GE_SKY_ROWS) return GE_TILE_SOLID;
+    if (ty < 0) return m->type[tx] == GE_TILE_SOLID ? GE_TILE_SOLID : GE_TILE_EMPTY;
     return m->type[ty * m->w + tx];
 }
 

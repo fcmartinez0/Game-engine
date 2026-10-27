@@ -599,7 +599,11 @@ static void test_road_east(void) {
     CHECK(gate_shut(149, 9, 11) && hero()->pos.x < 149.0f * GE_TILE);   /* no key: it stays shut */
     for (int i = 0; i < 40; i++) { hero()->invuln = 2; step(GE_BTN_UP | GE_BTN_B); step(GE_BTN_RIGHT); }   /* nor can it be jumped */
     CHECK(hero()->pos.x < 149.0f * GE_TILE);
+    for (int i = 0; i < 600; i++) { hero()->invuln = 2; step(GE_BTN_RIGHT | ((i % 6) < 2 ? GE_BTN_B : 0)); }   /* nor climbed (its post reaches the sky) */
+    CHECK(hero()->pos.x < 149.0f * GE_TILE);
+    CHECK(hero()->pos.y > -(GE_SKY_ROWS + 1.0f) * GE_TILE);                               /* (and not up into the sky for ever) */
     keys = 1;
+    unhurt(240);                                   /* (down off the post first: holding toward it, it slides slowly) */
     for (int i = 0; i < 90; i++) { hero()->invuln = 2; step(GE_BTN_RIGHT); }
     CHECK(keys == 0 && prog.done[gate]);
     CHECK(hero()->pos.x > 150.0f * GE_TILE);

@@ -85,7 +85,7 @@ static const char *item_label(const FrontMenu *m, int row, const char *difficult
     case FI_CONTINUE:   return "CONTINUE";
     case FI_NEW:        return asking ? "NEW GAME: AGAIN TO ERASE YOUR SAVE" : "NEW GAME";
     case FI_DIFFICULTY: snprintf(buf, n, "DIFFICULTY: < %s >", difficulty); return buf;
-    case FI_QUIT:       return asking ? "QUIT: PRESS AGAIN" : "QUIT";
+    case FI_QUIT:       return "QUIT";
     case FI_RESUME:     return "RESUME";
     case FI_EDITOR:     return "WORLD EDITOR";
     case FI_TITLE:      return "SAVE AND QUIT TO TITLE";
@@ -110,7 +110,7 @@ static void draw_items(GeImage *fb, const FrontMenu *m, const char *difficulty, 
     }
 }
 
-void front_draw_title(GeImage *fb, const FrontMenu *m, const char *difficulty, uint32_t tick) {
+void front_draw_title(GeImage *fb, const FrontMenu *m, const char *difficulty, const char *note, uint32_t tick) {
     for (int y = 0; y < fb->h; y++) {                    /* darker at the top, where the name is */
         int a = y < 100 ? 190 - y : 90;
         ge_fill_rect(fb, 0, y, fb->w, 1, GE_ARGB(a, 8, 4, 18), 0);
@@ -122,8 +122,9 @@ void front_draw_title(GeImage *fb, const FrontMenu *m, const char *difficulty, u
     ge_fill_rect(fb, x, 70, w, 1, GE_ARGB(fade * 3 / 4, 190, 120, 255), 0);   /* a thread under it, with a needle's eye */
     ge_fill_rect(fb, fb->w / 2 - 2, 68, 5, 5, GE_ARGB(fade, 230, 236, 255), 0);
     ge_fill_rect(fb, fb->w / 2 - 1, 69, 3, 3, GE_ARGB(fade, 30, 20, 50), 0);
-    if (m->t < 30) return;
+    if (m->t < 8) return;                                /* (the choices show from the moment they can be chosen) */
     draw_items(fb, m, difficulty, 104, 22, tick);
+    if (note && note[0]) ge_text_outlined(fb, (fb->w - ge_text_width(note, 1)) / 2, 196, note, GE_RGB(255, 150, 120), INK, 1);
     const char *hint = "UP / DOWN: CHOOSE    A OR START: OK";
     ge_text(fb, (fb->w - ge_text_width(hint, 1)) / 2, 222, hint, DIM, 1);
     ge_text(fb, 6, 230, "V1.0", GE_ARGB(150, 150, 140, 180), 1);
