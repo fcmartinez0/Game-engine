@@ -35,7 +35,8 @@ void front_draw_title(GeImage *fb, const FrontMenu *m, const char *difficulty, c
 void front_draw_pause(GeImage *fb, const FrontMenu *m, const char *difficulty, const char *where);
 void front_draw_menu_bottom(GeImage *fb, const FrontMenu *m, const char *difficulty, bool title);
 
-/* The story before a new game: lines one after another. Done after FRONT_STORY_TICKS, or when skipped. */
+/* The note before a new game (in place of a story, for now): lines one after another. Done after FRONT_STORY_TICKS, or
+ * when skipped. */
 #define FRONT_STORY_TICKS 780
 void front_draw_story(GeImage *fb, int t);
 

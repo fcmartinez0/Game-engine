@@ -160,16 +160,16 @@ void front_draw_menu_bottom(GeImage *fb, const FrontMenu *m, const char *difficu
 
 /* ---- the story ------------------------------------------------------------------ */
 
+/* a note from Fran (there is no story yet); the last line is drawn in gold */
 static const char *const STORY[] = {
-    "THE GLOAMWOOD USED TO GLOW.",
-    "THEN ITS FIREFLIES WENT QUIET, AND A GREAT CAT",
-    "CAME TO GUARD THE ROAD EAST.",
+    "I DON'T HAVE A STORY YET,",
+    "SO NOT SURE WHAT TO WRITE HERE.",
     "",
-    "PAST THE CAT, IN A HALL OF STILL STONE,",
-    "SOMETHING WATCHES EVERY FIGHT IN THE FOREST,",
-    "AND LEARNS.",
+    "THERE'S A CAT BOSS IN HERE SOMEWHERE.",
     "",
-    "MIKOSHI PICKS UP THE NEEDLE.",
+    "IF YOU CAN BEAT PARAGON, THAT WOULD BE COOL.",
+    "",
+    "- FRAN",
 };
 #define STORY_LINES ((int)(sizeof STORY / sizeof STORY[0]))
 #define STORY_STEP 60
